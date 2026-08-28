@@ -3,25 +3,41 @@
 //! Each probe sends a single lightweight request to the LLM and scores the
 //! response along one capability dimension.
 
+mod code_syntax;
+mod context_faithfulness;
 mod edit_format;
 mod json_output;
+mod max_tokens_compliance;
+mod multi_turn_memory;
+mod multi_turn_task_sequencing;
+mod one_shot_tool_plan;
 mod parallel_tool_scale;
 mod streaming_tool_calls;
+mod system_message_adherence;
+mod token_efficiency;
 mod tool_calling;
 mod vision;
 mod xml_fallback;
 
+pub use code_syntax::probe_code_syntax;
+pub use context_faithfulness::probe_context_faithfulness;
 pub use edit_format::{probe_search_replace, probe_unified_diff};
 pub use json_output::{probe_instruction_following, probe_json_output};
+pub use max_tokens_compliance::probe_max_tokens_compliance;
+pub use multi_turn_memory::probe_multi_turn_memory;
+pub use multi_turn_task_sequencing::probe_multi_turn_task_sequencing;
+pub use one_shot_tool_plan::probe_one_shot_tool_plan;
 pub use parallel_tool_scale::probe_parallel_tool_scale;
 pub use streaming_tool_calls::probe_streaming_tool_calls;
+pub use system_message_adherence::probe_system_message_adherence;
+pub use token_efficiency::probe_token_efficiency;
 pub use tool_calling::{
     probe_complex_tool_calling, probe_nested_arguments, probe_tool_calling, probe_tool_selection,
 };
 pub use vision::probe_vision;
 pub use xml_fallback::probe_xml_tool_calling;
 
-use crate::client::{ProbeContent, ProbeMessage, ProbeRole, ProbeTool};
+use crate::client::{ProbeContent, ProbeMessage, ProbeRole, ProbeTool, ProbeToolCall};
 
 pub(crate) fn user_text(text: impl Into<String>) -> ProbeMessage {
     ProbeMessage {
@@ -38,6 +54,39 @@ pub(crate) fn system_text(text: impl Into<String>) -> ProbeMessage {
         content: ProbeContent::Text(text.into()),
         tool_calls: None,
         tool_call_id: None,
+    }
+}
+
+pub(crate) fn assistant_text(text: impl Into<String>) -> ProbeMessage {
+    ProbeMessage {
+        role: ProbeRole::Assistant,
+        content: ProbeContent::Text(text.into()),
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
+pub(crate) fn assistant_tool_calls(
+    text: impl Into<String>,
+    tool_calls: Vec<ProbeToolCall>,
+) -> ProbeMessage {
+    ProbeMessage {
+        role: ProbeRole::Assistant,
+        content: ProbeContent::Text(text.into()),
+        tool_calls: Some(tool_calls),
+        tool_call_id: None,
+    }
+}
+
+pub(crate) fn tool_result(
+    tool_call_id: impl Into<String>,
+    text: impl Into<String>,
+) -> ProbeMessage {
+    ProbeMessage {
+        role: ProbeRole::Tool,
+        content: ProbeContent::Text(text.into()),
+        tool_calls: None,
+        tool_call_id: Some(tool_call_id.into()),
     }
 }
 
@@ -78,7 +127,9 @@ pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value)
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use std::collections::VecDeque;
     use std::future::Future;
+    use std::sync::Mutex;
 
     use crate::client::{
         ProbeClient, ProbeFinish, ProbeRequest, ProbeResponse, ProbeStreamChunk, ProbeToolCall,
@@ -97,6 +148,48 @@ pub(crate) mod test_support {
         ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
             let resp = self.response.clone();
             async move { Ok(resp) }
+        }
+
+        fn stream_chat(
+            &self,
+            _req: ProbeRequest,
+        ) -> impl Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+            futures::stream::empty()
+        }
+
+        fn model_id(&self) -> &str {
+            "test-model"
+        }
+
+        fn provider(&self) -> &str {
+            "test-provider"
+        }
+    }
+
+    pub(crate) struct SequentialMock {
+        responses: Mutex<VecDeque<ProbeResponse>>,
+    }
+
+    impl SequentialMock {
+        pub(crate) fn new(responses: Vec<ProbeResponse>) -> Self {
+            Self {
+                responses: Mutex::new(VecDeque::from(responses)),
+            }
+        }
+    }
+
+    impl ProbeClient for SequentialMock {
+        fn chat(
+            &self,
+            _req: ProbeRequest,
+        ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
+            let next = self
+                .responses
+                .lock()
+                .expect("sequential mock lock")
+                .pop_front()
+                .unwrap_or_else(|| text_response("done"));
+            async move { Ok(next) }
         }
 
         fn stream_chat(

@@ -11,7 +11,7 @@ use crate::cache::ProbeCache;
 use crate::client::ProbeClient;
 use crate::error::ProbeError;
 use crate::probes;
-use crate::types::{CapabilityLevel, CapabilityProfile, ProbeResult, default_probe};
+use crate::types::{CapabilityLevel, CapabilityProfile, ProbeResult};
 
 /// Default concurrency for paid providers (effectively unlimited).
 pub const PAID_CONCURRENCY: usize = 64;
@@ -133,6 +133,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let nested_fut = Self::gated(&sem, probes::probe_nested_arguments(&self.client));
         let tool_sel_fut = Self::gated(&sem, probes::probe_tool_selection(&self.client));
         let streaming_fut = Self::gated(&sem, probes::probe_streaming_tool_calls(&self.client));
+        let code_syntax_fut = Self::gated(&sem, probes::probe_code_syntax(&self.client));
+        let max_tok_fut = Self::gated(&sem, probes::probe_max_tokens_compliance(&self.client));
+        let sys_msg_fut = Self::gated(&sem, probes::probe_system_message_adherence(&self.client));
+        let efficiency_fut = Self::gated(&sem, probes::probe_token_efficiency(&self.client));
         let par_scale_fut = Self::gated(&sem, probes::probe_parallel_tool_scale(&self.client));
 
         let (
@@ -145,6 +149,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
             nested_result,
             tool_sel_result,
             streaming_tc_result,
+            code_syntax_result,
+            max_tok_result,
+            sys_msg_result,
+            efficiency_result,
             par_scale_result,
         ) = tokio::join!(
             tool_fut,
@@ -156,6 +164,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
             nested_fut,
             tool_sel_fut,
             streaming_fut,
+            code_syntax_fut,
+            max_tok_fut,
+            sys_msg_fut,
+            efficiency_fut,
             par_scale_fut,
         );
 
@@ -172,15 +184,51 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let tool_selection = take_probe(&mut cacheable, tool_sel_result, "tool_selection")?;
         let streaming_tool_calls =
             take_probe(&mut cacheable, streaming_tc_result, "streaming_tool_calls")?;
+        let code_syntax = take_probe(&mut cacheable, code_syntax_result, "code_syntax")?;
+        let max_tokens_compliance =
+            take_probe(&mut cacheable, max_tok_result, "max_tokens_compliance")?;
+        let system_message_adherence =
+            take_probe(&mut cacheable, sys_msg_result, "system_message_adherence")?;
+        let token_efficiency = take_probe(&mut cacheable, efficiency_result, "token_efficiency")?;
         let parallel_tool_scale =
             take_probe(&mut cacheable, par_scale_result, "parallel_tool_scale")?;
 
-        let one_shot_tool_plan = expensive_or_default(self.skip_expensive, "one_shot_tool_plan");
-        let multi_turn_task_sequencing =
-            expensive_or_default(self.skip_expensive, "multi_turn_task_sequencing");
-        let context_faithfulness =
-            expensive_or_default(self.skip_expensive, "context_faithfulness");
-        let multi_turn_memory = expensive_or_default(self.skip_expensive, "multi_turn_memory");
+        let one_shot_tool_plan = if self.skip_expensive {
+            expensive_skip("one_shot_tool_plan")
+        } else {
+            take_probe(
+                &mut cacheable,
+                Self::gated(&sem, probes::probe_one_shot_tool_plan(&self.client)).await,
+                "one_shot_tool_plan",
+            )?
+        };
+        let multi_turn_task_sequencing = if self.skip_expensive {
+            expensive_skip("multi_turn_task_sequencing")
+        } else {
+            take_probe(
+                &mut cacheable,
+                Self::gated(&sem, probes::probe_multi_turn_task_sequencing(&self.client)).await,
+                "multi_turn_task_sequencing",
+            )?
+        };
+        let context_faithfulness = if self.skip_expensive {
+            expensive_skip("context_faithfulness")
+        } else {
+            take_probe(
+                &mut cacheable,
+                Self::gated(&sem, probes::probe_context_faithfulness(&self.client)).await,
+                "context_faithfulness",
+            )?
+        };
+        let multi_turn_memory = if self.skip_expensive {
+            expensive_skip("multi_turn_memory")
+        } else {
+            take_probe(
+                &mut cacheable,
+                Self::gated(&sem, probes::probe_multi_turn_memory(&self.client)).await,
+                "multi_turn_memory",
+            )?
+        };
 
         let vision = if self.client.catalog().supports_vision == Some(true) {
             take_probe(
@@ -232,11 +280,11 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 one_shot_tool_plan,
                 multi_turn_task_sequencing,
                 context_faithfulness,
-                code_syntax: named_default("code_syntax"),
-                max_tokens_compliance: named_default("max_tokens_compliance"),
+                code_syntax,
+                max_tokens_compliance,
                 multi_turn_memory,
-                system_message_adherence: named_default("system_message_adherence"),
-                token_efficiency: named_default("token_efficiency"),
+                system_message_adherence,
+                token_efficiency,
                 parallel_tool_scale,
                 probed_at: unix_now(),
                 effective_context_tokens: None,
@@ -277,23 +325,13 @@ fn take_probe(
     Ok(probe)
 }
 
-fn named_default(name: &str) -> ProbeResult {
-    let mut probe = default_probe();
-    probe.name = name.to_string();
-    probe
-}
-
-fn expensive_or_default(skip_expensive: bool, name: &str) -> ProbeResult {
-    if skip_expensive {
-        ProbeResult {
-            name: name.to_string(),
-            score: 0.5,
-            max_score: 1.0,
-            level: CapabilityLevel::Medium,
-            details: EXPENSIVE_SKIP.to_string(),
-        }
-    } else {
-        named_default(name)
+fn expensive_skip(name: &str) -> ProbeResult {
+    ProbeResult {
+        name: name.to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: EXPENSIVE_SKIP.to_string(),
     }
 }
 
@@ -327,6 +365,8 @@ pub fn resolve_probe(
                     | "tool_selection"
                     | "streaming_tool_calls"
                     | "parallel_tool_scale"
+                    | "one_shot_tool_plan"
+                    | "multi_turn_task_sequencing"
             );
             let tools_not_supported = err_msg.contains("does not support tools");
 
