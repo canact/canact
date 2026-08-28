@@ -97,4 +97,4 @@ jobs:
       - name: zizmor
         run: |
           python3 -m pip install --user 'zizmor==1.29.0'
-          "$HOME/.local/bin/zizmor" --min-severity=high --config .github/zizmor.yml .github/workflows
+          "$HOME/.local/bin/zizmor" --min-severity=high .github/workflows
