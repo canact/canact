@@ -65,42 +65,74 @@ else
   echo "OK: $owner is not an org (or no org read); skipped"
 fi
 
-echo "DO: scan local tree if cwd is a git checkout"
-if [[ -f README.md ]]; then
-  if grep -Eiq 'shields.io|img.shields|badge|\[ci\]|scorecard|bestpractices.dev' README.md; then
-    echo "FAIL: README has badges or CI marketing"
-    leaks=$((leaks + 1))
+remote_is_repo() {
+  local dir="$1"
+  local want="$2"
+  local remotes
+  remotes="$(git -C "$dir" remote -v 2>/dev/null || true)"
+  if [[ -z "$remotes" ]]; then
+    return 1
   fi
-  if grep -Eiq 'agent skills|getting started|install|quickstart' README.md; then
-    echo "FAIL: README looks like a product pitch"
-    leaks=$((leaks + 1))
+  if printf '%s\n' "$remotes" | grep -Eqi "github\\.com[:/]${want}(\\.git)?[[:space:]]"; then
+    return 0
+  fi
+  return 1
+}
+
+echo "DO: resolve local checkout of $repo"
+root=""
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+script_top="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -n "$script_top" ]] && remote_is_repo "$script_top" "$repo"; then
+  root="$script_top"
+  echo "OK: using script tree $root"
+else
+  cwd_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$cwd_top" ]] && remote_is_repo "$cwd_top" "$repo"; then
+    root="$cwd_top"
+    echo "OK: using cwd tree $root"
   else
-    echo "OK: README has no pitch markers"
+    echo "OK: no local checkout of $repo; skip file scan"
   fi
 fi
 
-if [[ -f .github/FUNDING.yml ]]; then
-  echo "FAIL: .github/FUNDING.yml present"
-  leaks=$((leaks + 1))
-fi
+if [[ -n "$root" ]]; then
+  if [[ -f "$root/README.md" ]]; then
+    if grep -Eiq 'shields.io|img.shields|badge|\[ci\]|scorecard|bestpractices.dev' "$root/README.md"; then
+      echo "FAIL: README has badges or CI marketing"
+      leaks=$((leaks + 1))
+    fi
+    if grep -Eiq 'agent skills|getting started|install|quickstart' "$root/README.md"; then
+      echo "FAIL: README looks like a product pitch"
+      leaks=$((leaks + 1))
+    else
+      echo "OK: README has no pitch markers"
+    fi
+  fi
 
-if [[ -f Cargo.toml ]]; then
-  kw="$(python3 - <<'PY'
-import pathlib, re
-t = pathlib.Path("Cargo.toml").read_text()
+  if [[ -f "$root/.github/FUNDING.yml" ]]; then
+    echo "FAIL: .github/FUNDING.yml present"
+    leaks=$((leaks + 1))
+  fi
+
+  if [[ -f "$root/Cargo.toml" ]]; then
+    kw="$(ROOT="$root" python3 - <<'PY'
+import os, pathlib, re
+t = (pathlib.Path(os.environ["ROOT"]) / "Cargo.toml").read_text()
 m = re.search(r"(?m)^keywords\s*=\s*\[([^\]]*)\]", t)
 print((m.group(1) if m else "").strip())
 PY
 )"
-  catg="$(python3 - <<'PY'
-import pathlib, re
-t = pathlib.Path("Cargo.toml").read_text()
+    catg="$(ROOT="$root" python3 - <<'PY'
+import os, pathlib, re
+t = (pathlib.Path(os.environ["ROOT"]) / "Cargo.toml").read_text()
 m = re.search(r"(?m)^categories\s*=\s*\[([^\]]*)\]", t)
 print((m.group(1) if m else "").strip())
 PY
 )"
-  check_empty "Cargo.toml keywords" "$kw"
-  check_empty "Cargo.toml categories" "$catg"
+    check_empty "Cargo.toml keywords" "$kw"
+    check_empty "Cargo.toml categories" "$catg"
+  fi
 fi
 
 if [[ "$leaks" -gt 0 ]]; then
