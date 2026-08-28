@@ -372,6 +372,28 @@ async fn cheap_sets_expensive_dims_to_free_tier_skip() {
     }
 }
 
+const NOT_PROBED: &str = "Not probed (cached before this probe existed)";
+
+#[tokio::test]
+async fn run_fills_edit_json_instruction_probes() {
+    let profile = ProbeRunner::new(MockLlm::new("m", "p"))
+        .run()
+        .await
+        .expect("run");
+    for (result, name) in [
+        (&profile.search_replace, "search_replace"),
+        (&profile.unified_diff, "unified_diff"),
+        (&profile.json_output, "json_output"),
+        (&profile.instruction_following, "instruction_following"),
+    ] {
+        assert_eq!(result.name, name, "{name} must keep its living probe name");
+        assert_ne!(
+            result.details, NOT_PROBED,
+            "{name} must run instead of named_default"
+        );
+    }
+}
+
 #[tokio::test]
 async fn auth_aborts_run_detailed_and_does_not_persist() {
     let runner =

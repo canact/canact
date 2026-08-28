@@ -125,6 +125,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let sem = Arc::new(Semaphore::new(self.concurrency));
 
         let tool_fut = Self::gated(&sem, probes::probe_tool_calling(&self.client));
+        let json_fut = Self::gated(&sem, probes::probe_json_output(&self.client));
+        let instr_fut = Self::gated(&sem, probes::probe_instruction_following(&self.client));
+        let sr_fut = Self::gated(&sem, probes::probe_search_replace(&self.client));
+        let diff_fut = Self::gated(&sem, probes::probe_unified_diff(&self.client));
         let complex_fut = Self::gated(&sem, probes::probe_complex_tool_calling(&self.client));
         let nested_fut = Self::gated(&sem, probes::probe_nested_arguments(&self.client));
         let tool_sel_fut = Self::gated(&sem, probes::probe_tool_selection(&self.client));
@@ -133,6 +137,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
 
         let (
             tool_result,
+            json_result,
+            instr_result,
+            sr_result,
+            diff_result,
             complex_result,
             nested_result,
             tool_sel_result,
@@ -140,6 +148,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
             par_scale_result,
         ) = tokio::join!(
             tool_fut,
+            json_fut,
+            instr_fut,
+            sr_fut,
+            diff_fut,
             complex_fut,
             nested_fut,
             tool_sel_fut,
@@ -149,6 +161,11 @@ impl<C: ProbeClient> ProbeRunner<C> {
 
         let mut cacheable = true;
         let tool_calling = take_probe(&mut cacheable, tool_result, "tool_calling")?;
+        let json_output = take_probe(&mut cacheable, json_result, "json_output")?;
+        let instruction_following =
+            take_probe(&mut cacheable, instr_result, "instruction_following")?;
+        let search_replace = take_probe(&mut cacheable, sr_result, "search_replace")?;
+        let unified_diff = take_probe(&mut cacheable, diff_result, "unified_diff")?;
         let complex_tool_calling =
             take_probe(&mut cacheable, complex_result, "complex_tool_calling")?;
         let nested_arguments = take_probe(&mut cacheable, nested_result, "nested_arguments")?;
@@ -202,10 +219,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 model_id: self.client.model_id().to_string(),
                 provider: self.client.provider().to_string(),
                 tool_calling,
-                json_output: named_default("json_output"),
-                instruction_following: named_default("instruction_following"),
-                search_replace: named_default("search_replace"),
-                unified_diff: named_default("unified_diff"),
+                json_output,
+                instruction_following,
+                search_replace,
+                unified_diff,
                 complex_tool_calling,
                 nested_arguments,
                 vision,
