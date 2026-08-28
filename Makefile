@@ -7,5 +7,7 @@ help: ## Show this help
 check: ## fmt, clippy, test, deny (same as CI lint+test)
 	cargo fmt --check
 	RUSTFLAGS="-D warnings" cargo clippy --locked --all-targets -- -D warnings
+	RUSTFLAGS="-D warnings" cargo clippy --locked --all-targets --features runtime -- -D warnings
 	RUSTFLAGS="-D warnings" cargo test --locked
+	RUSTFLAGS="-D warnings" cargo test --locked --features runtime
 	bash scripts/deny-check.sh
