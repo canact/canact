@@ -1,20 +1,27 @@
 //! Probe orchestrator.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::cache::ProbeCache;
 use crate::client::ProbeClient;
 use crate::error::ProbeError;
-use crate::types::{CapabilityLevel, CapabilityProfile, ProbeResult};
+use crate::probes;
+use crate::types::{CapabilityLevel, CapabilityProfile, ProbeResult, default_probe};
 
 /// Default concurrency for paid providers (effectively unlimited).
 pub const PAID_CONCURRENCY: usize = 64;
 
 /// Concurrency limit for free-tier models to avoid rate limit exhaustion.
 pub const FREE_CONCURRENCY: usize = 3;
+
+const VISION_SKIP: &str = "Skipped: provider does not advertise vision support";
+const XML_SKIP: &str = "Not tested (native tool calling is Strong; XML fallback unused)";
+const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
 
 /// Outcome of a probe suite run, including whether the profile is cacheable.
 #[derive(Debug, Clone)]
@@ -44,11 +51,8 @@ impl ProbeRun {
 
 /// Orchestrates running capability probes against an LLM.
 pub struct ProbeRunner<C: ProbeClient> {
-    #[allow(dead_code)]
     client: C,
-    #[allow(dead_code)]
     concurrency: usize,
-    #[allow(dead_code)]
     skip_expensive: bool,
     last_run: Mutex<Option<ProbeRun>>,
 }
@@ -118,8 +122,169 @@ impl<C: ProbeClient> ProbeRunner<C> {
 
     /// Run all probes and report whether the profile is safe to cache.
     pub async fn run_detailed(&self) -> Result<ProbeRun, ProbeError> {
-        Err(ProbeError::Internal("probes not wired".into()))
+        let sem = Arc::new(Semaphore::new(self.concurrency));
+
+        let tool_fut = Self::gated(&sem, probes::probe_tool_calling(&self.client));
+        let complex_fut = Self::gated(&sem, probes::probe_complex_tool_calling(&self.client));
+        let nested_fut = Self::gated(&sem, probes::probe_nested_arguments(&self.client));
+        let tool_sel_fut = Self::gated(&sem, probes::probe_tool_selection(&self.client));
+        let streaming_fut = Self::gated(&sem, probes::probe_streaming_tool_calls(&self.client));
+        let par_scale_fut = Self::gated(&sem, probes::probe_parallel_tool_scale(&self.client));
+
+        let (
+            tool_result,
+            complex_result,
+            nested_result,
+            tool_sel_result,
+            streaming_tc_result,
+            par_scale_result,
+        ) = tokio::join!(
+            tool_fut,
+            complex_fut,
+            nested_fut,
+            tool_sel_fut,
+            streaming_fut,
+            par_scale_fut,
+        );
+
+        let mut cacheable = true;
+        let tool_calling = take_probe(&mut cacheable, tool_result, "tool_calling")?;
+        let complex_tool_calling =
+            take_probe(&mut cacheable, complex_result, "complex_tool_calling")?;
+        let nested_arguments = take_probe(&mut cacheable, nested_result, "nested_arguments")?;
+        let tool_selection = take_probe(&mut cacheable, tool_sel_result, "tool_selection")?;
+        let streaming_tool_calls =
+            take_probe(&mut cacheable, streaming_tc_result, "streaming_tool_calls")?;
+        let parallel_tool_scale =
+            take_probe(&mut cacheable, par_scale_result, "parallel_tool_scale")?;
+
+        let one_shot_tool_plan = expensive_or_default(self.skip_expensive, "one_shot_tool_plan");
+        let multi_turn_task_sequencing =
+            expensive_or_default(self.skip_expensive, "multi_turn_task_sequencing");
+        let context_faithfulness =
+            expensive_or_default(self.skip_expensive, "context_faithfulness");
+        let multi_turn_memory = expensive_or_default(self.skip_expensive, "multi_turn_memory");
+
+        let vision = if self.client.catalog().supports_vision == Some(true) {
+            take_probe(
+                &mut cacheable,
+                Self::gated(&sem, probes::probe_vision(&self.client)).await,
+                "vision",
+            )?
+        } else {
+            ProbeResult {
+                name: "vision".to_string(),
+                score: 0.0,
+                max_score: 1.0,
+                level: CapabilityLevel::Weak,
+                details: VISION_SKIP.to_string(),
+            }
+        };
+
+        let xml_tool_calling = if tool_calling.level == CapabilityLevel::Strong {
+            ProbeResult {
+                name: "xml_tool_calling".to_string(),
+                score: 1.0,
+                max_score: 1.0,
+                level: CapabilityLevel::Strong,
+                details: XML_SKIP.to_string(),
+            }
+        } else {
+            take_probe(
+                &mut cacheable,
+                Self::gated(&sem, probes::probe_xml_tool_calling(&self.client)).await,
+                "xml_tool_calling",
+            )?
+        };
+
+        let run = ProbeRun {
+            profile: CapabilityProfile {
+                model_id: self.client.model_id().to_string(),
+                provider: self.client.provider().to_string(),
+                tool_calling,
+                json_output: named_default("json_output"),
+                instruction_following: named_default("instruction_following"),
+                search_replace: named_default("search_replace"),
+                unified_diff: named_default("unified_diff"),
+                complex_tool_calling,
+                nested_arguments,
+                vision,
+                tool_selection,
+                xml_tool_calling,
+                streaming_tool_calls,
+                one_shot_tool_plan,
+                multi_turn_task_sequencing,
+                context_faithfulness,
+                code_syntax: named_default("code_syntax"),
+                max_tokens_compliance: named_default("max_tokens_compliance"),
+                multi_turn_memory,
+                system_message_adherence: named_default("system_message_adherence"),
+                token_efficiency: named_default("token_efficiency"),
+                parallel_tool_scale,
+                probed_at: unix_now(),
+                effective_context_tokens: None,
+            },
+            cacheable,
+        };
+
+        {
+            let mut guard = self
+                .last_run
+                .lock()
+                .map_err(|_| ProbeError::Internal("probe runner lock poisoned".into()))?;
+            *guard = Some(run.clone());
+        }
+
+        Ok(run)
     }
+
+    async fn gated<F>(sem: &Arc<Semaphore>, fut: F) -> Result<ProbeResult, ProbeError>
+    where
+        F: std::future::Future<Output = Result<ProbeResult, ProbeError>>,
+    {
+        let _permit = sem
+            .acquire()
+            .await
+            .map_err(|_| ProbeError::Internal("probe semaphore closed unexpectedly".into()))?;
+        fut.await
+    }
+}
+
+fn take_probe(
+    cacheable: &mut bool,
+    result: Result<ProbeResult, ProbeError>,
+    name: &str,
+) -> Result<ProbeResult, ProbeError> {
+    let (probe, ok_to_cache) = resolve_probe(result, name)?;
+    *cacheable &= ok_to_cache;
+    Ok(probe)
+}
+
+fn named_default(name: &str) -> ProbeResult {
+    let mut probe = default_probe();
+    probe.name = name.to_string();
+    probe
+}
+
+fn expensive_or_default(skip_expensive: bool, name: &str) -> ProbeResult {
+    if skip_expensive {
+        ProbeResult {
+            name: name.to_string(),
+            score: 0.5,
+            max_score: 1.0,
+            level: CapabilityLevel::Medium,
+            details: EXPENSIVE_SKIP.to_string(),
+        }
+    } else {
+        named_default(name)
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Resolve a probe result and whether it is safe to write into the 30-day cache.

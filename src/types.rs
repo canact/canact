@@ -61,7 +61,7 @@ pub enum CapabilityLevel {
 }
 
 /// Default probe result for deserialization when the field is absent.
-fn default_probe() -> ProbeResult {
+pub(crate) fn default_probe() -> ProbeResult {
     ProbeResult {
         name: "unknown".to_string(),
         score: 0.5,

@@ -16,6 +16,8 @@ pub use types::{
 #[cfg(feature = "runtime")]
 mod client;
 #[cfg(feature = "runtime")]
+mod probes;
+#[cfg(feature = "runtime")]
 mod runner;
 
 #[cfg(feature = "runtime")]
