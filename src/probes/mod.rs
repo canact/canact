@@ -3,12 +3,16 @@
 //! Each probe sends a single lightweight request to the LLM and scores the
 //! response along one capability dimension.
 
+mod edit_format;
+mod json_output;
 mod parallel_tool_scale;
 mod streaming_tool_calls;
 mod tool_calling;
 mod vision;
 mod xml_fallback;
 
+pub use edit_format::{probe_search_replace, probe_unified_diff};
+pub use json_output::{probe_instruction_following, probe_json_output};
 pub use parallel_tool_scale::probe_parallel_tool_scale;
 pub use streaming_tool_calls::probe_streaming_tool_calls;
 pub use tool_calling::{
@@ -35,6 +39,33 @@ pub(crate) fn system_text(text: impl Into<String>) -> ProbeMessage {
         tool_calls: None,
         tool_call_id: None,
     }
+}
+
+/// Try to isolate a JSON object from text that may be wrapped in markdown
+/// fences or surrounded by prose.
+pub(crate) fn extract_json_from_text(text: &str) -> &str {
+    let trimmed = text.trim();
+
+    if let Some(start) = trimmed.find("```json") {
+        let after = &trimmed[start + 7..];
+        if let Some(end) = after.find("```") {
+            return after[..end].trim();
+        }
+    }
+
+    if let Some(start) = trimmed.find("```") {
+        let after = &trimmed[start + 3..];
+        if let Some(end) = after.find("```") {
+            return after[..end].trim();
+        }
+    }
+
+    match (trimmed.find('{'), trimmed.rfind('}')) {
+        (Some(start), Some(end)) if end > start => return &trimmed[start..=end],
+        _ => {}
+    }
+
+    trimmed
 }
 
 pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value) -> ProbeTool {
@@ -113,5 +144,21 @@ pub(crate) mod test_support {
             tool_calls: calls,
             finish: ProbeFinish::ToolCalls,
         }
+    }
+}
+
+#[cfg(test)]
+mod extract_json_tests {
+    use super::extract_json_from_text;
+
+    #[test]
+    fn extract_json_from_bare_object() {
+        assert_eq!(extract_json_from_text(r#"  {"a": 1}  "#), r#"{"a": 1}"#);
+    }
+
+    #[test]
+    fn extract_json_from_fenced_block() {
+        let input = "```json\n{\"a\": 1}\n```";
+        assert_eq!(extract_json_from_text(input), "{\"a\": 1}");
     }
 }
