@@ -133,6 +133,7 @@ pub struct MockLlm {
     model_id: String,
     provider: String,
     error: Option<ProbeError>,
+    catalog: CatalogPriors,
 }
 
 impl MockLlm {
@@ -142,12 +143,19 @@ impl MockLlm {
             model_id: model_id.into(),
             provider: provider.into(),
             error: None,
+            catalog: CatalogPriors::default(),
         }
     }
 
     /// Fail `chat` / `stream_chat` with this error.
     pub fn with_error(mut self, error: ProbeError) -> Self {
         self.error = Some(error);
+        self
+    }
+
+    /// Override catalog priors (vision/tools advertisements).
+    pub fn with_catalog(mut self, catalog: CatalogPriors) -> Self {
+        self.catalog = catalog;
         self
     }
 
@@ -188,7 +196,10 @@ impl ProbeClient for MockLlm {
                 tool_calls: vec![ProbeToolCall {
                     id: "call_1".to_owned(),
                     name: req.tools[0].name.clone(),
-                    arguments: serde_json::Map::new(),
+                    arguments: serde_json::json!({"path": "/tmp/test.txt"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
                 }],
                 finish: ProbeFinish::ToolCalls,
             }
@@ -232,5 +243,9 @@ impl ProbeClient for MockLlm {
 
     fn provider(&self) -> &str {
         &self.provider
+    }
+
+    fn catalog(&self) -> CatalogPriors {
+        self.catalog.clone()
     }
 }

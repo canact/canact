@@ -1,6 +1,10 @@
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+
 use canact::{
-    CapabilityLevel, CapabilityProfile, MockLlm, ProbeCache, ProbeClient, ProbeError, ProbeFinish,
-    ProbeRequest, ProbeResult, ProbeRun, ProbeRunner, ProbeTool, classify, resolve_probe,
+    CapabilityLevel, CapabilityProfile, CatalogPriors, MockLlm, ProbeCache, ProbeClient,
+    ProbeContent, ProbeContentPart, ProbeError, ProbeFinish, ProbeRequest, ProbeResponse,
+    ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool, classify, resolve_probe,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -123,7 +127,13 @@ async fn mock_llm_chat_with_tools_returns_tool_call() {
     assert_eq!(resp.tool_calls.len(), 1);
     assert_eq!(resp.tool_calls[0].id, "call_1");
     assert_eq!(resp.tool_calls[0].name, "read_file");
-    assert!(resp.tool_calls[0].arguments.is_empty());
+    assert_eq!(
+        resp.tool_calls[0]
+            .arguments
+            .get("path")
+            .and_then(|v| v.as_str()),
+        Some("/tmp/test.txt")
+    );
     assert_eq!(resp.finish, ProbeFinish::ToolCalls);
 }
 
@@ -163,4 +173,220 @@ fn runner_persist_without_run_does_not_write() {
     let wrote = runner.persist(&mut cache, &path).expect("persist");
     assert!(!wrote);
     assert!(!path.exists());
+}
+
+const VISION_SKIP: &str = "Skipped: provider does not advertise vision support";
+const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
+
+struct RecordingLlm {
+    inner: MockLlm,
+    requests: Arc<Mutex<Vec<ProbeRequest>>>,
+}
+
+impl RecordingLlm {
+    fn wrap(inner: MockLlm) -> (Self, Arc<Mutex<Vec<ProbeRequest>>>) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                inner,
+                requests: requests.clone(),
+            },
+            requests,
+        )
+    }
+
+    fn record(&self, req: &ProbeRequest) {
+        self.requests.lock().expect("lock").push(req.clone());
+    }
+}
+
+impl ProbeClient for RecordingLlm {
+    fn chat(
+        &self,
+        req: ProbeRequest,
+    ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
+        self.record(&req);
+        self.inner.chat(req)
+    }
+
+    fn stream_chat(
+        &self,
+        req: ProbeRequest,
+    ) -> impl futures::Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+        self.record(&req);
+        self.inner.stream_chat(req)
+    }
+
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    fn provider(&self) -> &str {
+        self.inner.provider()
+    }
+
+    fn catalog(&self) -> CatalogPriors {
+        self.inner.catalog()
+    }
+}
+
+fn request_has_image(req: &ProbeRequest) -> bool {
+    req.messages.iter().any(|m| match &m.content {
+        ProbeContent::Parts(parts) => parts
+            .iter()
+            .any(|p| matches!(p, ProbeContentPart::ImageBase64 { .. })),
+        ProbeContent::Text(_) => false,
+    })
+}
+
+fn expensive_names() -> [&'static str; 4] {
+    [
+        "one_shot_tool_plan",
+        "multi_turn_task_sequencing",
+        "context_faithfulness",
+        "multi_turn_memory",
+    ]
+}
+
+#[tokio::test]
+async fn vision_runs_only_when_catalog_some_true() {
+    let catalog = CatalogPriors {
+        supports_vision: Some(true),
+        ..CatalogPriors::default()
+    };
+    let (llm, requests) = RecordingLlm::wrap(MockLlm::new("m", "p").with_catalog(catalog));
+    let profile = ProbeRunner::new(llm).run().await.expect("run");
+    assert_ne!(profile.vision.details, VISION_SKIP);
+    let rec = requests.lock().expect("lock");
+    assert!(
+        rec.iter().any(request_has_image),
+        "vision probe must send an image when catalog.supports_vision is Some(true)"
+    );
+}
+
+#[tokio::test]
+async fn vision_skipped_when_catalog_none() {
+    let (llm, requests) = RecordingLlm::wrap(MockLlm::new("m", "p"));
+    let profile = ProbeRunner::new(llm).run().await.expect("run");
+    assert_eq!(profile.vision.level, CapabilityLevel::Weak);
+    assert_eq!(profile.vision.score, 0.0);
+    assert_eq!(profile.vision.details, VISION_SKIP);
+    let rec = requests.lock().expect("lock");
+    assert!(
+        !rec.iter().any(request_has_image),
+        "vision must not run when catalog.supports_vision is None"
+    );
+}
+
+#[tokio::test]
+async fn vision_skipped_when_catalog_some_false() {
+    let catalog = CatalogPriors {
+        supports_vision: Some(false),
+        ..CatalogPriors::default()
+    };
+    let (llm, requests) = RecordingLlm::wrap(MockLlm::new("m", "p").with_catalog(catalog));
+    let profile = ProbeRunner::new(llm).run().await.expect("run");
+    assert_eq!(profile.vision.level, CapabilityLevel::Weak);
+    assert_eq!(profile.vision.score, 0.0);
+    assert_eq!(profile.vision.details, VISION_SKIP);
+    let rec = requests.lock().expect("lock");
+    assert!(
+        !rec.iter().any(request_has_image),
+        "vision must not run when catalog.supports_vision is Some(false)"
+    );
+}
+
+#[tokio::test]
+async fn supports_tools_false_does_not_skip_tool_probes() {
+    let catalog = CatalogPriors {
+        supports_tools: Some(false),
+        ..CatalogPriors::default()
+    };
+    let (llm, requests) = RecordingLlm::wrap(MockLlm::new("m", "p").with_catalog(catalog));
+    let profile = ProbeRunner::new(llm).run().await.expect("run");
+    let rec = requests.lock().expect("lock");
+    assert!(
+        rec.iter().any(|r| !r.tools.is_empty()),
+        "tool_calling must still send tools when catalog.supports_tools is Some(false)"
+    );
+    assert_eq!(
+        profile.tool_calling.details,
+        "Valid tool call with correct name and arguments"
+    );
+    assert_ne!(
+        profile.tool_calling.details, VISION_SKIP,
+        "catalog supports_tools must not be persisted as a skip/Strong flag"
+    );
+}
+
+#[tokio::test]
+async fn xml_skipped_when_native_tool_calling_is_strong() {
+    let profile = ProbeRunner::new(MockLlm::new("m", "p"))
+        .run()
+        .await
+        .expect("run");
+    assert_eq!(profile.tool_calling.level, CapabilityLevel::Strong);
+    assert!(
+        profile.xml_tool_calling.details.contains("Not tested"),
+        "XML probe should be marked not tested when native is Strong, got: {}",
+        profile.xml_tool_calling.details
+    );
+    assert_eq!(
+        profile.xml_tool_calling.details,
+        "Not tested (native tool calling is Strong; XML fallback unused)"
+    );
+    assert_eq!(profile.xml_tool_calling.level, CapabilityLevel::Strong);
+    assert_eq!(profile.xml_tool_calling.score, 1.0);
+}
+
+#[tokio::test]
+async fn new_throttled_sets_expensive_dims_to_free_tier_skip() {
+    let profile = ProbeRunner::new_throttled(MockLlm::new("m", "p"))
+        .run()
+        .await
+        .expect("run");
+    for name in expensive_names() {
+        let result = profile
+            .dimension_result(name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(result.details, EXPENSIVE_SKIP, "{name}");
+        assert_eq!(result.level, CapabilityLevel::Medium, "{name}");
+        assert_eq!(result.score, 0.5, "{name}");
+        assert_eq!(result.name, name);
+    }
+}
+
+#[tokio::test]
+async fn cheap_sets_expensive_dims_to_free_tier_skip() {
+    let profile = ProbeRunner::new(MockLlm::new("m", "p"))
+        .cheap()
+        .run()
+        .await
+        .expect("run");
+    for name in expensive_names() {
+        let result = profile
+            .dimension_result(name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(result.details, EXPENSIVE_SKIP, "{name}");
+        assert_eq!(result.score, 0.5, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn auth_aborts_run_detailed_and_does_not_persist() {
+    let runner =
+        ProbeRunner::new(MockLlm::new("m", "p").with_error(ProbeError::Auth("bad".into())));
+    let result = runner.run_detailed().await;
+    match result {
+        Err(ProbeError::Auth(msg)) => assert_eq!(msg, "bad"),
+        other => panic!("expected Auth abort, got {other:?}"),
+    }
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = runner.persist(&mut cache, &path).expect("persist");
+    assert!(!wrote, "auth abort must not persist");
+    assert!(!path.exists(), "auth abort must not write a cache file");
+    assert!(cache.get("m", "p").is_none());
 }
