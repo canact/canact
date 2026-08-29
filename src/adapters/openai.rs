@@ -277,16 +277,24 @@ fn error_message(err: &Value) -> String {
     redact_secrets(&raw)
 }
 
-/// Strip Bearer tokens, `sk-` keys, and Authorization values from error text.
+/// Strip Bearer tokens, `sk-` keys, and values after Authorization / api-key.
 fn redact_secrets(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let lower = input.to_ascii_lowercase();
     let mut i = 0;
     while i < input.len() {
-        if starts_at(&lower, i, "authorization") && is_ascii_word_at(input, i, 13) {
-            out.push_str(&input[i..i + 13]);
-            i += 13;
+        if let Some(n) = secret_header_len(&lower, input, i) {
+            out.push_str(&input[i..i + n]);
+            i += n;
             i = copy_separators(input, i, &mut out);
+            // Leave "Bearer" for the dedicated handler so its token is stripped.
+            if starts_at(&lower, i, "bearer") && is_ascii_word_at(input, i, 6) {
+                continue;
+            }
+            if i < input.len() {
+                out.push_str("[REDACTED]");
+                i = skip_token(input, i);
+            }
             continue;
         }
         if starts_at(&lower, i, "bearer") && is_ascii_word_at(input, i, 6) {
@@ -311,6 +319,19 @@ fn redact_secrets(input: &str) -> String {
     out
 }
 
+/// Longest match first so `x-api-key` is not treated as `api-key`.
+fn secret_header_len(lower: &str, input: &str, i: usize) -> Option<usize> {
+    if starts_at(lower, i, "x-api-key") && is_ascii_word_at(input, i, 9) {
+        Some(9)
+    } else if starts_at(lower, i, "authorization") && is_ascii_word_at(input, i, 13) {
+        Some(13)
+    } else if starts_at(lower, i, "api-key") && is_ascii_word_at(input, i, 7) {
+        Some(7)
+    } else {
+        None
+    }
+}
+
 fn starts_at(lower: &str, i: usize, needle: &str) -> bool {
     lower.get(i..).is_some_and(|s| s.starts_with(needle))
 }
@@ -328,7 +349,7 @@ fn is_ascii_word_at(input: &str, i: usize, len: usize) -> bool {
 fn copy_separators(input: &str, mut i: usize, out: &mut String) -> usize {
     while i < input.len() {
         let ch = input[i..].chars().next().expect("i is a char boundary");
-        if ch == ':' || ch.is_ascii_whitespace() {
+        if ch == ':' || ch == '"' || ch == '\'' || ch.is_ascii_whitespace() {
             out.push(ch);
             i += ch.len_utf8();
         } else {
@@ -797,6 +818,33 @@ mod tests {
         assert!(redacted.contains("Authorization"), "{redacted}");
         assert!(redacted.contains("Bearer [REDACTED]"), "{redacted}");
         assert!(redacted.contains("sk-[REDACTED]"), "{redacted}");
+    }
+
+    #[test]
+    fn redact_secrets_strips_raw_authorization_and_api_keys() {
+        let raw = r#"Authorization: raw-not-sk x-api-key: SECRETKEY "api-key":"SECRETKEY""#;
+        let redacted = redact_secrets(raw);
+        assert!(!redacted.contains("raw-not-sk"), "{redacted}");
+        assert!(!redacted.contains("SECRETKEY"), "{redacted}");
+        assert!(redacted.contains("Authorization: [REDACTED]"), "{redacted}");
+        assert!(redacted.contains("x-api-key: [REDACTED]"), "{redacted}");
+        assert!(redacted.contains(r#""api-key":"[REDACTED]""#), "{redacted}");
+    }
+
+    #[tokio::test]
+    async fn chat_401_redacts_raw_authorization_from_body() {
+        let base = spawn_http(
+            401,
+            "Unauthorized",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"Authorization: raw-not-sk"}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("401");
+        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(!text.contains("raw-not-sk"), "{text}");
+        assert!(text.contains("authentication error:"), "{text}");
+        assert!(text.contains("Authorization"), "{text}");
     }
 
     #[tokio::test]
