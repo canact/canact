@@ -33,6 +33,7 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let json_str = extract_json_from_text(&response.text);
 
     let (score, details) = match serde_json::from_str::<serde_json::Value>(json_str) {
+        Ok(val) if val.is_array() => (0.0, "Response JSON is an array, not an object".to_string()),
         Ok(val) => {
             let word = val
                 .get("word")
@@ -197,6 +198,41 @@ mod tests {
                 "empty json strings must not skip repair: {body}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn json_output_array_wrapped_object_is_not_strong() {
+        for body in [
+            r#"[{"word": "hello", "length": 5, "reversed": "olleh"}]"#,
+            r#"Here: [{"word": "hello", "length": 5, "reversed": "olleh"}]"#,
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_json_output(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "array-wrapped JSON must not skip repair: {body} {result:?}"
+            );
+            assert!(
+                result.details.to_lowercase().contains("array"),
+                "{}",
+                result.details
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn json_output_object_after_citation_is_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                r#"See [1] {"word": "hello", "length": 5, "reversed": "olleh"}"#,
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.score, 1.0);
     }
 
     #[tokio::test]
