@@ -82,7 +82,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (prose `---` / `+++` / `@@` is Weak).
 /// v29: vision "text-only" / "black box" is Weak; XML
 ///      `{"path":"value"}` is format-card echo.
-pub const PROBE_SUITE_VERSION: u32 = 29;
+/// v30: vision "no visible" is Weak; an unclosed `<tool_call>`
+///      does not open tools from a `read_file` name before the tag.
+pub const PROBE_SUITE_VERSION: u32 = 30;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

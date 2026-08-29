@@ -74,6 +74,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("don't")
         || lower.contains("no image")
         || lower.contains("no text")
+        || lower.contains("no visible")
         || lower.contains("no letter")
         || lower.contains("no character")
         || lower.contains("text-only")
@@ -267,6 +268,21 @@ mod tests {
             result.level,
             CapabilityLevel::Medium,
             "no-letters refusal must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_no_visible_text() {
+        let llm = MockLlm {
+            response: text_response("No visible text"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "no visible text must not set supportsVision: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
