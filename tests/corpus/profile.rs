@@ -215,6 +215,61 @@ fn can_use_tools_false_when_both_weak() {
 }
 
 #[test]
+fn synthesized_medium_does_not_open_host_policy() {
+    let mut profile = make_profile(
+        CapabilityLevel::Weak,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.vision = ProbeResult {
+        name: "vision".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: timeout".to_string(),
+    };
+    profile.unified_diff = ProbeResult {
+        name: "unified_diff".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: timeout".to_string(),
+    };
+    profile.tool_calling = ProbeResult {
+        name: "tool_calling".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: timeout".to_string(),
+    };
+    profile.search_replace = make_probe("search_replace", CapabilityLevel::Weak);
+    profile.tool_selection = ProbeResult {
+        name: "tool_selection".to_string(),
+        score: 0.9,
+        max_score: 1.0,
+        level: CapabilityLevel::Strong,
+        details: "Probe failed: timeout".to_string(),
+    };
+    profile.json_output = ProbeResult {
+        name: "json_output".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: 429".to_string(),
+    };
+    assert!(!profile.supports_vision());
+    assert!(profile.needs_xml_fallback());
+    assert!(profile.needs_json_repair());
+    assert_eq!(profile.overall_level(), CapabilityLevel::Weak);
+    assert_eq!(profile.max_tools(), Some(10));
+    assert_eq!(
+        profile.best_edit_format(),
+        EditFormatRecommendation::WholeFile
+    );
+    assert!(!profile.meets(&[("vision", CapabilityLevel::Medium)]));
+}
+
+#[test]
 fn can_use_tools_false_when_xml_is_transient_medium() {
     let mut profile = make_profile(
         CapabilityLevel::Weak,

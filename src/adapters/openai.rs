@@ -420,15 +420,37 @@ fn chat_body(req: &ProbeRequest, stream: bool) -> Value {
         );
     }
     if let Some(t) = req.temperature {
-        body.insert("temperature".into(), Value::from(t));
+        if !reasoning_chat_model(&req.model) {
+            body.insert("temperature".into(), Value::from(t));
+        }
     }
     if let Some(m) = req.max_tokens {
-        body.insert("max_tokens".into(), Value::from(m));
+        let key = if reasoning_chat_model(&req.model) {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        body.insert(key.into(), Value::from(m));
     }
     if stream {
         body.insert("stream".into(), Value::Bool(true));
     }
     Value::Object(body)
+}
+
+/// o-series and GPT-5 chat-completions reject `max_tokens` and often
+/// reject `temperature`. Use `max_completion_tokens` and omit temperature.
+fn reasoning_chat_model(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    let id = m.rsplit('/').next().unwrap_or(&m);
+    reasoning_id_prefix(id, "o1")
+        || reasoning_id_prefix(id, "o3")
+        || reasoning_id_prefix(id, "o4")
+        || id.starts_with("gpt-5")
+}
+
+fn reasoning_id_prefix(id: &str, prefix: &str) -> bool {
+    id == prefix || id.starts_with(&format!("{prefix}-"))
 }
 
 fn message_json(msg: &ProbeMessage) -> Value {
@@ -936,6 +958,53 @@ mod tests {
         });
         let resp = parse_chat_response(&value).expect("parse");
         assert!(resp.usage.is_none());
+    }
+
+    fn chat_req(model: &str) -> ProbeRequest {
+        ProbeRequest {
+            messages: Vec::new(),
+            tools: Vec::new(),
+            model: model.into(),
+            temperature: Some(0.2),
+            max_tokens: Some(64),
+        }
+    }
+
+    #[test]
+    fn chat_body_o3_mini_uses_max_completion_tokens() {
+        let body = chat_body(&chat_req("o3-mini"), false);
+        assert_eq!(body["max_completion_tokens"], 64);
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn chat_body_provider_prefixed_o3_uses_max_completion_tokens() {
+        let body = chat_body(&chat_req("openai/o3-mini"), false);
+        assert_eq!(body["max_completion_tokens"], 64);
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn chat_body_gpt5_uses_max_completion_tokens() {
+        let body = chat_body(&chat_req("gpt-5-mini"), false);
+        assert_eq!(body["max_completion_tokens"], 64);
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn chat_body_gpt4o_keeps_max_tokens_and_temperature() {
+        let body = chat_body(&chat_req("gpt-4o"), false);
+        assert_eq!(body["max_tokens"], 64);
+        assert_eq!(body["temperature"], serde_json::json!(0.2f32));
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn reasoning_chat_model_does_not_match_o10() {
+        assert!(!reasoning_chat_model("o10"));
+        assert!(reasoning_chat_model("o1"));
+        assert!(reasoning_chat_model("o1-mini"));
     }
 
     #[tokio::test]
