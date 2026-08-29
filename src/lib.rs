@@ -26,7 +26,7 @@ mod runner;
 #[cfg(feature = "runtime")]
 pub use client::{
     CatalogPriors, MockLlm, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage,
-    ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall,
+    ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall, ProbeUsage,
 };
 #[cfg(feature = "runtime")]
 pub use runner::{FREE_CONCURRENCY, PAID_CONCURRENCY, ProbeRun, ProbeRunner, resolve_probe};

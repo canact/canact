@@ -89,12 +89,25 @@ pub struct ProbeRequest {
     pub max_tokens: Option<u32>,
 }
 
+/// Token usage reported by the host client, when the wire includes it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProbeUsage {
+    /// Prompt / input tokens, if the provider sent them.
+    pub prompt_tokens: Option<u32>,
+    /// Visible completion / output tokens.
+    pub completion_tokens: Option<u32>,
+    /// Hidden reasoning tokens, if the provider sent them.
+    pub reasoning_tokens: Option<u32>,
+}
+
 /// One chat completion response.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeResponse {
     pub text: String,
     pub tool_calls: Vec<ProbeToolCall>,
     pub finish: ProbeFinish,
+    /// Live usage from the provider. `None` when the wire omitted it.
+    pub usage: Option<ProbeUsage>,
 }
 
 /// A tool call returned by the model.
@@ -189,6 +202,7 @@ impl ProbeClient for MockLlm {
                 text: "ok".to_owned(),
                 tool_calls: Vec::new(),
                 finish: ProbeFinish::Stop,
+                usage: None,
             }
         } else {
             ProbeResponse {
@@ -202,6 +216,7 @@ impl ProbeClient for MockLlm {
                         .clone(),
                 }],
                 finish: ProbeFinish::ToolCalls,
+                usage: None,
             }
         };
         async move {

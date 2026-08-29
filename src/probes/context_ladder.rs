@@ -240,6 +240,7 @@ mod tests {
                     text,
                     tool_calls: Vec::new(),
                     finish: ProbeFinish::Stop,
+                    usage: None,
                 })
             };
             async move { result }

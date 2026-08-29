@@ -637,6 +637,7 @@ mod tests {
                 serde_json::json!({"path": "/tmp/test.txt"}),
             )],
             finish: ProbeFinish::ToolCalls,
+            usage: None,
         };
         let llm = MockLlm { response };
         let result = probe_tool_calling(&llm).await.unwrap();
@@ -650,6 +651,7 @@ mod tests {
             text: String::new(),
             tool_calls: vec![call("call_1", "read_file", serde_json::json!({"path": 1}))],
             finish: ProbeFinish::ToolCalls,
+            usage: None,
         };
         let llm = MockLlm { response };
         let result = probe_tool_calling(&llm).await.unwrap();
