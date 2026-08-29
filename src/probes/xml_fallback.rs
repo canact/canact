@@ -149,7 +149,14 @@ fn xml_closed_block_is_read_file_attempt(text: &str) -> bool {
         Some(end) => &after[..end],
         None => after,
     };
-    span.contains("<name>read_file</name>") && span.contains("<arguments>")
+    span.contains("<name>read_file</name>")
+        && span.contains("<arguments>")
+        && argument_span_starts_json_object(span)
+}
+
+/// Closed Medium needs an arguments body that at least opened `{`.
+fn argument_span_starts_json_object(span: &str) -> bool {
+    extract_xml_element_simple(span, "arguments").is_some_and(|args| args.trim().starts_with('{'))
 }
 
 /// Try to extract the first `<tool_call>` block's name and parsed JSON arguments.
@@ -284,6 +291,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn xml_tool_calling_dummy_arguments_lecture_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+The format uses <name>read_file</name> and <arguments>a JSON object</arguments>.
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "dummy <arguments> lecture must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
     async fn xml_tool_calling_read_file_mention_inside_tags_does_not_open_tools() {
         let response_text = "\
 <tool_call>
@@ -324,7 +350,7 @@ The format uses <name>read_file</name> and a path argument.
         let response_text = "\
 <tool_call>
 <name>read_file</name>
-<arguments>not json</arguments>
+<arguments>{path: /tmp/example.txt}</arguments>
 </tool_call>";
         let llm = MockLlm {
             response: text_response(response_text),

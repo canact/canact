@@ -79,7 +79,12 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
     // is still Medium.
-    let negated_glyphs = lower.contains("no letter") || lower.contains("no character");
+    let negated_glyphs = lower.contains("no letter")
+        || lower.contains("no character")
+        || lower.contains("don't see")
+        || lower.contains("do not see")
+        || lower.contains("can't see")
+        || lower.contains("cannot see");
     let saw_glyphs = !negated_glyphs
         && (has_surface_word(&lower, "letter")
             || has_surface_word(&lower, "letters")
@@ -186,6 +191,21 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_dont_see_letters() {
+        let llm = MockLlm {
+            response: text_response("I don't see letters"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "don't-see-letters must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

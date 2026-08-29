@@ -73,7 +73,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v25: vision "no letters" / "no characters" is Weak; a closed XML
 ///      block that only mentions `<name>read_file</name>` without
 ///      `<arguments>` does not open canUseTools.
-pub const PROBE_SUITE_VERSION: u32 = 25;
+/// v26: closed XML Medium requires arguments that open `{`;
+///      vision "don't see letters" is Weak; SEARCH/REPLACE Strong
+///      requires `fn greet(` / `fn welcome(`.
+pub const PROBE_SUITE_VERSION: u32 = 26;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
