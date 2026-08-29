@@ -43,7 +43,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      read_file; system-adherence details are UTF-8 safe.
 /// v16: one_shot_tool_plan and tool_selection Strong require
 ///      non-empty string args on preferred tools.
-pub const PROBE_SUITE_VERSION: u32 = 16;
+/// v17: whitespace-only args are not Strong; tool_selection scores
+///      the best same-name call; one_shot order uses first precise
+///      call; tool_calling/xml/streaming reject empty path.
+pub const PROBE_SUITE_VERSION: u32 = 17;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

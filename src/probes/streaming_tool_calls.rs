@@ -9,7 +9,7 @@ use crate::client::{ProbeClient, ProbeRequest, ProbeStreamChunk};
 use crate::types::{ProbeResult, classify};
 use futures::StreamExt;
 
-use super::{tool, user_text};
+use super::{nonempty_string_arg, tool, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -124,7 +124,9 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
 
 fn parsed_string_path(args: &str) -> Result<bool, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(args)?;
-    Ok(value.get("path").and_then(|v| v.as_str()).is_some())
+    Ok(value
+        .as_object()
+        .is_some_and(|o| nonempty_string_arg(o, "path")))
 }
 
 #[cfg(test)]
@@ -228,6 +230,30 @@ mod tests {
         let result = probe_streaming_tool_calls(&llm).await.unwrap();
         assert_eq!(result.score, 0.5);
         assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn streaming_empty_or_whitespace_path_is_not_strong() {
+        for args in [r#"{"path":""}"#, r#"{"path":" "}"#, r#"{"path":"\n"}"#] {
+            let llm = StreamMockLlm::new(vec![
+                Ok(ProbeStreamChunk::ToolCallStart {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                }),
+                Ok(ProbeStreamChunk::ToolCallArgDelta {
+                    delta: args.to_string(),
+                }),
+                Ok(ProbeStreamChunk::ToolCallEnd),
+            ]);
+            let result = probe_streaming_tool_calls(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "empty/whitespace path must not be Strong: {args}"
+            );
+            assert_eq!(result.score, 0.5, "path args={args}");
+            assert_eq!(result.level, CapabilityLevel::Medium, "path args={args}");
+        }
     }
 
     #[tokio::test]

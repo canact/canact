@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{CapabilityLevel, ProbeResult, classify};
 
-use super::{tool, user_text};
+use super::{nonempty_string_arg, tool, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -48,7 +48,7 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
 
     let (score, details) = if !response.tool_calls.is_empty() {
         let tc = &response.tool_calls[0];
-        let path_is_string = tc.arguments.get("path").and_then(|v| v.as_str()).is_some();
+        let path_is_string = nonempty_string_arg(&tc.arguments, "path");
         if tc.name == "read_file" && path_is_string {
             (
                 1.0,
@@ -504,57 +504,33 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     let mut points = 0.0_f32;
     let mut task_details = Vec::new();
 
-    let nonempty = |args: &serde_json::Map<String, serde_json::Value>, key: &str| {
-        args.get(key)
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| !s.is_empty())
+    let preferred = |name: &str, keys: &[&str], alt: &str| -> f32 {
+        let precise = |c: &ProbeToolCall| {
+            keys.iter()
+                .all(|key| nonempty_string_arg(&c.arguments, key))
+        };
+        if calls.iter().any(|c| c.name == name && precise(c)) {
+            1.0
+        } else if calls.iter().any(|c| c.name == name || c.name == alt) {
+            0.5
+        } else {
+            0.0
+        }
     };
 
-    let t1_score = calls
-        .iter()
-        .find(|c| c.name == "doc_set")
-        .map(|c| {
-            if nonempty(&c.arguments, "path") && nonempty(&c.arguments, "selector") {
-                1.0_f32
-            } else {
-                0.5
-            }
-        })
-        .or_else(|| calls.iter().find(|c| c.name == "edit_file").map(|_| 0.5))
-        .unwrap_or(0.0);
+    let t1_score = preferred("doc_set", &["path", "selector"], "edit_file");
     points += t1_score;
     task_details.push(format!("task1={t1_score}"));
 
-    let t2_score = calls
-        .iter()
-        .find(|c| c.name == "search")
-        .map(|c| {
-            if nonempty(&c.arguments, "pattern") {
-                1.0_f32
-            } else {
-                0.5
-            }
-        })
-        .or_else(|| calls.iter().find(|c| c.name == "run_command").map(|_| 0.5))
-        .unwrap_or(0.0);
+    let t2_score = preferred("search", &["pattern"], "run_command");
     points += t2_score;
     task_details.push(format!("task2={t2_score}"));
 
-    let t3_score = calls
-        .iter()
-        .find(|c| c.name == "md_replace_section")
-        .map(|c| {
-            if nonempty(&c.arguments, "path")
-                && nonempty(&c.arguments, "heading")
-                && nonempty(&c.arguments, "content")
-            {
-                1.0_f32
-            } else {
-                0.5
-            }
-        })
-        .or_else(|| calls.iter().find(|c| c.name == "edit_file").map(|_| 0.5))
-        .unwrap_or(0.0);
+    let t3_score = preferred(
+        "md_replace_section",
+        &["path", "heading", "content"],
+        "edit_file",
+    );
     points += t3_score;
     task_details.push(format!("task3={t3_score}"));
 
@@ -680,6 +656,25 @@ mod tests {
         let result = probe_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn tool_calling_medium_when_path_is_empty_or_whitespace() {
+        for path in ["", " ", "\n"] {
+            let response = ProbeResponse {
+                text: String::new(),
+                tool_calls: vec![call(
+                    "call_1",
+                    "read_file",
+                    serde_json::json!({"path": path}),
+                )],
+                finish: ProbeFinish::ToolCalls,
+                usage: None,
+            };
+            let result = probe_tool_calling(&MockLlm { response }).await.unwrap();
+            assert_eq!(result.score, 0.5, "path={path:?}");
+            assert_eq!(result.level, CapabilityLevel::Medium, "path={path:?}");
+        }
     }
 
     #[tokio::test]
@@ -921,6 +916,60 @@ mod tests {
         let result = probe_tool_selection(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn tool_selection_strong_for_best_same_name_call() {
+        let response = multi_tool_call_response(vec![
+            call("call_1", "doc_set", serde_json::json!({})),
+            call(
+                "call_2",
+                "doc_set",
+                serde_json::json!({"path": "config.toml", "selector": "port", "value": 8080}),
+            ),
+            call("call_3", "search", serde_json::json!({})),
+            call(
+                "call_4",
+                "search",
+                serde_json::json!({"pattern": "deprecated", "directory": "src/"}),
+            ),
+            call("call_5", "md_replace_section", serde_json::json!({})),
+            call(
+                "call_6",
+                "md_replace_section",
+                serde_json::json!({
+                    "path": "README.md",
+                    "heading": "Installation",
+                    "content": "new instructions"
+                }),
+            ),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_tool_selection(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn tool_selection_medium_for_whitespace_preferred_args() {
+        let response = multi_tool_call_response(vec![
+            call(
+                "call_1",
+                "doc_set",
+                serde_json::json!({"path": " ", "selector": "\n", "value": 8080}),
+            ),
+            call("call_2", "search", serde_json::json!({"pattern": " "})),
+            call(
+                "call_3",
+                "md_replace_section",
+                serde_json::json!({"path": " ", "heading": "\n", "content": " "}),
+            ),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_tool_selection(&llm).await.unwrap();
+        assert_eq!(result.score, 0.5);
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.level, CapabilityLevel::Medium);
     }
 
     #[tokio::test]

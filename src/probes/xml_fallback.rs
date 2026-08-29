@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{system_text, user_text};
+use super::{nonempty_string_arg, system_text, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/example.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -57,9 +57,7 @@ Available tools:
                 let correct_name = name == "read_file";
                 let has_path = args
                     .as_object()
-                    .and_then(|o| o.get("path"))
-                    .and_then(|v| v.as_str())
-                    .is_some();
+                    .is_some_and(|o| nonempty_string_arg(o, "path"));
 
                 if correct_name && has_path {
                     (
@@ -174,6 +172,25 @@ mod tests {
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.4);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_not_strong_for_empty_or_whitespace_path() {
+        for args in [r#"{"path": ""}"#, r#"{"path": " "}"#, r#"{"path": "\n"}"#] {
+            let response_text = format!(
+                "<tool_call>\n<name>read_file</name>\n<arguments>{args}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "empty/whitespace path must not be Strong: {args}"
+            );
+            assert_eq!(result.score, 0.7, "imprecise XML path: {args}");
+        }
     }
 
     #[tokio::test]

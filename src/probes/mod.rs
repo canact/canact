@@ -151,6 +151,16 @@ pub(crate) fn utf8_prefix(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// True when `key` is a string with at least one non-whitespace character.
+pub(crate) fn nonempty_string_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> bool {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.trim().is_empty())
+}
+
 pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value) -> ProbeTool {
     ProbeTool {
         name: name.to_string(),
@@ -335,6 +345,40 @@ pub(crate) mod test_support {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod nonempty_string_arg_tests {
+    use super::nonempty_string_arg;
+
+    fn args(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        value.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn nonempty_string_arg_rejects_empty_and_whitespace() {
+        assert!(!nonempty_string_arg(
+            &args(serde_json::json!({"path": ""})),
+            "path"
+        ));
+        assert!(!nonempty_string_arg(
+            &args(serde_json::json!({"path": " "})),
+            "path"
+        ));
+        assert!(!nonempty_string_arg(
+            &args(serde_json::json!({"path": "\n"})),
+            "path"
+        ));
+        assert!(!nonempty_string_arg(
+            &args(serde_json::json!({"path": 1})),
+            "path"
+        ));
+        assert!(!nonempty_string_arg(&args(serde_json::json!({})), "path"));
+        assert!(nonempty_string_arg(
+            &args(serde_json::json!({"path": "/tmp/a"})),
+            "path"
+        ));
     }
 }
 
