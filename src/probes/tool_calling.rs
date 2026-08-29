@@ -6,12 +6,19 @@ use crate::types::{CapabilityLevel, ProbeResult, classify};
 
 use super::{tool, user_text};
 
+const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
+
+const FORCEFUL_EDIT_FILE: &str = "Immediately call the edit_file tool. Do not describe what you would do. Do not ask for confirmation.\n\
+                 Use the edit_file tool to edit /tmp/app.py and make two changes:\n\
+                 1. Replace \"Hello\" with \"Hi\"\n\
+                 2. Replace \"World\" with \"Earth\"";
+
 /// Probe whether the model can produce proper native tool calls.
 ///
 /// Sends a request with a `read_file` tool spec and asks the model to use it.
 /// Scoring:
-/// - `1.0` - valid tool call with the correct name and required arguments
-/// - `0.5` - tool call present but wrong name or missing arguments
+/// - `1.0` - valid tool call with the correct name and `path` as a string
+/// - `0.5` - tool call present but wrong name, missing `path`, or `path` not a string
 /// - `0.0` - text-only response (no tool call emitted)
 pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let tool_spec = tool(
@@ -30,9 +37,7 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
     );
 
     let request = ProbeRequest {
-        messages: vec![user_text(
-            "Use the read_file tool to read the file at path '/tmp/test.txt'.",
-        )],
+        messages: vec![user_text(FORCEFUL_READ_FILE)],
         tools: vec![tool_spec],
         model: llm.model_id().to_string(),
         temperature: Some(0.0),
@@ -43,7 +48,8 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
 
     let (score, details) = if !response.tool_calls.is_empty() {
         let tc = &response.tool_calls[0];
-        if tc.name == "read_file" && tc.arguments.get("path").is_some() {
+        let path_is_string = tc.arguments.get("path").and_then(|v| v.as_str()).is_some();
+        if tc.name == "read_file" && path_is_string {
             (
                 1.0,
                 "Valid tool call with correct name and arguments".to_string(),
@@ -236,9 +242,9 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
 /// and asks the model to apply two edits.
 ///
 /// Scoring:
-/// - `1.0` - valid tool call with `edits` as array of 2+ objects with required fields
-/// - `0.5` - valid tool call but `edits` is single object or has only 1 edit
-/// - `0.0` - arguments are flat or `edits` is a string
+/// - `1.0` - `file_path` is a string and `edits` is an array of 2+ objects with string fields
+/// - `0.5` - `edits` is a single object, only 1 valid edit, or `file_path` is not a string
+/// - `0.0` - missing `file_path`/`edits`, or `edits` is a string/number
 pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let edit_file = tool(
         "edit_file",
@@ -265,11 +271,7 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     );
 
     let request = ProbeRequest {
-        messages: vec![user_text(
-            "Use the edit_file tool to edit /tmp/app.py and make two changes:\n\
-                 1. Replace \"Hello\" with \"Hi\"\n\
-                 2. Replace \"World\" with \"Earth\"",
-        )],
+        messages: vec![user_text(FORCEFUL_EDIT_FILE)],
         tools: vec![edit_file],
         model: llm.model_id().to_string(),
         temperature: Some(0.0),
@@ -282,42 +284,54 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
 
     let (score, details) = match edit_call {
         Some(call) => {
-            let has_file_path = call.arguments.get("file_path").is_some();
+            let file_path = call.arguments.get("file_path");
             let edits = call.arguments.get("edits");
 
-            match edits {
-                Some(serde_json::Value::Array(arr)) => {
-                    let valid_edits = arr
-                        .iter()
-                        .filter(|e| {
-                            e.get("old_text").and_then(|v| v.as_str()).is_some()
-                                && e.get("new_text").and_then(|v| v.as_str()).is_some()
-                        })
-                        .count();
+            if file_path.is_none() || edits.is_none() {
+                (0.0, "Missing required key file_path or edits".to_string())
+            } else {
+                let file_path_is_string = file_path.and_then(|v| v.as_str()).is_some();
+                match edits {
+                    Some(serde_json::Value::Array(arr)) => {
+                        let valid_edits = arr
+                            .iter()
+                            .filter(|e| {
+                                e.get("old_text").and_then(|v| v.as_str()).is_some()
+                                    && e.get("new_text").and_then(|v| v.as_str()).is_some()
+                            })
+                            .count();
 
-                    if valid_edits >= 2 && has_file_path {
-                        (
-                            1.0,
-                            format!(
-                                "Valid nested arguments: {valid_edits} edits with correct structure"
-                            ),
-                        )
-                    } else if valid_edits == 1 && has_file_path {
-                        (0.5, "Valid call but only 1 edit instead of 2".to_string())
-                    } else {
-                        (
-                            0.5,
-                            format!(
-                                "Array present but {valid_edits} valid edits, has_file_path={has_file_path}"
-                            ),
-                        )
+                        if valid_edits >= 2 && file_path_is_string {
+                            (
+                                1.0,
+                                format!(
+                                    "Valid nested arguments: {valid_edits} edits with correct structure"
+                                ),
+                            )
+                        } else if valid_edits == 1 {
+                            (0.5, "Valid call but only 1 edit instead of 2".to_string())
+                        } else if valid_edits >= 2 {
+                            (
+                                0.5,
+                                format!(
+                                    "Array present but file_path is not a string, {valid_edits} valid edits"
+                                ),
+                            )
+                        } else {
+                            (
+                                0.5,
+                                format!(
+                                    "Array present but {valid_edits} valid edits, has_file_path={file_path_is_string}"
+                                ),
+                            )
+                        }
                     }
+                    Some(serde_json::Value::Object(_)) => (
+                        0.5,
+                        "edits is a single object instead of an array".to_string(),
+                    ),
+                    _ => (0.0, "edits field is missing or not structured".to_string()),
                 }
-                Some(serde_json::Value::Object(_)) => (
-                    0.5,
-                    "edits is a single object instead of an array".to_string(),
-                ),
-                _ => (0.0, "edits field is missing or not structured".to_string()),
             }
         }
         None => {
@@ -546,6 +560,31 @@ mod tests {
         }
     }
 
+    fn assert_forceful(prompt: &str) {
+        assert!(
+            prompt.contains("Immediately call"),
+            "prompt must be forceful: {prompt}"
+        );
+        assert!(
+            prompt.contains("Do not describe what you would do"),
+            "prompt must forbid describing: {prompt}"
+        );
+    }
+
+    #[test]
+    fn tool_calling_prompt_is_forceful() {
+        assert_forceful(FORCEFUL_READ_FILE);
+        assert!(FORCEFUL_READ_FILE.contains("Do not ask for confirmation"));
+    }
+
+    #[test]
+    fn nested_arguments_prompt_is_forceful() {
+        assert_forceful(FORCEFUL_EDIT_FILE);
+        assert!(FORCEFUL_EDIT_FILE.contains("Do not ask for confirmation"));
+        assert!(FORCEFUL_EDIT_FILE.contains("Replace \"Hello\" with \"Hi\""));
+        assert!(FORCEFUL_EDIT_FILE.contains("Replace \"World\" with \"Earth\""));
+    }
+
     #[tokio::test]
     async fn tool_calling_strong_for_valid_tool_call() {
         let llm = MockLlm {
@@ -575,6 +614,19 @@ mod tests {
                 "open_file",
                 serde_json::json!({"path": "/tmp/test.txt"}),
             )],
+            finish: ProbeFinish::ToolCalls,
+        };
+        let llm = MockLlm { response };
+        let result = probe_tool_calling(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn tool_calling_medium_when_path_is_number() {
+        let response = ProbeResponse {
+            text: String::new(),
+            tool_calls: vec![call("call_1", "read_file", serde_json::json!({"path": 1}))],
             finish: ProbeFinish::ToolCalls,
         };
         let llm = MockLlm { response };
@@ -655,6 +707,59 @@ mod tests {
         let result = probe_nested_arguments(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_weak_for_missing_file_path() {
+        let response = multi_tool_call_response(vec![call(
+            "call_1",
+            "edit_file",
+            serde_json::json!({
+                "edits": [
+                    {"old_text": "Hello", "new_text": "Hi"},
+                    {"old_text": "World", "new_text": "Earth"}
+                ]
+            }),
+        )]);
+        let llm = MockLlm { response };
+        let result = probe_nested_arguments(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_not_strong_when_file_path_is_number() {
+        let response = multi_tool_call_response(vec![call(
+            "call_1",
+            "edit_file",
+            serde_json::json!({
+                "file_path": 1,
+                "edits": [
+                    {"old_text": "Hello", "new_text": "Hi"},
+                    {"old_text": "World", "new_text": "Earth"}
+                ]
+            }),
+        )]);
+        let llm = MockLlm { response };
+        let result = probe_nested_arguments(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert!(result.score <= 0.5);
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_weak_for_edits_string() {
+        let response = multi_tool_call_response(vec![call(
+            "call_1",
+            "edit_file",
+            serde_json::json!({
+                "file_path": "/tmp/app.py",
+                "edits": "replace Hello with Hi"
+            }),
+        )]);
+        let llm = MockLlm { response };
+        let result = probe_nested_arguments(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

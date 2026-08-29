@@ -11,6 +11,8 @@ use futures::StreamExt;
 
 use super::{tool, user_text};
 
+const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
+
 /// Probe whether the model can stream tool calls reliably.
 ///
 /// Sends a streaming request with a simple tool and checks whether
@@ -42,9 +44,7 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
     );
 
     let request = ProbeRequest {
-        messages: vec![user_text(
-            "Use the read_file tool to read the file at path '/tmp/test.txt'.",
-        )],
+        messages: vec![user_text(FORCEFUL_READ_FILE)],
         tools: vec![tool_spec],
         model: llm.model_id().to_string(),
         temperature: Some(0.0),
@@ -168,6 +168,13 @@ mod tests {
         fn provider(&self) -> &str {
             "test-provider"
         }
+    }
+
+    #[test]
+    fn streaming_prompt_is_forceful() {
+        assert!(FORCEFUL_READ_FILE.contains("Immediately call"));
+        assert!(FORCEFUL_READ_FILE.contains("Do not describe what you would do"));
+        assert!(FORCEFUL_READ_FILE.contains("Do not ask for confirmation"));
     }
 
     #[tokio::test]
