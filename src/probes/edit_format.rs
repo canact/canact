@@ -172,33 +172,32 @@ Rename the function `greet` to `welcome` and change the greeting from \
         .lines()
         .any(|l| l.starts_with('+') && !l.starts_with("+++"));
 
-    let (score, details) =
-        if has_minus_header && has_plus_header && has_hunk && has_minus_line && has_plus_line {
-            let has_file_ref = text
-                .lines()
-                .any(|l| (l.starts_with("---") || l.starts_with("+++")) && l.contains("greet.rs"));
-            let minus_has_greet = text
-                .lines()
-                .any(|l| l.starts_with('-') && !l.starts_with("---") && l.contains("greet"));
-            let plus_has_welcome = text
-                .lines()
-                .any(|l| l.starts_with('+') && !l.starts_with("+++") && l.contains("welcome"));
-            if has_file_ref && minus_has_greet && plus_has_welcome {
-                (1.0, "Valid unified diff with correct +/- lines".to_string())
-            } else {
-                (0.5, "Valid diff structure but content unclear".to_string())
-            }
-        } else if (has_hunk || (has_minus_header && has_plus_header))
-            && has_minus_line
-            && has_plus_line
-        {
-            (
-                0.5,
-                "Has diff lines but missing headers or hunk markers".to_string(),
-            )
+    let (score, details) = if is_unified_diff_card_echo(&text) {
+        (0.0, "Echoed the unified diff format card".to_string())
+    } else if has_minus_header && has_plus_header && has_hunk && has_minus_line && has_plus_line {
+        let has_file_ref = text
+            .lines()
+            .any(|l| (l.starts_with("---") || l.starts_with("+++")) && l.contains("greet.rs"));
+        let minus_has_greet = text
+            .lines()
+            .any(|l| l.starts_with('-') && !l.starts_with("---") && l.contains("greet"));
+        let plus_has_welcome = text
+            .lines()
+            .any(|l| l.starts_with('+') && !l.starts_with("+++") && l.contains("welcome"));
+        if has_file_ref && minus_has_greet && plus_has_welcome {
+            (1.0, "Valid unified diff with correct +/- lines".to_string())
         } else {
-            (0.0, "Not a recognizable unified diff".to_string())
-        };
+            (0.5, "Valid diff structure but content unclear".to_string())
+        }
+    } else if (has_hunk || (has_minus_header && has_plus_header)) && has_minus_line && has_plus_line
+    {
+        (
+            0.5,
+            "Has diff lines but missing headers or hunk markers".to_string(),
+        )
+    } else {
+        (0.0, "Not a recognizable unified diff".to_string())
+    };
 
     Ok(ProbeResult {
         name: "unified_diff".to_string(),
@@ -207,6 +206,11 @@ Rename the function `greet` to `welcome` and change the greeting from \
         level: classify(score),
         details,
     })
+}
+
+/// True when the reply is the system format example, not an edit of greet.rs.
+fn is_unified_diff_card_echo(text: &str) -> bool {
+    text.contains("path/to/file.rs") && text.contains("removed line") && text.contains("added line")
 }
 
 struct SearchReplaceBlock<'a> {
@@ -382,6 +386,30 @@ Rename welcome Welcome
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_system_card_echo_is_not_medium() {
+        let response_text = "\
+--- a/path/to/file.rs
++++ b/path/to/file.rs
+@@ -10,4 +10,5 @@
+ context line
+-removed line
++added line
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "system card diff must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

@@ -98,8 +98,12 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || has_surface_word(&lower, "white")
         || has_surface_word(&lower, "text");
 
+    let echoed_question = lower.contains("what text or letters appear");
+
     let (score, details) = if identified_text {
         (1.0, "Can read text from images".to_string())
+    } else if echoed_question {
+        (0.0, "Did not use the image (generic reply)".to_string())
     } else if saw_glyphs {
         (
             0.5,
@@ -191,6 +195,20 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_question_echo_does_not_set_medium() {
+        let llm = MockLlm {
+            response: text_response("What text or letters appear in this image?"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "question echo must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]

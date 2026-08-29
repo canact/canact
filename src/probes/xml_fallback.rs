@@ -126,10 +126,14 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
         return true;
     }
     args.as_object().is_some_and(|o| {
-        o.len() == 1
+        let param_value_echo = o.len() == 1
             && o.get("param")
                 .and_then(|v| v.as_str())
-                .is_some_and(|s| s == "value")
+                .is_some_and(|s| s == "value");
+        let schema_echo = o.get("type").and_then(|v| v.as_str()) == Some("object")
+            && o.get("properties").is_some()
+            && !nonempty_string_arg(o, "path");
+        param_value_echo || schema_echo
     })
 }
 
@@ -288,6 +292,26 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert!(result.score < 0.4, "card echo score: {}", result.score);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_schema_paste_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"The file path to read\"}},\"required\":[\"path\"]}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "JSON Schema paste must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

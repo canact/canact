@@ -76,7 +76,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v26: closed XML Medium requires arguments that open `{`;
 ///      vision "don't see letters" is Weak; SEARCH/REPLACE Strong
 ///      requires `fn greet(` / `fn welcome(`.
-pub const PROBE_SUITE_VERSION: u32 = 26;
+/// v27: vision question echo, unified-diff format-card echo, and
+///      XML JSON Schema paste do not open host policy.
+pub const PROBE_SUITE_VERSION: u32 = 27;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
