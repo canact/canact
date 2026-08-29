@@ -438,6 +438,8 @@ enum LadderReply {
     Recall,
     Transient,
     Auth,
+    RecallThenTransient,
+    RecallThenAuth,
 }
 
 struct ContextLadderLlm {
@@ -467,14 +469,20 @@ impl ProbeClient for ContextLadderLlm {
     ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
         self.requests.lock().expect("lock").push(req.clone());
         if is_ladder_request(&req) {
+            let tokens = request_token_estimate(&req);
+            let recall = Ok(ProbeResponse {
+                text: "WH-4481\nproto-9.2.11\n2840".to_owned(),
+                tool_calls: Vec::new(),
+                finish: ProbeFinish::Stop,
+            });
             let result = match self.ladder {
-                LadderReply::Recall => Ok(ProbeResponse {
-                    text: "WH-4481\nproto-9.2.11\n2840".to_owned(),
-                    tool_calls: Vec::new(),
-                    finish: ProbeFinish::Stop,
-                }),
+                LadderReply::Recall => recall,
                 LadderReply::Transient => Err(ProbeError::Transient("timeout".into())),
                 LadderReply::Auth => Err(ProbeError::Auth("bad".into())),
+                LadderReply::RecallThenTransient if tokens < 8192 => recall,
+                LadderReply::RecallThenTransient => Err(ProbeError::Transient("timeout".into())),
+                LadderReply::RecallThenAuth if tokens < 8192 => recall,
+                LadderReply::RecallThenAuth => Err(ProbeError::Auth("bad".into())),
             };
             futures::future::Either::Left(std::future::ready(result))
         } else {
@@ -592,6 +600,42 @@ async fn ladder_transient_leaves_none_and_uncacheable() {
         !run.cacheable,
         "transient ladder must not be a 30-day cache hit"
     );
+}
+
+#[tokio::test]
+async fn ladder_mid_climb_transient_keeps_4k_and_uncacheable() {
+    let (llm, requests) =
+        ContextLadderLlm::wrap(MockLlm::new("m", "p"), LadderReply::RecallThenTransient);
+    let run = ProbeRunner::new(llm)
+        .run_detailed()
+        .await
+        .expect("run_detailed");
+    assert_eq!(run.profile.effective_context_tokens, Some(4096));
+    assert!(
+        !run.cacheable,
+        "mid-climb transient must not be a 30-day cache hit"
+    );
+    let rec = requests.lock().expect("lock");
+    let ladder = ladder_requests(&rec);
+    assert_eq!(ladder.len(), 2, "4k must pass, then 8k transient");
+    let t0 = request_token_estimate(ladder[0]);
+    let t1 = request_token_estimate(ladder[1]);
+    assert!((4096..8192).contains(&t0), "{t0}");
+    assert!((8192..16384).contains(&t1), "{t1}");
+}
+
+#[tokio::test]
+async fn ladder_mid_climb_auth_aborts_run_detailed() {
+    let (llm, requests) =
+        ContextLadderLlm::wrap(MockLlm::new("m", "p"), LadderReply::RecallThenAuth);
+    let result = ProbeRunner::new(llm).run_detailed().await;
+    match result {
+        Err(ProbeError::Auth(msg)) => assert_eq!(msg, "bad"),
+        other => panic!("expected mid-climb Auth abort, got {other:?}"),
+    }
+    let rec = requests.lock().expect("lock");
+    let ladder = ladder_requests(&rec);
+    assert_eq!(ladder.len(), 2, "4k must pass, then 8k Auth");
 }
 
 #[tokio::test]

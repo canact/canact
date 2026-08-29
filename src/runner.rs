@@ -193,42 +193,37 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let parallel_tool_scale =
             take_probe(&mut cacheable, par_scale_result, "parallel_tool_scale")?;
 
-        let one_shot_tool_plan = if self.skip_expensive {
-            expensive_skip("one_shot_tool_plan")
-        } else {
-            take_probe(
-                &mut cacheable,
-                Self::gated(&sem, probes::probe_one_shot_tool_plan(&self.client)).await,
+        let (plan_r, seq_r, faith_r, mem_r) = tokio::join!(
+            Self::gated_or_skip(
+                self.skip_expensive,
+                &sem,
                 "one_shot_tool_plan",
-            )?
-        };
-        let multi_turn_task_sequencing = if self.skip_expensive {
-            expensive_skip("multi_turn_task_sequencing")
-        } else {
-            take_probe(
-                &mut cacheable,
-                Self::gated(&sem, probes::probe_multi_turn_task_sequencing(&self.client)).await,
+                probes::probe_one_shot_tool_plan(&self.client),
+            ),
+            Self::gated_or_skip(
+                self.skip_expensive,
+                &sem,
                 "multi_turn_task_sequencing",
-            )?
-        };
-        let context_faithfulness = if self.skip_expensive {
-            expensive_skip("context_faithfulness")
-        } else {
-            take_probe(
-                &mut cacheable,
-                Self::gated(&sem, probes::probe_context_faithfulness(&self.client)).await,
+                probes::probe_multi_turn_task_sequencing(&self.client),
+            ),
+            Self::gated_or_skip(
+                self.skip_expensive,
+                &sem,
                 "context_faithfulness",
-            )?
-        };
-        let multi_turn_memory = if self.skip_expensive {
-            expensive_skip("multi_turn_memory")
-        } else {
-            take_probe(
-                &mut cacheable,
-                Self::gated(&sem, probes::probe_multi_turn_memory(&self.client)).await,
+                probes::probe_context_faithfulness(&self.client),
+            ),
+            Self::gated_or_skip(
+                self.skip_expensive,
+                &sem,
                 "multi_turn_memory",
-            )?
-        };
+                probes::probe_multi_turn_memory(&self.client),
+            ),
+        );
+        let one_shot_tool_plan = take_probe(&mut cacheable, plan_r, "one_shot_tool_plan")?;
+        let multi_turn_task_sequencing =
+            take_probe(&mut cacheable, seq_r, "multi_turn_task_sequencing")?;
+        let context_faithfulness = take_probe(&mut cacheable, faith_r, "context_faithfulness")?;
+        let multi_turn_memory = take_probe(&mut cacheable, mem_r, "multi_turn_memory")?;
 
         let effective_context_tokens = {
             let _permit = sem
@@ -324,6 +319,22 @@ impl<C: ProbeClient> ProbeRunner<C> {
             .map_err(|_| ProbeError::Internal("probe semaphore closed unexpectedly".into()))?;
         fut.await
     }
+
+    async fn gated_or_skip<F>(
+        skip: bool,
+        sem: &Arc<Semaphore>,
+        name: &'static str,
+        fut: F,
+    ) -> Result<ProbeResult, ProbeError>
+    where
+        F: std::future::Future<Output = Result<ProbeResult, ProbeError>>,
+    {
+        if skip {
+            Ok(expensive_skip(name))
+        } else {
+            Self::gated(sem, fut).await
+        }
+    }
 }
 
 fn take_probe(
@@ -338,14 +349,14 @@ fn take_probe(
 
 fn take_ladder(
     cacheable: &mut bool,
-    result: Result<Option<u32>, ProbeError>,
+    ladder: probes::ContextLadder,
 ) -> Result<Option<u32>, ProbeError> {
-    match result {
-        Ok(tokens) => Ok(tokens),
+    match ladder.error {
+        Ok(()) => Ok(ladder.tokens),
         Err(err) => {
             let (_, ok_to_cache) = resolve_probe(Err(err), "effective_context_tokens")?;
             *cacheable &= ok_to_cache;
-            Ok(None)
+            Ok(ladder.tokens)
         }
     }
 }

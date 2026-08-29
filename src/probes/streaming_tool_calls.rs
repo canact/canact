@@ -19,8 +19,8 @@ const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path 
 /// the streamed chunks assemble into a valid tool call.
 ///
 /// Scoring:
-/// - `1.0` - stream completed, tool call name and valid JSON arguments received
-/// - `0.5` - stream completed with tool call name but malformed/missing arguments
+/// - `1.0` - stream completed, tool call name and JSON `path` as a string
+/// - `0.5` - stream completed with tool call name but malformed args or non-string `path`
 /// - `0.0` - stream completed with no tool call chunks
 ///
 /// Stream setup, timeout, 429, or other `stream_chat` errors are returned as
@@ -84,24 +84,22 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
     let (score, details) = if !got_any_chunk {
         (0.0, "Stream produced no chunks".to_string())
     } else if got_tool_name {
-        let args_valid = if args_buffer.is_empty() {
-            false
-        } else {
-            serde_json::from_str::<serde_json::Value>(&args_buffer).is_ok()
-        };
-        if args_valid {
-            (
+        match parsed_string_path(&args_buffer) {
+            Ok(true) => (
                 1.0,
                 "Streaming tool call with valid JSON arguments".to_string(),
-            )
-        } else {
-            (
+            ),
+            Ok(false) => (
+                0.5,
+                "Tool call name streamed but path is not a string".to_string(),
+            ),
+            Err(_) => (
                 0.5,
                 format!(
                     "Tool call name streamed but arguments malformed: {:?}",
                     prefix_bytes(&args_buffer, 80)
                 ),
-            )
+            ),
         }
     } else {
         (
@@ -117,6 +115,11 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
         level: classify(score),
         details,
     })
+}
+
+fn parsed_string_path(args: &str) -> Result<bool, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(args)?;
+    Ok(value.get("path").and_then(|v| v.as_str()).is_some())
 }
 
 fn prefix_bytes(s: &str, max: usize) -> &str {
@@ -135,6 +138,7 @@ mod tests {
     use super::*;
     use crate::client::{ProbeResponse, ProbeStreamChunk};
     use crate::probes::test_support::request_user_text;
+    use crate::types::CapabilityLevel;
     use futures::Stream;
 
     struct StreamMockLlm {
@@ -213,6 +217,24 @@ mod tests {
         ]);
         let result = probe_streaming_tool_calls(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn streaming_numeric_path_is_not_strong() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"path\":1}".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.score, 0.5);
+        assert_eq!(result.level, CapabilityLevel::Medium);
     }
 
     #[tokio::test]
