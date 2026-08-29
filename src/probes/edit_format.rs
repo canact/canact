@@ -65,9 +65,11 @@ Rename the function `greet` to `welcome` and change the greeting from \
         let mut best = 0.4_f64;
         for block in parse_search_replace_blocks(&text) {
             let has_file_ref = block.path.contains("greet.rs");
-            let has_old_content = block.search.contains("greet") && block.search.contains("Hello");
+            // Strong requires the function body, not prose that names greet/Hello.
+            let has_old_content =
+                block.search.contains("fn greet") && block.search.contains("Hello");
             let has_new_content =
-                block.replace.contains("welcome") && block.replace.contains("Welcome");
+                block.replace.contains("fn welcome") && block.replace.contains("Welcome");
             let block_score = if has_file_ref && has_old_content && has_new_content {
                 1.0
             } else if has_old_content || has_new_content {
@@ -186,7 +188,10 @@ Rename the function `greet` to `welcome` and change the greeting from \
             } else {
                 (0.5, "Valid diff structure but content unclear".to_string())
             }
-        } else if has_minus_line && has_plus_line {
+        } else if (has_hunk || (has_minus_header && has_plus_header))
+            && has_minus_line
+            && has_plus_line
+        {
             (
                 0.5,
                 "Has diff lines but missing headers or hunk markers".to_string(),
@@ -299,6 +304,27 @@ Rename greet to welcome and Hello to Welcome in src/greet.rs
     }
 
     #[tokio::test]
+    async fn search_replace_prose_stuffing_is_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+Rename greet Hello
+=======
+Rename welcome Welcome
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "prose stuffing greet/Hello/welcome/Welcome must not set SearchReplace: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn search_replace_weak_for_prose() {
         let llm = MockLlm {
             response: text_response("You should rename greet to welcome in the file."),
@@ -359,6 +385,23 @@ Rename greet to welcome and Hello to Welcome in src/greet.rs
             CapabilityLevel::Strong,
             "echoed system diff plus user words must not be Strong: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn unified_diff_markdown_list_is_not_medium() {
+        let llm = MockLlm {
+            response: text_response(
+                "Changes I would make:\n- greet function name\n+ welcome function name\n",
+            ),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "markdown +/- list must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

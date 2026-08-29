@@ -76,12 +76,17 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("no text");
     // Partial reads name glyphs. Color-only words often appear in
     // refusals ("cannot process this black and white image").
-    let saw_glyphs = lower.contains("letter") || lower.contains("character");
-    let processed_surface = lower.contains("pattern")
-        || lower.contains("pixel")
-        || lower.contains("black")
-        || lower.contains("white")
-        || lower.contains("text");
+    let saw_glyphs = has_surface_word(&lower, "letter")
+        || has_surface_word(&lower, "letters")
+        || has_surface_word(&lower, "character")
+        || has_surface_word(&lower, "characters");
+    // Word tokens only. "whitespace" is not "white"; "context" is not "text".
+    let processed_surface = has_surface_word(&lower, "pattern")
+        || has_surface_word(&lower, "pixel")
+        || has_surface_word(&lower, "pixels")
+        || has_surface_word(&lower, "black")
+        || has_surface_word(&lower, "white")
+        || has_surface_word(&lower, "text");
 
     let (score, details) = if identified_text {
         (1.0, "Can read text from images".to_string())
@@ -108,6 +113,12 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         level: classify(score),
         details,
     })
+}
+
+fn has_surface_word(lower: &str, word: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|token| token == word)
 }
 
 #[cfg(test)]
@@ -217,6 +228,34 @@ mod tests {
         let result = probe_vision(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn vision_whitespace_word_does_not_set_medium() {
+        let llm = MockLlm {
+            response: text_response("Looks like whitespace only"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "whitespace must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_context_word_does_not_set_medium() {
+        let llm = MockLlm {
+            response: text_response("I need more context"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "context must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
