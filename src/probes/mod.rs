@@ -101,8 +101,30 @@ pub(crate) fn extract_json_from_text(text: &str) -> &str {
         return body;
     }
 
-    match (trimmed.find('{'), trimmed.rfind('}')) {
-        (Some(start), Some(end)) if end > start => return &trimmed[start..=end],
+    let obj = trimmed.find('{');
+    let arr = trimmed.find('[');
+    match (obj, arr) {
+        (Some(o), Some(a)) if a < o => {
+            if let Some(end) = trimmed.rfind(']') {
+                if end > a {
+                    return &trimmed[a..=end];
+                }
+            }
+        }
+        (Some(start), _) => {
+            if let Some(end) = trimmed.rfind('}') {
+                if end > start {
+                    return &trimmed[start..=end];
+                }
+            }
+        }
+        (None, Some(start)) => {
+            if let Some(end) = trimmed.rfind(']') {
+                if end > start {
+                    return &trimmed[start..=end];
+                }
+            }
+        }
         _ => {}
     }
 
@@ -422,5 +444,20 @@ mod extract_json_tests {
     fn extract_json_from_jsonc_fence_falls_through_to_object() {
         let input = "```jsonc\n{\"a\": 1}\n```";
         assert_eq!(extract_json_from_text(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn extract_json_does_not_peel_array_wrapper() {
+        let input = r#"[{"word": "hello", "length": 5, "reversed": "olleh"}]"#;
+        assert_eq!(extract_json_from_text(input), input);
+    }
+
+    #[test]
+    fn extract_json_keeps_array_when_prose_wraps_it() {
+        let input = r#"Here: [{"word": "hello", "length": 5, "reversed": "olleh"}]"#;
+        assert_eq!(
+            extract_json_from_text(input),
+            r#"[{"word": "hello", "length": 5, "reversed": "olleh"}]"#
+        );
     }
 }

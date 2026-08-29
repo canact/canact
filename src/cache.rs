@@ -84,7 +84,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      `{"path":"value"}` is format-card echo.
 /// v30: vision "no visible" is Weak; an unclosed `<tool_call>`
 ///      does not open tools from a `read_file` name before the tag.
-pub const PROBE_SUITE_VERSION: u32 = 30;
+/// v31: json_output does not peel an array wrapper to reach a
+///      valid object (array-wrapped JSON must not skip repair).
+pub const PROBE_SUITE_VERSION: u32 = 31;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

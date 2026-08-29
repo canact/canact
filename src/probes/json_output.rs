@@ -200,6 +200,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn json_output_array_wrapped_object_is_not_strong() {
+        for body in [
+            r#"[{"word": "hello", "length": 5, "reversed": "olleh"}]"#,
+            r#"Here: [{"word": "hello", "length": 5, "reversed": "olleh"}]"#,
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_json_output(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "array-wrapped JSON must not skip repair: {body} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn json_output_strong_for_markdown_wrapped_json() {
         let llm = MockLlm {
             response: text_response(
