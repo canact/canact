@@ -92,8 +92,9 @@ pub(crate) fn tool_result(
     }
 }
 
-/// Try to isolate a JSON object from text that may be wrapped in markdown
-/// fences or surrounded by prose.
+/// Try to isolate a JSON value from text that may be wrapped in markdown
+/// fences or surrounded by prose. An array is kept only when it wraps
+/// the object (`[{...}]`), not when citation `[1]` precedes an object.
 pub(crate) fn extract_json_from_text(text: &str) -> &str {
     let trimmed = text.trim();
 
@@ -101,30 +102,20 @@ pub(crate) fn extract_json_from_text(text: &str) -> &str {
         return body;
     }
 
-    let obj = trimmed.find('{');
-    let arr = trimmed.find('[');
-    match (obj, arr) {
-        (Some(o), Some(a)) if a < o => {
-            if let Some(end) = trimmed.rfind(']') {
-                if end > a {
-                    return &trimmed[a..=end];
-                }
-            }
+    let object = match (trimmed.find('{'), trimmed.rfind('}')) {
+        (Some(start), Some(end)) if end > start => Some((start, end)),
+        _ => None,
+    };
+    let array = match (trimmed.find('['), trimmed.rfind(']')) {
+        (Some(start), Some(end)) if end > start => Some((start, end)),
+        _ => None,
+    };
+    match (object, array) {
+        (Some((os, oe)), Some((as_, ae))) if as_ < os && ae >= oe => {
+            return &trimmed[as_..=ae];
         }
-        (Some(start), _) => {
-            if let Some(end) = trimmed.rfind('}') {
-                if end > start {
-                    return &trimmed[start..=end];
-                }
-            }
-        }
-        (None, Some(start)) => {
-            if let Some(end) = trimmed.rfind(']') {
-                if end > start {
-                    return &trimmed[start..=end];
-                }
-            }
-        }
+        (Some((start, end)), _) => return &trimmed[start..=end],
+        (None, Some((start, end))) => return &trimmed[start..=end],
         _ => {}
     }
 
@@ -458,6 +449,24 @@ mod extract_json_tests {
         assert_eq!(
             extract_json_from_text(input),
             r#"[{"word": "hello", "length": 5, "reversed": "olleh"}]"#
+        );
+    }
+
+    #[test]
+    fn extract_json_keeps_object_after_citation_brackets() {
+        let input = r#"See [1] {"word": "hello", "length": 5, "reversed": "olleh"}"#;
+        assert_eq!(
+            extract_json_from_text(input),
+            r#"{"word": "hello", "length": 5, "reversed": "olleh"}"#
+        );
+    }
+
+    #[test]
+    fn extract_json_unclosed_bracket_still_takes_object() {
+        let input = r#"[unclosed {"word": "hello", "length": 5, "reversed": "olleh"}"#;
+        assert_eq!(
+            extract_json_from_text(input),
+            r#"{"word": "hello", "length": 5, "reversed": "olleh"}"#
         );
     }
 }
