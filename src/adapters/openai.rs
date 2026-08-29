@@ -706,7 +706,11 @@ fn emit_delta(
         }
     }
 
-    if let Some(func) = delta.get("function").filter(|f| f.is_object()) {
+    if let Some(func) = delta
+        .get("function")
+        .filter(|f| f.is_object())
+        .or_else(|| delta.get("function_call").filter(|f| f.is_object()))
+    {
         emit_function(func, None, 0, open_tools, tx, true);
     }
 
@@ -1202,6 +1206,35 @@ mod tests {
                 c,
                 ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
             )),
+            "{chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_assembled_function_call_field() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"function_call\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"}}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
+            )),
+            "{chunks:?}"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
             "{chunks:?}"
         );
     }

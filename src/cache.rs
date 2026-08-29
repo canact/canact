@@ -37,7 +37,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v13: chat parse accepts legacy function/function_call; complex
 ///      two-name imprecise args are Medium; ladder heartbeat
 ///      accepts 2,840.
-pub const PROBE_SUITE_VERSION: u32 = 13;
+/// v14: SSE function_call deltas emit starts; empty max_tokens
+///      compliance is Weak; parallel numeric paths are Medium.
+pub const PROBE_SUITE_VERSION: u32 = 14;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
