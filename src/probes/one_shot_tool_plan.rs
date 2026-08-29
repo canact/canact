@@ -22,9 +22,9 @@ use super::{tool, user_text};
 /// in a logically correct order.
 ///
 /// Scoring:
-/// - `1.0` - 3 tool calls in correct logical order (read -> edit -> run)
-/// - `0.7` - 3 correct tools but wrong order
-/// - `0.5` - 2 of 3 expected tools present
+/// - `1.0` - 3 precise tool calls in correct logical order (read -> edit -> run)
+/// - `0.7` - 3 precise tools but wrong order
+/// - `0.5` - 2 of 3 precise tools, or 3 names with imprecise args
 /// - `0.3` - only one tool call (did not emit a multi-tool plan)
 /// - `0.0` - no tool calls or only text response
 pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
@@ -93,11 +93,29 @@ pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeRe
     let calls = &response.tool_calls;
     let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
 
-    let has_read = names.contains(&"read_file");
-    let has_edit = names.contains(&"edit_file");
-    let has_run = names.contains(&"run_command");
+    let nonempty = |args: &serde_json::Map<String, serde_json::Value>, key: &str| {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty())
+    };
+
+    let has_read = calls
+        .iter()
+        .any(|c| c.name == "read_file" && nonempty(&c.arguments, "path"));
+    let has_edit = calls.iter().any(|c| {
+        c.name == "edit_file"
+            && nonempty(&c.arguments, "path")
+            && nonempty(&c.arguments, "old_text")
+            && nonempty(&c.arguments, "new_text")
+    });
+    let has_run = calls
+        .iter()
+        .any(|c| c.name == "run_command" && nonempty(&c.arguments, "command"));
 
     let step_count = u8::from(has_read) + u8::from(has_edit) + u8::from(has_run);
+    let named_count = u8::from(names.contains(&"read_file"))
+        + u8::from(names.contains(&"edit_file"))
+        + u8::from(names.contains(&"run_command"));
 
     let read_pos = names.iter().position(|n| *n == "read_file");
     let edit_pos = names.iter().position(|n| *n == "edit_file");
@@ -125,6 +143,14 @@ pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeRe
         (
             0.5,
             format!("2 of 3 expected steps: [{}]", names.join(", ")),
+        )
+    } else if named_count == 3 {
+        (
+            0.5,
+            format!(
+                "3 expected tools but arguments imprecise: [{}]",
+                names.join(", ")
+            ),
         )
     } else if !calls.is_empty() {
         (
@@ -210,6 +236,48 @@ mod tests {
         let llm = MockLlm { response };
         let result = probe_one_shot_tool_plan(&llm).await.unwrap();
         assert_eq!(result.score, 0.7);
+    }
+
+    #[tokio::test]
+    async fn reasoning_medium_for_empty_or_numeric_args() {
+        let empty = multi_tool_call_response(vec![
+            call("1", "read_file", serde_json::json!({})),
+            call("2", "edit_file", serde_json::json!({})),
+            call("3", "run_command", serde_json::json!({})),
+        ]);
+        let empty_result = probe_one_shot_tool_plan(&MockLlm { response: empty })
+            .await
+            .unwrap();
+        assert_eq!(empty_result.score, 0.5);
+        assert_ne!(empty_result.level, CapabilityLevel::Strong);
+
+        let numeric = multi_tool_call_response(vec![
+            call("1", "read_file", serde_json::json!({"path": 1})),
+            call(
+                "2",
+                "edit_file",
+                serde_json::json!({"path": 1, "old_text": 2, "new_text": 3}),
+            ),
+            call("3", "run_command", serde_json::json!({"cwd": "/tmp"})),
+        ]);
+        let numeric_result = probe_one_shot_tool_plan(&MockLlm { response: numeric })
+            .await
+            .unwrap();
+        assert_eq!(numeric_result.score, 0.5);
+        assert_ne!(numeric_result.level, CapabilityLevel::Strong);
+
+        let wrong_order = multi_tool_call_response(vec![
+            call("1", "run_command", serde_json::json!({})),
+            call("2", "edit_file", serde_json::json!({"path": 1})),
+            call("3", "read_file", serde_json::json!({})),
+        ]);
+        let wrong_order_result = probe_one_shot_tool_plan(&MockLlm {
+            response: wrong_order,
+        })
+        .await
+        .unwrap();
+        assert_eq!(wrong_order_result.score, 0.5);
+        assert_ne!(wrong_order_result.score, 0.7);
     }
 
     #[tokio::test]
