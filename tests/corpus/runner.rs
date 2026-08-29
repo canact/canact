@@ -511,6 +511,7 @@ impl ProbeClient for ContextLadderLlm {
                 text: "WH-4481\nproto-9.2.11\n2840".to_owned(),
                 tool_calls: Vec::new(),
                 finish: ProbeFinish::Stop,
+                usage: None,
             });
             let result = match self.ladder {
                 LadderReply::Recall => recall,

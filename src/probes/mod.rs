@@ -223,6 +223,7 @@ pub(crate) mod test_support {
                     .clone(),
             }],
             finish: ProbeFinish::ToolCalls,
+            usage: None,
         }
     }
 
@@ -231,6 +232,7 @@ pub(crate) mod test_support {
             text: text.to_string(),
             tool_calls: Vec::new(),
             finish: ProbeFinish::Stop,
+            usage: None,
         }
     }
 
@@ -239,6 +241,7 @@ pub(crate) mod test_support {
             text: String::new(),
             tool_calls: calls,
             finish: ProbeFinish::ToolCalls,
+            usage: None,
         }
     }
 

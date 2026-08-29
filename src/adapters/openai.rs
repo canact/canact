@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 use crate::client::{
     CatalogPriors, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage,
-    ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall,
+    ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall, ProbeUsage,
 };
 use crate::error::ProbeError;
 
@@ -526,6 +526,39 @@ fn parse_chat_response(value: &Value) -> Result<ProbeResponse, ProbeError> {
         text,
         tool_calls,
         finish,
+        usage: parse_usage(value.get("usage")),
+    })
+}
+
+fn parse_usage(value: Option<&Value>) -> Option<ProbeUsage> {
+    let usage = value?;
+    if !usage.is_object() {
+        return None;
+    }
+    let completion_tokens = first_u32(usage, &["completion_tokens", "output_tokens"]);
+    let prompt_tokens = first_u32(usage, &["prompt_tokens", "input_tokens"]);
+    let reasoning_tokens = usage
+        .get("completion_tokens_details")
+        .and_then(|d| first_u32(d, &["reasoning_tokens"]))
+        .or_else(|| first_u32(usage, &["reasoning_tokens"]));
+    if completion_tokens.is_none() && prompt_tokens.is_none() && reasoning_tokens.is_none() {
+        return None;
+    }
+    Some(ProbeUsage {
+        prompt_tokens,
+        completion_tokens,
+        reasoning_tokens,
+    })
+}
+
+fn first_u32(value: &Value, keys: &[&str]) -> Option<u32> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|v| {
+            v.as_u64().and_then(|n| u32::try_from(n).ok()).or_else(|| {
+                v.as_f64()
+                    .and_then(|n| u32::try_from(n.round() as i64).ok())
+            })
+        })
     })
 }
 
@@ -851,6 +884,39 @@ mod tests {
         let redacted = redact_secrets(escaped);
         assert!(!redacted.contains("SECRET"), "{redacted}");
         assert!(redacted.contains("[REDACTED]"), "{redacted}");
+    }
+
+    #[test]
+    fn parse_chat_response_fills_usage() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": { "content": "4" },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 80,
+                "completion_tokens_details": { "reasoning_tokens": 40 }
+            }
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        let usage = resp.usage.expect("usage");
+        assert_eq!(usage.prompt_tokens, Some(11));
+        assert_eq!(usage.completion_tokens, Some(80));
+        assert_eq!(usage.reasoning_tokens, Some(40));
+        assert_eq!(resp.text, "4");
+    }
+
+    #[test]
+    fn parse_chat_response_usage_absent_is_none() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": { "content": "4" },
+                "finish_reason": "stop"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert!(resp.usage.is_none());
     }
 
     #[tokio::test]

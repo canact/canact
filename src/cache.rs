@@ -24,7 +24,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v5: generic edit_file on tool_selection is not 30-day Weak/max_tools=10 (#3315).
 /// v6: forceful tool-call prompts (Goose #6281) and stricter arg schema.
 /// v7: persisted effective_context_tokens ladder.
-pub const PROBE_SUITE_VERSION: u32 = 7;
+/// v8: token_efficiency prefers live ProbeResponse usage when present.
+pub const PROBE_SUITE_VERSION: u32 = 8;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
