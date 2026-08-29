@@ -71,27 +71,33 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // User-facing details only. Ground-truth text in the probe image stays
     // internal (see PROBE_IMAGE_BASE64 / scoring above); do not echo it or
     // the raw model reply in default details.
-    let (score, details) = if identified_text {
-        (1.0, "Can read text from images".to_string())
-    } else if lower.contains("text")
-        || lower.contains("letter")
+    let refused = lower.contains("cannot")
+        || lower.contains("can't")
+        || lower.contains("unable")
+        || lower.contains("don't")
+        || lower.contains("no image");
+    // "text" alone is too common in refusals ("cannot see any text").
+    let processed_content = lower.contains("letter")
         || lower.contains("character")
         || lower.contains("pattern")
         || lower.contains("pixel")
         || lower.contains("black")
-        || lower.contains("white")
-    {
+        || lower.contains("white");
+
+    let (score, details) = if identified_text {
+        (1.0, "Can read text from images".to_string())
+    } else if processed_content {
         (
             0.5,
             "Processed the image but could not read the text clearly".to_string(),
         )
-    } else if lower.contains("cannot")
-        || lower.contains("can't")
-        || lower.contains("unable")
-        || lower.contains("don't")
-        || lower.contains("no image")
-    {
+    } else if refused {
         (0.0, "Cannot process images".to_string())
+    } else if lower.contains("text") {
+        (
+            0.5,
+            "Processed the image but could not read the text clearly".to_string(),
+        )
     } else {
         (0.0, "Did not use the image (generic reply)".to_string())
     };
@@ -146,6 +152,27 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_refusal_mentions_text() {
+        let llm = MockLlm {
+            response: text_response("I cannot see any text in this image"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+        assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_medium_when_partial_read_also_says_cannot() {
+        let llm = MockLlm {
+            response: text_response("I see dark letters but cannot make them out"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.5);
     }
 
     #[tokio::test]

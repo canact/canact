@@ -215,6 +215,24 @@ fn can_use_tools_false_when_both_weak() {
 }
 
 #[test]
+fn can_use_tools_false_when_xml_is_transient_medium() {
+    let mut profile = make_profile(
+        CapabilityLevel::Weak,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.xml_tool_calling = ProbeResult {
+        name: "xml_tool_calling".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: timeout".to_string(),
+    };
+    assert!(!profile.can_use_tools());
+    assert!(profile.tool_gate_error().is_some());
+}
+
+#[test]
 fn best_edit_format_search_replace_when_strong() {
     let mut profile = make_profile(
         CapabilityLevel::Strong,
@@ -514,6 +532,18 @@ fn host_policy_envelope_includes_effective_context_tokens() {
     assert!(value.get("effectiveContextTokens").is_some(), "{value}");
     assert!(value["effectiveContextTokens"].is_number(), "{value}");
     assert_eq!(value["effectiveContextTokens"], 8192);
+}
+
+#[test]
+fn host_policy_envelope_null_effective_context_when_unset() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Strong,
+    );
+    assert!(profile.effective_context_tokens.is_none());
+    let value = profile.host_policy_envelope();
+    assert!(value["effectiveContextTokens"].is_null(), "{value}");
 }
 
 #[test]
