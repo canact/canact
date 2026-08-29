@@ -115,9 +115,20 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     };
     let cache_path = args.cache.clone().unwrap_or_else(default_cache_path);
     let mut cache = ProbeCache::load(&cache_path).unwrap_or_default();
+    let cheap = if args.full {
+        false
+    } else if args.cheap {
+        true
+    } else {
+        looks_cheap(&provider, &model, &base_url)
+    };
+    let vision = args.vision;
 
     if !args.force {
-        if let Some(profile) = cache.get(&model, &provider).cloned() {
+        if let Some(profile) = cache
+            .get_with_knobs(&model, &provider, cheap, vision)
+            .cloned()
+        {
             return emit_profile(&profile, args.json, args.verbose);
         }
     }
@@ -134,13 +145,6 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         1u8
     })?;
 
-    let cheap = if args.full {
-        false
-    } else if args.cheap {
-        true
-    } else {
-        looks_cheap(&provider, &model, &base_url)
-    };
     let runner = if cheap {
         ProbeRunner::new_throttled(client)
     } else {
@@ -250,9 +254,28 @@ fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
         || provider == "vllm"
         || provider == "localhost"
         || provider == "127.0.0.1"
+        || is_ipv6_loopback_label(&provider)
         || url.contains("localhost")
         || url.contains("127.0.0.1")
         || url.contains("0.0.0.0")
+        || url.contains("[::1]")
+        || ipv6_loopback_host(base_url)
+}
+
+fn is_ipv6_loopback_label(host: &str) -> bool {
+    let host = host.trim();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    host == "::1"
+}
+
+fn ipv6_loopback_host(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|h| is_ipv6_loopback_label(&h))
 }
 
 fn default_cache_path() -> PathBuf {
@@ -260,4 +283,31 @@ fn default_cache_path() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
         .join("canact")
         .join("probes.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ipv6_loopback_host, looks_cheap};
+
+    #[test]
+    fn looks_cheap_treats_ipv6_loopback_like_localhost() {
+        assert!(looks_cheap("openai-compat", "llama3", "http://[::1]:11434"));
+        assert!(looks_cheap("::1", "llama3", "http://example.invalid/v1"));
+        assert!(looks_cheap("[::1]", "llama3", "http://example.invalid/v1"));
+        assert!(looks_cheap("localhost", "llama3", "http://localhost:11434"));
+        assert!(
+            ipv6_loopback_host("http://[::1]:11434"),
+            "parsed [::1] host must be cheap"
+        );
+        assert!(!looks_cheap(
+            "openai",
+            "gpt-4o",
+            "https://api.openai.com/v1"
+        ));
+        assert!(
+            !looks_cheap("openai", "gpt-4o", "https://[2001:db8::1]/v1"),
+            "non-loopback IPv6 must not match via a naive ::1 substring"
+        );
+        assert!(!ipv6_loopback_host("https://[2001:db8::1]/v1"));
+    }
 }

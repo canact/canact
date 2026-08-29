@@ -277,7 +277,7 @@ fn error_message(err: &Value) -> String {
     redact_secrets(&raw)
 }
 
-/// Strip Bearer tokens, `sk-` keys, and values after Authorization / api-key.
+/// Strip Bearer tokens, `sk-` keys, and values after Authorization / api-key / api_key.
 fn redact_secrets(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let lower = input.to_ascii_lowercase();
@@ -325,7 +325,9 @@ fn secret_header_len(lower: &str, input: &str, i: usize) -> Option<usize> {
         Some(9)
     } else if starts_at(lower, i, "authorization") && is_ascii_word_at(input, i, 13) {
         Some(13)
-    } else if starts_at(lower, i, "api-key") && is_ascii_word_at(input, i, 7) {
+    } else if (starts_at(lower, i, "api-key") || starts_at(lower, i, "api_key"))
+        && is_ascii_word_at(input, i, 7)
+    {
         Some(7)
     } else {
         None
@@ -349,7 +351,13 @@ fn is_ascii_word_at(input: &str, i: usize, len: usize) -> bool {
 fn copy_separators(input: &str, mut i: usize, out: &mut String) -> usize {
     while i < input.len() {
         let ch = input[i..].chars().next().expect("i is a char boundary");
-        if ch == ':' || ch == '"' || ch == '\'' || ch.is_ascii_whitespace() {
+        if ch == ':'
+            || ch == '='
+            || ch == '\\'
+            || ch == '"'
+            || ch == '\''
+            || ch.is_ascii_whitespace()
+        {
             out.push(ch);
             i += ch.len_utf8();
         } else {
@@ -829,6 +837,20 @@ mod tests {
         assert!(redacted.contains("Authorization: [REDACTED]"), "{redacted}");
         assert!(redacted.contains("x-api-key: [REDACTED]"), "{redacted}");
         assert!(redacted.contains(r#""api-key":"[REDACTED]""#), "{redacted}");
+    }
+
+    #[test]
+    fn redact_secrets_strips_api_key_underscore() {
+        let raw = r#"api_key=SECRET "api_key":"SECRET""#;
+        let redacted = redact_secrets(raw);
+        assert!(!redacted.contains("SECRET"), "{redacted}");
+        assert!(redacted.contains("api_key=[REDACTED]"), "{redacted}");
+        assert!(redacted.contains(r#""api_key":"[REDACTED]""#), "{redacted}");
+
+        let escaped = r#"{\"api_key\":\"SECRET\"}"#;
+        let redacted = redact_secrets(escaped);
+        assert!(!redacted.contains("SECRET"), "{redacted}");
+        assert!(redacted.contains("[REDACTED]"), "{redacted}");
     }
 
     #[tokio::test]
