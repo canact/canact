@@ -34,20 +34,31 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
 
     let (score, details) = match serde_json::from_str::<serde_json::Value>(json_str) {
         Ok(val) => {
-            let nonempty_str = |key: &str| {
-                val.get(key)
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|s| !s.trim().is_empty())
-            };
-            let has_word = nonempty_str("word");
-            let has_length = val.get("length").and_then(|v| v.as_u64()).is_some();
-            let has_reversed = nonempty_str("reversed");
+            let word = val
+                .get("word")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let length = val.get("length").and_then(|v| v.as_u64());
+            let reversed = val
+                .get("reversed")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let has_word = word.is_some();
+            let has_length = length.is_some();
+            let has_reversed = reversed.is_some();
             let field_count = u32::from(has_word) + u32::from(has_length) + u32::from(has_reversed);
 
-            if field_count == 3 {
+            if word == Some("hello") && length == Some(5) && reversed == Some("olleh") {
                 (
                     1.0,
                     "Valid JSON with all required fields and correct types".to_string(),
+                )
+            } else if field_count == 3 {
+                (
+                    0.5,
+                    "Valid JSON types but word/length/reversed do not match hello".to_string(),
                 )
             } else {
                 let partial = field_count as f32 / 6.0 + 0.1;
@@ -152,6 +163,21 @@ mod tests {
         assert!(result.score > 0.0);
         assert!(result.score < 1.0);
         assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn json_output_prompt_example_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                r#"The example was {"word": "cat", "length": 3, "reversed": "tac"} but I cannot emit JSON."#,
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "echoed prompt example must not skip JSON repair: {result:?}"
+        );
     }
 
     #[tokio::test]

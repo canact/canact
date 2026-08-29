@@ -714,15 +714,18 @@ fn emit_delta(
         }
     }
 
-    if let Some(func) = delta
-        .get("function")
-        .filter(|f| f.is_object())
-        .or_else(|| delta.get("function_call").filter(|f| f.is_object()))
-    {
-        emit_function(func, None, 0, open_tools, tx, true);
+    let tool_calls = delta.get("tool_calls").and_then(|t| t.as_array());
+    if tool_calls.is_none_or(Vec::is_empty) {
+        if let Some(func) = delta
+            .get("function")
+            .filter(|f| f.is_object())
+            .or_else(|| delta.get("function_call").filter(|f| f.is_object()))
+        {
+            emit_function(func, None, 0, open_tools, tx, true);
+        }
     }
 
-    if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+    if let Some(tcs) = tool_calls {
         for tc in tcs {
             let id = tc.get("id").and_then(|v| v.as_str());
             let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -1332,6 +1335,40 @@ mod tests {
                 .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
             "{chunks:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn stream_ignores_legacy_function_call_when_tool_calls_present() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"function_call\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"},\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        assert!(
+            !chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::ToolCallArgDelta { delta } if delta.contains("/tmp/test.txt")
+            )),
+            "leftover function_call path must not emit when tool_calls is present: {chunks:?}"
+        );
+        let starts = chunks
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
+                )
+            })
+            .count();
+        assert_eq!(starts, 1, "{chunks:?}");
     }
 
     #[tokio::test]
