@@ -65,11 +65,11 @@ Rename the function `greet` to `welcome` and change the greeting from \
         let mut best = 0.4_f64;
         for block in parse_search_replace_blocks(&text) {
             let has_file_ref = block.path.contains("greet.rs");
-            // Strong requires the function signatures, not "fn greet Hello" prose.
-            let has_old_content =
-                block.search.contains("fn greet(") && block.search.contains("Hello");
-            let has_new_content =
-                block.replace.contains("fn welcome(") && block.replace.contains("Welcome");
+            let search = strip_line_comments(block.search);
+            let replace = strip_line_comments(block.replace);
+            // Strong requires the function signatures in code, not comments.
+            let has_old_content = search.contains("fn greet(") && search.contains("Hello");
+            let has_new_content = replace.contains("fn welcome(") && replace.contains("Welcome");
             let block_score = if has_file_ref && has_old_content && has_new_content {
                 1.0
             } else if has_old_content || has_new_content {
@@ -208,6 +208,22 @@ Rename the function `greet` to `welcome` and change the greeting from \
     })
 }
 
+fn strip_line_comments(text: &str) -> String {
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                return None;
+            }
+            Some(match line.split_once("//") {
+                Some((code, _)) => code,
+                None => line,
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// True when the reply is the system format example, not an edit of greet.rs.
 fn is_unified_diff_card_echo(text: &str) -> bool {
     text.contains("path/to/file.rs") && text.contains("removed line") && text.contains("added line")
@@ -304,6 +320,27 @@ Rename greet to welcome and Hello to Welcome in src/greet.rs
             result.level,
             CapabilityLevel::Strong,
             "echoed system markers plus user words must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_replace_comment_tokens_are_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+// keep fn greet( and Hello
+=======
+// emit fn welcome( and Welcome
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "comment tokens must not set SearchReplace: {result:?}"
         );
     }
 
