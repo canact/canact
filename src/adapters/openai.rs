@@ -613,7 +613,7 @@ fn parse_legacy_function(message: &Value) -> Option<ProbeToolCall> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned();
-    if name.is_empty() {
+    if name.trim().is_empty() {
         return None;
     }
     Some(ProbeToolCall {
@@ -640,6 +640,9 @@ fn parse_tool_calls(value: &Value) -> Vec<ProbeToolCall> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_owned();
+            if name.trim().is_empty() {
+                return None;
+            }
             Some(ProbeToolCall {
                 id,
                 name,
@@ -1084,6 +1087,29 @@ mod tests {
         let resp = parse_chat_response(&value).expect("parse");
         assert_eq!(resp.tool_calls[0].name, "list_dir");
         assert_eq!(resp.finish, ProbeFinish::ToolCalls);
+    }
+
+    #[test]
+    fn parse_chat_response_empty_tool_name_is_not_a_call() {
+        for name in ["", "   "] {
+            let value = serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": name, "arguments": "{}"}
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            });
+            let resp = parse_chat_response(&value).expect("parse");
+            assert!(
+                resp.tool_calls.is_empty(),
+                "empty name must not become a tool call: {name:?}"
+            );
+        }
     }
 
     fn chat_req(model: &str) -> ProbeRequest {

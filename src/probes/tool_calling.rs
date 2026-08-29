@@ -46,10 +46,14 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
 
     let response = llm.chat(request).await?;
 
-    let (score, details) = if !response.tool_calls.is_empty() {
+    let (score, details) = if response.tool_calls.is_empty() {
+        (0.0, "No tool call in response, text only".to_string())
+    } else {
         let tc = &response.tool_calls[0];
         let path_is_string = nonempty_string_arg(&tc.arguments, "path");
-        if tc.name == "read_file" && path_is_string {
+        if tc.name.trim().is_empty() {
+            (0.0, "Tool call has empty name".to_string())
+        } else if tc.name == "read_file" && path_is_string {
             (
                 1.0,
                 "Valid tool call with correct name and arguments".to_string(),
@@ -60,8 +64,6 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
                 format!("Tool call present but imprecise: name={}", tc.name),
             )
         }
-    } else {
-        (0.0, "No tool call in response, text only".to_string())
     };
 
     Ok(ProbeResult {
@@ -670,6 +672,29 @@ mod tests {
         let result = probe_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn tool_calling_weak_for_empty_or_whitespace_name() {
+        for name in ["", "   "] {
+            let response = ProbeResponse {
+                text: String::new(),
+                tool_calls: vec![call(
+                    "call_1",
+                    name,
+                    serde_json::json!({"path": "/tmp/test.txt"}),
+                )],
+                finish: ProbeFinish::ToolCalls,
+                usage: None,
+            };
+            let result = probe_tool_calling(&MockLlm { response }).await.unwrap();
+            assert_eq!(result.score, 0.0, "name={name:?}");
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "empty tool name must not open can_use_tools: {name:?}"
+            );
+        }
     }
 
     #[tokio::test]
