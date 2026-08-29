@@ -70,7 +70,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      unified_diff Medium requires hunk or file headers (not a
 ///      markdown +/- list); vision Medium surface words are tokens
 ///      (not `whitespace` / `context`).
-pub const PROBE_SUITE_VERSION: u32 = 24;
+/// v25: vision "no letters" / "no characters" is Weak; a closed XML
+///      block that only mentions `<name>read_file</name>` without
+///      `<arguments>` does not open canUseTools.
+pub const PROBE_SUITE_VERSION: u32 = 25;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

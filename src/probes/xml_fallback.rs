@@ -17,7 +17,7 @@ const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path 
 /// Scoring:
 /// - `1.0` - valid `<tool_call>` block with correct name and JSON arguments
 /// - `0.7` - valid block but wrong tool name or missing arguments
-/// - `0.4` - attempted `read_file` block that is not parseable
+/// - `0.4` - attempted `read_file` block with `<arguments>` that is not parseable
 /// - `0.0` - no tags, format-card echo (`TOOL_NAME` / `{"param":"value"}`),
 ///   or tag mention without a tool attempt
 pub async fn probe_xml_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
@@ -82,7 +82,7 @@ Available tools:
                 }
             }
             None => {
-                if xml_block_names_read_file(&text) {
+                if xml_closed_block_is_read_file_attempt(&text) {
                     (
                         0.4,
                         "XML tool_call tags present but block is not parseable".to_string(),
@@ -136,6 +136,20 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
 /// True when an unparsed block still names `read_file` (an attempt, not a tag mention).
 fn xml_block_names_read_file(text: &str) -> bool {
     text.contains("<name>read_file</name>")
+}
+
+/// Closed unparseable Medium only when the first block names `read_file` and
+/// opens `<arguments>` (a truncated or broken call, not a format lecture).
+fn xml_closed_block_is_read_file_attempt(text: &str) -> bool {
+    let Some(start) = text.find("<tool_call>") else {
+        return false;
+    };
+    let after = &text[start + "<tool_call>".len()..];
+    let span = match after.find("</tool_call>") {
+        Some(end) => &after[..end],
+        None => after,
+    };
+    span.contains("<name>read_file</name>") && span.contains("<arguments>")
 }
 
 /// Try to extract the first `<tool_call>` block's name and parsed JSON arguments.
@@ -267,6 +281,25 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert!(result.score < 0.4, "card echo score: {}", result.score);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_read_file_mention_inside_tags_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+The format uses <name>read_file</name> and a path argument.
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "format mention of read_file inside tags must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]
