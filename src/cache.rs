@@ -65,7 +65,12 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v23: vision Strong requires a standalone `bl` token (not `black`);
 ///      tool-arg strings reject ZWSP-only values; unprobed default
 ///      dimensions do not open host policy.
-pub const PROBE_SUITE_VERSION: u32 = 23;
+/// v24: XML format-card echo and tag mention do not open canUseTools;
+///      SEARCH/REPLACE Strong requires `fn greet` / `fn welcome`;
+///      unified_diff Medium requires hunk or file headers (not a
+///      markdown +/- list); vision Medium surface words are tokens
+///      (not `whitespace` / `context`).
+pub const PROBE_SUITE_VERSION: u32 = 24;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

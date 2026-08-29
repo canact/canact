@@ -17,8 +17,9 @@ const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path 
 /// Scoring:
 /// - `1.0` - valid `<tool_call>` block with correct name and JSON arguments
 /// - `0.7` - valid block but wrong tool name or missing arguments
-/// - `0.4` - `<tool_call>` tags present but block is not parseable
-/// - `0.0` - no `<tool_call>` tags at all
+/// - `0.4` - attempted `read_file` block that is not parseable
+/// - `0.0` - no tags, format-card echo (`TOOL_NAME` / `{"param":"value"}`),
+///   or tag mention without a tool attempt
 pub async fn probe_xml_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let system = "\
 To call a tool, emit an XML block in this exact format:
@@ -54,35 +55,58 @@ Available tools:
     let (score, details) = if has_tool_call_open && has_tool_call_close {
         match parse_xml_tool_block(&text) {
             Some((name, args)) => {
-                let correct_name = name == "read_file";
-                let has_path = args
-                    .as_object()
-                    .is_some_and(|o| nonempty_string_arg(o, "path"));
-
-                if correct_name && has_path {
+                if is_xml_format_card_echo(&name, &args) {
                     (
-                        1.0,
-                        "Valid XML tool call with correct name and arguments".to_string(),
+                        0.0,
+                        "Echoed the XML format card, not a tool call".to_string(),
+                    )
+                } else {
+                    let correct_name = name == "read_file";
+                    let has_path = args
+                        .as_object()
+                        .is_some_and(|o| nonempty_string_arg(o, "path"));
+
+                    if correct_name && has_path {
+                        (
+                            1.0,
+                            "Valid XML tool call with correct name and arguments".to_string(),
+                        )
+                    } else {
+                        (
+                            0.7,
+                            format!(
+                                "XML tool call parsed but imprecise: name={name}, has_path={has_path}"
+                            ),
+                        )
+                    }
+                }
+            }
+            None => {
+                if xml_block_names_read_file(&text) {
+                    (
+                        0.4,
+                        "XML tool_call tags present but block is not parseable".to_string(),
                     )
                 } else {
                     (
-                        0.7,
-                        format!(
-                            "XML tool call parsed but imprecise: name={name}, has_path={has_path}"
-                        ),
+                        0.0,
+                        "Named <tool_call> tags without a tool attempt".to_string(),
                     )
                 }
             }
-            None => (
-                0.4,
-                "XML tool_call tags present but block is not parseable".to_string(),
-            ),
         }
     } else if has_tool_call_open {
-        (
-            0.4,
-            "Opening <tool_call> tag found but no closing tag".to_string(),
-        )
+        if xml_block_names_read_file(&text) {
+            (
+                0.4,
+                "Opening <tool_call> tag found but no closing tag".to_string(),
+            )
+        } else {
+            (
+                0.0,
+                "Opening <tool_call> tag without a tool attempt".to_string(),
+            )
+        }
     } else {
         (0.0, "No <tool_call> tags in response".to_string())
     };
@@ -94,6 +118,24 @@ Available tools:
         level: classify(score),
         details,
     })
+}
+
+/// True when the parsed block is the system-card example, not a call.
+fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
+    if name == "TOOL_NAME" {
+        return true;
+    }
+    args.as_object().is_some_and(|o| {
+        o.len() == 1
+            && o.get("param")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s == "value")
+    })
+}
+
+/// True when an unparsed block still names `read_file` (an attempt, not a tag mention).
+fn xml_block_names_read_file(text: &str) -> bool {
+    text.contains("<name>read_file</name>")
 }
 
 /// Try to extract the first `<tool_call>` block's name and parsed JSON arguments.
@@ -205,6 +247,43 @@ mod tests {
         };
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.score, 0.7);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_card_echo_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>TOOL_NAME</name>
+<arguments>{\"param\": \"value\"}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "system card echo must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert!(result.score < 0.4, "card echo score: {}", result.score);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_tag_mention_does_not_open_tools() {
+        let llm = MockLlm {
+            response: text_response(
+                "I cannot emit <tool_call></tool_call> blocks in this environment.",
+            ),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "naming the tags must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]
