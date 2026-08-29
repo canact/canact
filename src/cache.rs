@@ -62,7 +62,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      reversed=olleh (prompt example is not Strong);
 ///      stream ignores leftover function_call when tool_calls is
 ///      present; vision "no text" is Weak.
-pub const PROBE_SUITE_VERSION: u32 = 22;
+/// v23: vision Strong requires a standalone `bl` token (not `black`);
+///      tool-arg strings reject ZWSP-only values; unprobed default
+///      dimensions do not open host policy.
+pub const PROBE_SUITE_VERSION: u32 = 23;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

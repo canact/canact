@@ -151,6 +151,17 @@ pub(crate) fn utf8_prefix(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// True when `s` has a character that is not whitespace or a format/ZWSP mark.
+fn has_visible_arg_text(s: &str) -> bool {
+    s.chars().any(|c| {
+        !c.is_whitespace()
+            && !matches!(
+                c,
+                '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
+            )
+    })
+}
+
 /// True when `key` is a string with at least one non-whitespace character.
 pub(crate) fn nonempty_string_arg(
     args: &serde_json::Map<String, serde_json::Value>,
@@ -158,7 +169,7 @@ pub(crate) fn nonempty_string_arg(
 ) -> bool {
     args.get(key)
         .and_then(|v| v.as_str())
-        .is_some_and(|s| !s.trim().is_empty())
+        .is_some_and(has_visible_arg_text)
 }
 
 pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value) -> ProbeTool {
@@ -375,6 +386,10 @@ mod nonempty_string_arg_tests {
             "path"
         ));
         assert!(!nonempty_string_arg(&args(serde_json::json!({})), "path"));
+        assert!(!nonempty_string_arg(
+            &args(serde_json::json!({"path": "\u{200b}"})),
+            "path"
+        ));
         assert!(nonempty_string_arg(
             &args(serde_json::json!({"path": "/tmp/a"})),
             "path"

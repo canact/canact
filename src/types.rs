@@ -39,6 +39,12 @@ impl ProbeResult {
     pub fn is_synthesized_error(&self) -> bool {
         self.details.starts_with("Probe failed:")
     }
+
+    /// Serde default for a dimension that was missing from an old cache.
+    pub fn is_unprobed_default(&self) -> bool {
+        self.details
+            .starts_with("Not probed (cached before this probe existed)")
+    }
 }
 
 /// Recommended edit format based on probe results.
@@ -392,7 +398,7 @@ fn completed_usable_tools(pr: &ProbeResult) -> bool {
 }
 
 fn completed_level(pr: &ProbeResult) -> CapabilityLevel {
-    if pr.is_synthesized_error() {
+    if pr.is_synthesized_error() || pr.is_unprobed_default() {
         CapabilityLevel::Weak
     } else {
         pr.level

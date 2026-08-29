@@ -421,6 +421,38 @@ fn old_cache_without_edit_fields_deserializes() {
 }
 
 #[test]
+fn unprobed_default_fields_do_not_open_host_policy() {
+    let old_json = r#"{
+            "modelId": "m",
+            "provider": "p",
+            "toolCalling": {"name":"tool_calling","score":0.0,"maxScore":1.0,"level":"weak","details":"No tool call"},
+            "jsonOutput": {"name":"json_output","score":1.0,"maxScore":1.0,"level":"strong","details":"ok"},
+            "instructionFollowing": {"name":"instruction_following","score":1.0,"maxScore":1.0,"level":"strong","details":"ok"},
+            "probedAt": 1
+        }"#;
+    let profile: CapabilityProfile = serde_json::from_str(old_json).unwrap();
+    assert!(
+        !profile.can_use_tools(),
+        "missing xml_tool_calling must not open tools: envelope={}",
+        profile.host_policy_envelope()
+    );
+    assert!(
+        !profile.supports_vision(),
+        "missing vision must not set supportsVision"
+    );
+    assert_eq!(
+        profile.max_tools(),
+        Some(10),
+        "missing tool_selection must not default to Medium 20"
+    );
+    assert_eq!(
+        profile.best_edit_format(),
+        EditFormatRecommendation::WholeFile,
+        "missing edit probes must not recommend unified_diff"
+    );
+}
+
+#[test]
 fn one_shot_tool_plan_deserializes_from_legacy_multi_step_key() {
     let mut profile = make_profile(
         CapabilityLevel::Strong,
