@@ -1,6 +1,7 @@
 use canact::{
     CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
     EditFormatRecommendation, ProbeResult, REQUIREMENT_DIMENSION_NAMES, classify,
+    missing_model_message,
 };
 
 fn make_probe(name: &str, level: CapabilityLevel) -> ProbeResult {
@@ -413,6 +414,70 @@ fn meets_fails_on_weak_json() {
 }
 
 #[test]
+fn meets_camel_case_tool_calling_fails_when_weak() {
+    let profile = make_profile(
+        CapabilityLevel::Weak,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert!(!profile.meets(&[("toolCalling", CapabilityLevel::Strong)]));
+}
+
+#[test]
+fn meets_camel_case_tool_calling_passes_when_strong() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert!(profile.meets(&[("toolCalling", CapabilityLevel::Strong)]));
+}
+
+#[test]
+fn dimension_level_accepts_envelope_camel_case() {
+    let profile = make_profile(
+        CapabilityLevel::Medium,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Weak,
+    );
+    assert_eq!(
+        profile.dimension_level("toolCalling"),
+        Some(CapabilityLevel::Medium)
+    );
+    assert_eq!(
+        profile.dimension_level("jsonOutput"),
+        Some(CapabilityLevel::Strong)
+    );
+    assert_eq!(
+        profile
+            .dimension_result("instructionFollowing")
+            .map(|p| p.level),
+        Some(CapabilityLevel::Weak)
+    );
+    for (snake, camel) in [
+        ("xml_tool_calling", "xmlToolCalling"),
+        ("one_shot_tool_plan", "oneShotToolPlan"),
+        ("multi_turn_task_sequencing", "multiTurnTaskSequencing"),
+    ] {
+        assert_eq!(
+            profile.dimension_level(snake),
+            profile.dimension_level(camel),
+            "{snake} vs {camel}"
+        );
+    }
+}
+
+#[test]
+fn meets_unknown_camel_name_still_skips() {
+    let profile = make_profile(
+        CapabilityLevel::Weak,
+        CapabilityLevel::Weak,
+        CapabilityLevel::Weak,
+    );
+    assert!(profile.meets(&[("notADimension", CapabilityLevel::Strong)]));
+}
+
+#[test]
 fn capability_level_default_is_weak() {
     assert_eq!(CapabilityLevel::default(), CapabilityLevel::Weak);
 }
@@ -435,4 +500,90 @@ fn host_policy_envelope_omits_bline_best_edit_format() {
     assert!(value["probes"]["toolCalling"].is_object());
     assert_eq!(value["scoreScale"]["strongMin"], 0.8);
     assert_eq!(value["scoreScale"]["mediumMin"], 0.4);
+}
+
+#[test]
+fn host_policy_envelope_includes_effective_context_tokens() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Strong,
+    );
+    profile.effective_context_tokens = Some(8192);
+    let value = profile.host_policy_envelope();
+    assert!(value.get("effectiveContextTokens").is_some(), "{value}");
+    assert!(value["effectiveContextTokens"].is_number(), "{value}");
+    assert_eq!(value["effectiveContextTokens"], 8192);
+}
+
+#[test]
+fn tool_gate_error_when_both_weak_explains_exit_2() {
+    let mut profile = make_profile(
+        CapabilityLevel::Weak,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.xml_tool_calling = make_probe("xml_tool_calling", CapabilityLevel::Weak);
+    assert!(!profile.can_use_tools());
+    let msg = profile
+        .tool_gate_error()
+        .expect("Weak native+XML must fail the tool gate");
+    assert!(msg.contains("cannot use tools"), "{msg}");
+}
+
+#[test]
+fn tool_gate_error_none_when_tools_usable() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert!(profile.tool_gate_error().is_none());
+}
+
+#[test]
+fn human_table_includes_effective_context_tokens_when_some() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.effective_context_tokens = Some(8192);
+    let table = profile.format_human_table(false);
+    assert!(table.contains("8192"), "{table}");
+    assert!(table.contains("Effective context tokens:"), "{table}");
+}
+
+#[test]
+fn human_table_omits_effective_context_tokens_when_none() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("effective context"),
+        "{table}"
+    );
+}
+
+#[test]
+fn missing_model_message_zero_ids_includes_count() {
+    let empty: [&str; 0] = [];
+    let msg = missing_model_message(&empty);
+    assert!(msg.contains("got 0"), "{msg}");
+    assert!(msg.contains("--model"), "{msg}");
+}
+
+#[test]
+fn missing_model_message_previews_at_most_eight_ids() {
+    let ids: Vec<String> = (1..=12).map(|i| format!("model-{i}")).collect();
+    let msg = missing_model_message(&ids);
+    assert!(msg.contains("got 12"), "{msg}");
+    assert!(msg.contains("model-1"), "{msg}");
+    assert!(msg.contains("model-8"), "{msg}");
+    assert!(!msg.contains("model-9"), "{msg}");
+    assert!(!msg.contains("model-12"), "{msg}");
+    assert!(msg.contains("..."), "{msg}");
 }

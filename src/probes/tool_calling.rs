@@ -1,7 +1,7 @@
 //! Tool-calling capability probes: basic, complex, nested, and selection.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest};
+use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{CapabilityLevel, ProbeResult, classify};
 
 use super::{tool, user_text};
@@ -163,12 +163,14 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
     let response = llm.chat(request).await?;
     let calls = &response.tool_calls;
 
+    let path_is_string =
+        |c: &ProbeToolCall| c.arguments.get("path").and_then(|v| v.as_str()).is_some();
     let has_read_file = calls
         .iter()
-        .any(|c| c.name == "read_file" && c.arguments.get("path").is_some());
+        .any(|c| c.name == "read_file" && path_is_string(c));
     let has_list_dir = calls
         .iter()
-        .any(|c| c.name == "list_dir" && c.arguments.get("path").is_some());
+        .any(|c| c.name == "list_dir" && path_is_string(c));
 
     let any_valid = calls.iter().any(|c| {
         [
@@ -571,18 +573,38 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tool_calling_prompt_is_forceful() {
-        assert_forceful(FORCEFUL_READ_FILE);
-        assert!(FORCEFUL_READ_FILE.contains("Do not ask for confirmation"));
+    #[tokio::test]
+    async fn tool_calling_prompt_is_forceful() {
+        let llm = RecordingMock::new(tool_call_response());
+        let _ = probe_tool_calling(&llm).await.unwrap();
+        let rec = llm.requests.lock().expect("lock");
+        assert_eq!(rec.len(), 1);
+        let user = request_user_text(&rec[0]);
+        assert!(
+            user.contains("Immediately call"),
+            "live request must be forceful: {user}"
+        );
+        assert!(
+            user.contains("Do not describe"),
+            "live request must forbid describing: {user}"
+        );
+        assert!(
+            user.contains("Do not ask for confirmation"),
+            "live request must forbid confirmation: {user}"
+        );
     }
 
-    #[test]
-    fn nested_arguments_prompt_is_forceful() {
-        assert_forceful(FORCEFUL_EDIT_FILE);
-        assert!(FORCEFUL_EDIT_FILE.contains("Do not ask for confirmation"));
-        assert!(FORCEFUL_EDIT_FILE.contains("Replace \"Hello\" with \"Hi\""));
-        assert!(FORCEFUL_EDIT_FILE.contains("Replace \"World\" with \"Earth\""));
+    #[tokio::test]
+    async fn nested_arguments_prompt_is_forceful() {
+        let llm = RecordingMock::new(tool_call_response());
+        let _ = probe_nested_arguments(&llm).await.unwrap();
+        let rec = llm.requests.lock().expect("lock");
+        assert_eq!(rec.len(), 1);
+        let user = request_user_text(&rec[0]);
+        assert_forceful(&user);
+        assert!(user.contains("Do not ask for confirmation"), "{user}");
+        assert!(user.contains("Replace \"Hello\" with \"Hi\""), "{user}");
+        assert!(user.contains("Replace \"World\" with \"Earth\""), "{user}");
     }
 
     #[tokio::test]
@@ -653,6 +675,21 @@ mod tests {
         let result = probe_complex_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn complex_tool_calling_not_strong_when_path_is_number() {
+        let response = multi_tool_call_response(vec![
+            call("call_1", "read_file", serde_json::json!({"path": 1})),
+            call(
+                "call_2",
+                "list_dir",
+                serde_json::json!({"path": "/tmp/data/"}),
+            ),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_complex_tool_calling(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

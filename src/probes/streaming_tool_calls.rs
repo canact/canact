@@ -19,8 +19,8 @@ const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path 
 /// the streamed chunks assemble into a valid tool call.
 ///
 /// Scoring:
-/// - `1.0` - stream completed, tool call name and valid JSON arguments received
-/// - `0.5` - stream completed with tool call name but malformed/missing arguments
+/// - `1.0` - stream completed, tool call name and JSON `path` as a string
+/// - `0.5` - stream completed with tool call name but malformed args or non-string `path`
 /// - `0.0` - stream completed with no tool call chunks
 ///
 /// Stream setup, timeout, 429, or other `stream_chat` errors are returned as
@@ -84,24 +84,22 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
     let (score, details) = if !got_any_chunk {
         (0.0, "Stream produced no chunks".to_string())
     } else if got_tool_name {
-        let args_valid = if args_buffer.is_empty() {
-            false
-        } else {
-            serde_json::from_str::<serde_json::Value>(&args_buffer).is_ok()
-        };
-        if args_valid {
-            (
+        match parsed_string_path(&args_buffer) {
+            Ok(true) => (
                 1.0,
                 "Streaming tool call with valid JSON arguments".to_string(),
-            )
-        } else {
-            (
+            ),
+            Ok(false) => (
+                0.5,
+                "Tool call name streamed but path is not a string".to_string(),
+            ),
+            Err(_) => (
                 0.5,
                 format!(
                     "Tool call name streamed but arguments malformed: {:?}",
                     prefix_bytes(&args_buffer, 80)
                 ),
-            )
+            ),
         }
     } else {
         (
@@ -119,6 +117,11 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
     })
 }
 
+fn parsed_string_path(args: &str) -> Result<bool, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(args)?;
+    Ok(value.get("path").and_then(|v| v.as_str()).is_some())
+}
+
 fn prefix_bytes(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
@@ -134,29 +137,35 @@ fn prefix_bytes(s: &str, max: usize) -> &str {
 mod tests {
     use super::*;
     use crate::client::{ProbeResponse, ProbeStreamChunk};
+    use crate::probes::test_support::request_user_text;
+    use crate::types::CapabilityLevel;
     use futures::Stream;
 
     struct StreamMockLlm {
         chunks: std::sync::Mutex<Option<Vec<Result<ProbeStreamChunk, ProbeError>>>>,
+        requests: std::sync::Mutex<Vec<ProbeRequest>>,
     }
 
     impl StreamMockLlm {
         fn new(chunks: Vec<Result<ProbeStreamChunk, ProbeError>>) -> Self {
             Self {
                 chunks: std::sync::Mutex::new(Some(chunks)),
+                requests: std::sync::Mutex::new(Vec::new()),
             }
         }
     }
 
     impl ProbeClient for StreamMockLlm {
-        async fn chat(&self, _req: ProbeRequest) -> Result<ProbeResponse, ProbeError> {
+        async fn chat(&self, req: ProbeRequest) -> Result<ProbeResponse, ProbeError> {
+            self.requests.lock().expect("lock").push(req);
             Err(ProbeError::Transient("not used".into()))
         }
 
         fn stream_chat(
             &self,
-            _req: ProbeRequest,
+            req: ProbeRequest,
         ) -> impl Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+            self.requests.lock().expect("lock").push(req);
             let chunks = self.chunks.lock().unwrap().take().unwrap_or_default();
             futures::stream::iter(chunks)
         }
@@ -170,11 +179,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn streaming_prompt_is_forceful() {
-        assert!(FORCEFUL_READ_FILE.contains("Immediately call"));
-        assert!(FORCEFUL_READ_FILE.contains("Do not describe what you would do"));
-        assert!(FORCEFUL_READ_FILE.contains("Do not ask for confirmation"));
+    #[tokio::test]
+    async fn streaming_prompt_is_forceful() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let _ = probe_streaming_tool_calls(&llm).await.unwrap();
+        let rec = llm.requests.lock().expect("lock");
+        assert_eq!(rec.len(), 1);
+        let user = request_user_text(&rec[0]);
+        assert!(user.contains("Immediately call"), "{user}");
+        assert!(user.contains("Do not describe what you would do"), "{user}");
+        assert!(user.contains("Do not ask for confirmation"), "{user}");
     }
 
     #[tokio::test]
@@ -194,6 +217,24 @@ mod tests {
         ]);
         let result = probe_streaming_tool_calls(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn streaming_numeric_path_is_not_strong() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"path\":1}".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.score, 0.5);
+        assert_eq!(result.level, CapabilityLevel::Medium);
     }
 
     #[tokio::test]

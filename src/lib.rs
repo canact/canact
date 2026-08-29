@@ -2,12 +2,14 @@
 
 mod cache;
 mod error;
+mod report;
 mod types;
 
 pub use cache::{
     CACHE_TTL_SECS, CacheEntry, DEFAULT_PROBE_EFFORT, PROBE_SUITE_VERSION, ProbeCache,
 };
 pub use error::ProbeError;
+pub use report::missing_model_message;
 pub use types::{
     CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
     EditFormatRecommendation, ProbeResult, REQUIREMENT_DIMENSION_NAMES, classify,

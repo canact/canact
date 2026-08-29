@@ -4,6 +4,7 @@
 //! `CapabilityProfile.effective_context_tokens`. Stop on first fail.
 //! Catalog `advertised_context_tokens` may cap the max rung; it is never
 //! stored as the measured value without a passing live rung.
+//! Mid-climb Transient/RateLimit keeps the last passing rung.
 
 use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeContent, ProbeContentPart, ProbeMessage, ProbeRequest};
@@ -43,15 +44,28 @@ drops below the fade margin. Crews inspect stilling wells after each \
 ice-out and replace desiccant packs in the logger housing. The office \
 archives daily summaries for later model calibration.";
 
+/// Best passing rung plus any mid-climb transport or auth error.
+///
+/// A recall miss is `error: Ok(())` with `tokens` set to the last pass.
+/// Auth stays in `error` so the suite can abort. Other errors keep
+/// `tokens` and must refuse the 30-day cache.
+#[derive(Debug)]
+pub struct ContextLadder {
+    /// Highest rung that recalled all markers.
+    pub tokens: Option<u32>,
+    /// `Ok` when the climb finished or stopped on a recall miss.
+    pub error: Result<(), ProbeError>,
+}
+
 /// Climb the 4k/8k/16k ladder. `skip_expensive` tries 4k only.
 ///
 /// Advertised tokens skip rungs strictly larger than the prior, except
 /// the 4k rung is always attempted. A failed 4k rung is `None` even when
-/// advertised is 128k.
+/// advertised is 128k. Transient/RateLimit after a pass keeps that pass.
 pub async fn probe_effective_context_tokens<C: ProbeClient>(
     llm: &C,
     skip_expensive: bool,
-) -> Result<Option<u32>, ProbeError> {
+) -> ContextLadder {
     let advertised = llm.catalog().advertised_context_tokens;
     let mut best: Option<u32> = None;
 
@@ -65,14 +79,29 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
         }
 
         let request = build_rung_request(llm.model_id(), rung);
-        let response = llm.chat(request).await?;
-        if !recalls_all_facts(&response.text) {
-            return Ok(best);
+        match llm.chat(request).await {
+            Ok(response) => {
+                if !recalls_all_facts(&response.text) {
+                    return ContextLadder {
+                        tokens: best,
+                        error: Ok(()),
+                    };
+                }
+                best = Some(rung);
+            }
+            Err(err) => {
+                return ContextLadder {
+                    tokens: best,
+                    error: Err(err),
+                };
+            }
         }
-        best = Some(rung);
     }
 
-    Ok(best)
+    ContextLadder {
+        tokens: best,
+        error: Ok(()),
+    }
 }
 
 fn build_rung_request(model: &str, rung: u32) -> ProbeRequest {
@@ -138,6 +167,8 @@ mod tests {
     struct LadderMock {
         advertised: Option<u32>,
         fail_at_or_above: Option<u32>,
+        transient_at_or_above: Option<u32>,
+        auth_at_or_above: Option<u32>,
         calls: Mutex<Vec<u32>>,
     }
 
@@ -146,8 +177,20 @@ mod tests {
             Self {
                 advertised,
                 fail_at_or_above,
+                transient_at_or_above: None,
+                auth_at_or_above: None,
                 calls: Mutex::new(Vec::new()),
             }
+        }
+
+        fn transient_at(mut self, tokens: u32) -> Self {
+            self.transient_at_or_above = Some(tokens);
+            self
+        }
+
+        fn auth_at(mut self, tokens: u32) -> Self {
+            self.auth_at_or_above = Some(tokens);
+            self
         }
 
         fn recorded(&self) -> Vec<u32> {
@@ -180,21 +223,26 @@ mod tests {
         ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
             let tokens = estimate_request_tokens(&req);
             self.calls.lock().expect("lock").push(tokens);
-            let fail = self
-                .fail_at_or_above
-                .is_some_and(|threshold| tokens >= threshold);
-            let text = if fail {
-                "I cannot find those markers.".to_owned()
+            let result = if self.auth_at_or_above.is_some_and(|t| tokens >= t) {
+                Err(ProbeError::Auth("bad".into()))
+            } else if self.transient_at_or_above.is_some_and(|t| tokens >= t) {
+                Err(ProbeError::Transient("timeout".into()))
             } else {
-                format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n{FACT_HEARTBEAT}")
-            };
-            async move {
+                let fail = self
+                    .fail_at_or_above
+                    .is_some_and(|threshold| tokens >= threshold);
+                let text = if fail {
+                    "I cannot find those markers.".to_owned()
+                } else {
+                    format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n{FACT_HEARTBEAT}")
+                };
                 Ok(ProbeResponse {
                     text,
                     tool_calls: Vec::new(),
                     finish: ProbeFinish::Stop,
                 })
-            }
+            };
+            async move { result }
         }
 
         fn stream_chat(
@@ -250,8 +298,33 @@ mod tests {
     #[tokio::test]
     async fn pass_4k_fail_8k_is_4096() {
         let llm = LadderMock::new(None, Some(8192));
-        let got = probe_effective_context_tokens(&llm, false).await.unwrap();
-        assert_eq!(got, Some(4096));
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, Some(4096));
+        let calls = llm.recorded();
+        assert_eq!(calls.len(), 2);
+        assert_is_4k(calls[0]);
+        assert_is_8k(calls[1]);
+    }
+
+    #[tokio::test]
+    async fn pass_4k_transient_8k_keeps_4096() {
+        let llm = LadderMock::new(None, None).transient_at(8192);
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(matches!(got.error, Err(ProbeError::Transient(_))));
+        assert_eq!(got.tokens, Some(4096));
+        let calls = llm.recorded();
+        assert_eq!(calls.len(), 2);
+        assert_is_4k(calls[0]);
+        assert_is_8k(calls[1]);
+    }
+
+    #[tokio::test]
+    async fn pass_4k_auth_8k_keeps_4096_and_auth() {
+        let llm = LadderMock::new(None, None).auth_at(8192);
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(matches!(got.error, Err(ProbeError::Auth(_))));
+        assert_eq!(got.tokens, Some(4096));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 2);
         assert_is_4k(calls[0]);
@@ -261,8 +334,9 @@ mod tests {
     #[tokio::test]
     async fn pass_all_is_16384() {
         let llm = LadderMock::new(None, None);
-        let got = probe_effective_context_tokens(&llm, false).await.unwrap();
-        assert_eq!(got, Some(16384));
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, Some(16384));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 3);
         assert_is_4k(calls[0]);
@@ -271,10 +345,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transient_4k_is_none_with_err() {
+        let llm = LadderMock::new(None, None).transient_at(4096);
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(matches!(got.error, Err(ProbeError::Transient(_))));
+        assert_eq!(got.tokens, None);
+        let calls = llm.recorded();
+        assert_eq!(calls.len(), 1);
+        assert_is_4k(calls[0]);
+    }
+
+    #[tokio::test]
     async fn fail_4k_is_none() {
         let llm = LadderMock::new(None, Some(4096));
-        let got = probe_effective_context_tokens(&llm, false).await.unwrap();
-        assert_eq!(got, None);
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, None);
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1);
         assert_is_4k(calls[0]);
@@ -283,19 +369,37 @@ mod tests {
     #[tokio::test]
     async fn advertised_4096_does_not_issue_8k_or_16k() {
         let llm = LadderMock::new(Some(4096), None);
-        let got = probe_effective_context_tokens(&llm, false).await.unwrap();
-        assert_eq!(got, Some(4096));
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, Some(4096));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1, "must not climb past advertised 4096");
         assert_is_4k(calls[0]);
     }
 
     #[tokio::test]
+    async fn advertised_8192_tries_4k_and_8k_not_16k() {
+        let llm = LadderMock::new(Some(8192), None);
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, Some(8192));
+        let calls = llm.recorded();
+        assert_eq!(calls.len(), 2);
+        assert_is_4k(calls[0]);
+        assert_is_8k(calls[1]);
+        assert!(
+            calls.iter().all(|&tokens| tokens < 16384),
+            "must not issue a 16k rung, got {calls:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn advertised_128k_with_4k_fail_is_none_not_advertised() {
         let llm = LadderMock::new(Some(128000), Some(4096));
-        let got = probe_effective_context_tokens(&llm, false).await.unwrap();
-        assert_eq!(got, None, "must not copy advertised 128000");
-        assert_ne!(got, Some(128000));
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, None, "must not copy advertised 128000");
+        assert_ne!(got.tokens, Some(128000));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1);
         assert_is_4k(calls[0]);
@@ -304,9 +408,10 @@ mod tests {
     #[tokio::test]
     async fn advertised_2000_still_tries_4k() {
         let llm = LadderMock::new(Some(2000), None);
-        let got = probe_effective_context_tokens(&llm, false).await.unwrap();
-        assert_eq!(got, Some(4096));
-        assert_ne!(got, Some(2000));
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, Some(4096));
+        assert_ne!(got.tokens, Some(2000));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1);
         assert_is_4k(calls[0]);
@@ -315,8 +420,9 @@ mod tests {
     #[tokio::test]
     async fn cheap_tries_4k_only() {
         let llm = LadderMock::new(None, None);
-        let got = probe_effective_context_tokens(&llm, true).await.unwrap();
-        assert_eq!(got, Some(4096));
+        let got = probe_effective_context_tokens(&llm, true).await;
+        assert!(got.error.is_ok(), "{:?}", got.error);
+        assert_eq!(got.tokens, Some(4096));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1);
         assert_is_4k(calls[0]);
