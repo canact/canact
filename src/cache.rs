@@ -92,7 +92,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (`fn greet(` / Hello in comments is not a rename).
 /// v34: xml_tool_calling empty or whitespace `<name>` is Weak
 ///      (does not open can_use_tools).
-pub const PROBE_SUITE_VERSION: u32 = 34;
+/// v35: unified_diff Strong requires `fn greet` / `fn welcome` in
+///      code +/- lines; comment-only +/- is Weak (not UnifiedDiff).
+pub const PROBE_SUITE_VERSION: u32 = 35;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
