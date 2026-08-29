@@ -4,7 +4,10 @@ Immutable. Amending this file is a human-visible change
 (`chore: amend constitution`).
 
 1. Apache-2.0. Rust. Crate + CLI. MCP later, not v1.
-2. Independent org `canact` (not `blineai`).
+2. Independent org `canact` (not `blineai`). canact does not
+   depend on Bline (`bline-*` crates or Bline runtime). Do not
+   open pull requests or issues on `blineai/bline`. Bline may
+   consume canact tags; canact never drives Bline.
 3. Types + tests + CLI goldens are the source of truth, not more Markdown.
 4. No judge model. Seconds, not hours.
 5. Host policy output required (`max_tools`, edit ladder, XML fallback).

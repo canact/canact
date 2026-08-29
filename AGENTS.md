@@ -10,6 +10,9 @@ crates.io keywords. README stays "Not ready." until a human says launch.
 Do not depend on `bline-llm`, `bline-types`, `bline-probe`, or other
 `bline-*` crates.
 
+Do not open pull requests or issues on `blineai/bline`. Bline may
+consume canact; canact never drives Bline.
+
 MSRV 1.85. Edition 2024.
 
 See `CONSTITUTION.md`.
