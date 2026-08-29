@@ -53,9 +53,11 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
 
     let mut stream = std::pin::pin!(llm.stream_chat(request));
 
-    let mut got_read_file = false;
+    let mut current_name: Option<String> = None;
+    let mut current_args = String::new();
+    let mut best_read_file: Option<Result<bool, ()>> = None;
+    let mut last_read_file_args = String::new();
     let mut got_other_tool = false;
-    let mut args_buffer = String::new();
     let mut got_any_chunk = false;
 
     while let Some(chunk_result) = stream.next().await {
@@ -64,14 +66,36 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                 got_any_chunk = true;
                 match &chunk {
                     ProbeStreamChunk::ToolCallStart { name, .. } => {
+                        flush_read_file_args(
+                            &current_name,
+                            &current_args,
+                            &mut best_read_file,
+                            &mut last_read_file_args,
+                        );
+                        current_args.clear();
                         if name == "read_file" {
-                            got_read_file = true;
+                            current_name = Some(name.clone());
                         } else if !name.is_empty() {
                             got_other_tool = true;
+                            current_name = Some(name.clone());
+                        } else {
+                            current_name = None;
                         }
                     }
                     ProbeStreamChunk::ToolCallArgDelta { delta } => {
-                        args_buffer.push_str(delta);
+                        if current_name.as_deref() == Some("read_file") {
+                            current_args.push_str(delta);
+                        }
+                    }
+                    ProbeStreamChunk::ToolCallEnd => {
+                        flush_read_file_args(
+                            &current_name,
+                            &current_args,
+                            &mut best_read_file,
+                            &mut last_read_file_args,
+                        );
+                        current_name = None;
+                        current_args.clear();
                     }
                     _ => {}
                 }
@@ -83,11 +107,17 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
             }
         }
     }
+    flush_read_file_args(
+        &current_name,
+        &current_args,
+        &mut best_read_file,
+        &mut last_read_file_args,
+    );
 
     let (score, details) = if !got_any_chunk {
         (0.0, "Stream produced no chunks".to_string())
-    } else if got_read_file {
-        match parsed_string_path(&args_buffer) {
+    } else if let Some(parsed) = best_read_file {
+        match parsed {
             Ok(true) => (
                 1.0,
                 "Streaming tool call with valid JSON arguments".to_string(),
@@ -96,11 +126,11 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                 0.5,
                 "Tool call name streamed but path is not a string".to_string(),
             ),
-            Err(_) => (
+            Err(()) => (
                 0.5,
                 format!(
                     "Tool call name streamed but arguments malformed: {:?}",
-                    super::utf8_prefix(&args_buffer, 80)
+                    super::utf8_prefix(&last_read_file_args, 80)
                 ),
             ),
         }
@@ -127,6 +157,25 @@ fn parsed_string_path(args: &str) -> Result<bool, serde_json::Error> {
     Ok(value
         .as_object()
         .is_some_and(|o| nonempty_string_arg(o, "path")))
+}
+
+fn flush_read_file_args(
+    current_name: &Option<String>,
+    current_args: &str,
+    best: &mut Option<Result<bool, ()>>,
+    last_args: &mut String,
+) {
+    if current_name.as_deref() != Some("read_file") {
+        return;
+    }
+    last_args.clear();
+    last_args.push_str(current_args);
+    let parsed = parsed_string_path(current_args).map_err(|_| ());
+    *best = match (*best, parsed) {
+        (Some(Ok(true)), _) | (_, Ok(true)) => Some(Ok(true)),
+        (Some(Ok(false)), _) | (_, Ok(false)) => Some(Ok(false)),
+        (Some(Err(())), _) | (_, Err(())) => Some(Err(())),
+    };
 }
 
 #[cfg(test)]
@@ -213,6 +262,33 @@ mod tests {
         ]);
         let result = probe_streaming_tool_calls(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn streaming_read_file_does_not_inherit_other_tool_path() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "c0".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "c1".to_string(),
+                name: "write_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: r#"{"path":"/tmp/test.txt"}"#.to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "path from write_file must not make empty read_file Strong: {result:?}"
+        );
+        assert_eq!(result.score, 0.5);
+        assert_eq!(result.level, CapabilityLevel::Medium);
     }
 
     #[tokio::test]
