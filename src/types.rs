@@ -267,20 +267,19 @@ pub const CORE_DIMENSION_NAMES: &[&str] = &[
 impl CapabilityProfile {
     /// Overall capability level (minimum of the three required dimensions).
     pub fn overall_level(&self) -> CapabilityLevel {
-        self.tool_calling
-            .level
-            .min(self.json_output.level)
-            .min(self.instruction_following.level)
+        completed_level(&self.tool_calling)
+            .min(completed_level(&self.json_output))
+            .min(completed_level(&self.instruction_following))
     }
 
     /// Whether the host should use XML-tag fallback for tool calls.
     pub fn needs_xml_fallback(&self) -> bool {
-        self.tool_calling.level == CapabilityLevel::Weak
+        completed_level(&self.tool_calling) == CapabilityLevel::Weak
     }
 
     /// Whether JSON output should be wrapped in a repair layer.
     pub fn needs_json_repair(&self) -> bool {
-        self.json_output.level <= CapabilityLevel::Medium
+        completed_level(&self.json_output) <= CapabilityLevel::Medium
     }
 
     /// Whether the model can be used for agentic work (tool calling).
@@ -294,7 +293,7 @@ impl CapabilityProfile {
 
     /// How well the model picks the right tool from a set.
     pub fn tool_selection_level(&self) -> CapabilityLevel {
-        self.tool_selection.level
+        completed_level(&self.tool_selection)
     }
 
     /// Recommended maximum number of tools to send to the model.
@@ -303,10 +302,12 @@ impl CapabilityProfile {
     /// Scores in `[1.0 / 3.0, 0.4)` return `None` (issue #3315).
     pub fn max_tools(&self) -> Option<usize> {
         // Generic-edit scores ~0.33 are not 30-day Weak (#3315).
-        if (1.0 / 3.0..0.4).contains(&self.tool_selection.score) {
+        if !self.tool_selection.is_synthesized_error()
+            && (1.0 / 3.0..0.4).contains(&self.tool_selection.score)
+        {
             return None;
         }
-        match self.tool_selection.level {
+        match completed_level(&self.tool_selection) {
             CapabilityLevel::Strong => None,
             CapabilityLevel::Medium => Some(20),
             CapabilityLevel::Weak => Some(10),
@@ -316,8 +317,9 @@ impl CapabilityProfile {
     /// Whether the model supports vision (image input).
     ///
     /// Returns `true` if the vision probe scored Medium or higher.
+    /// A synthesized error Medium (timeout / 429) does not count.
     pub fn supports_vision(&self) -> bool {
-        self.vision.level >= CapabilityLevel::Medium
+        completed_usable_tools(&self.vision)
     }
 
     /// Recommend the best edit format from the probe ladder.
@@ -328,9 +330,9 @@ impl CapabilityProfile {
     /// Else [`EditFormatRecommendation::WholeFile`]. Does not apply a Gemini
     /// [`EditFormatRecommendation::DiffFenced`] override.
     pub fn best_edit_format(&self) -> EditFormatRecommendation {
-        if self.search_replace.level == CapabilityLevel::Strong {
+        if completed_level(&self.search_replace) == CapabilityLevel::Strong {
             EditFormatRecommendation::SearchReplace
-        } else if self.unified_diff.level >= CapabilityLevel::Medium {
+        } else if completed_level(&self.unified_diff) >= CapabilityLevel::Medium {
             EditFormatRecommendation::UnifiedDiff
         } else {
             EditFormatRecommendation::WholeFile
@@ -344,8 +346,8 @@ impl CapabilityProfile {
     /// [`DIMENSION_NAMES`]), not [`CORE_DIMENSION_NAMES`].
     pub fn meets(&self, reqs: &[(&str, CapabilityLevel)]) -> bool {
         for &(name, required) in reqs {
-            match self.dimension_level(name) {
-                Some(level) if level < required => return false,
+            match self.dimension_result(name) {
+                Some(pr) if completed_level(pr) < required => return false,
                 _ => {}
             }
         }
@@ -386,7 +388,15 @@ impl CapabilityProfile {
 }
 
 fn completed_usable_tools(pr: &ProbeResult) -> bool {
-    pr.level >= CapabilityLevel::Medium && !pr.is_synthesized_error()
+    completed_level(pr) >= CapabilityLevel::Medium
+}
+
+fn completed_level(pr: &ProbeResult) -> CapabilityLevel {
+    if pr.is_synthesized_error() {
+        CapabilityLevel::Weak
+    } else {
+        pr.level
+    }
 }
 
 fn normalize_dimension_name(dimension: &str) -> Cow<'_, str> {

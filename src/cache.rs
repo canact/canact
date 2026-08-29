@@ -29,7 +29,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///     synthesized error Medium does not open can_use_tools.
 /// v10: empty instruction-following is Weak; vision color-only refusal
 ///      is Weak; SSE late tool name still emits ToolCallStart.
-pub const PROBE_SUITE_VERSION: u32 = 10;
+/// v11: synthesized error Medium does not open host policy (vision,
+///      XML fallback, edit format, meets); o-series chat uses
+///      max_completion_tokens and omits temperature.
+pub const PROBE_SUITE_VERSION: u32 = 11;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
