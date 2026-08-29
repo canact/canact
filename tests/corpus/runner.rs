@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use canact::{
     CapabilityLevel, CapabilityProfile, CatalogPriors, DIMENSION_NAMES, MockLlm, ProbeCache,
     ProbeClient, ProbeContent, ProbeContentPart, ProbeError, ProbeFinish, ProbeRequest,
-    ProbeResponse, ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool, classify,
-    resolve_probe,
+    ProbeResponse, ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool,
+    TOOL_PROBE_NAMES, classify, resolve_probe,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -99,6 +99,18 @@ fn resolve_probe_no_tools_is_weak_and_cacheable() {
         cacheable,
         "definitive no-tools may stay in the 30-day cache"
     );
+}
+
+#[test]
+fn resolve_probe_no_tools_is_weak_for_all_tool_probe_names() {
+    for name in TOOL_PROBE_NAMES {
+        let err: Result<ProbeResult, ProbeError> =
+            Err(ProbeError::Llm("does not support tools".into()));
+        let (result, cacheable) = resolve_probe(err, name).expect("synthesized");
+        assert_eq!(result.level, CapabilityLevel::Weak, "{name}");
+        assert_eq!(result.score, 0.0, "{name}");
+        assert!(cacheable, "{name}");
+    }
 }
 
 #[test]

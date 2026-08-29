@@ -1,6 +1,10 @@
 //! CLI help / usage goldens for `canact` and `canact probe`.
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use canact::{CapabilityLevel, CapabilityProfile, ProbeCache, ProbeResult};
 
@@ -131,4 +135,82 @@ fn probe_cached_weak_tools_exits_2_and_explains() {
     assert!(stdout.contains("=== Probe Results ==="), "{stdout}");
     assert!(stdout.contains("8192"), "{stdout}");
     assert!(stdout.contains("Effective context tokens:"), "{stdout}");
+}
+
+fn spawn_401(body: &[u8]) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let body = body.to_vec();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut buf = [0u8; 4096];
+            let mut got = Vec::new();
+            loop {
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        got.extend_from_slice(&buf[..n]);
+                        if got.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let head = format!(
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+            let _ = stream.flush();
+        }
+    });
+    format!("http://{addr}/v1")
+}
+
+#[test]
+fn probe_auth_prints_authentication_error_once() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let base = spawn_401(br#"{"error":{"message":"Bearer SECRET sk-live-secret"}}"#);
+    let out = canact()
+        .args([
+            "probe",
+            "--model",
+            "m",
+            "--provider",
+            "test",
+            "--base-url",
+            &base,
+            "--api-key",
+            "sk-cli-secret",
+            "--cache",
+            cache_path.to_str().expect("utf8 cache path"),
+            "--force",
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn canact probe");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert_eq!(
+        stderr.matches("authentication error:").count(),
+        1,
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("authentication error: authentication error:"),
+        "stderr={stderr}"
+    );
+    assert!(!stderr.contains("SECRET"), "stderr={stderr}");
+    assert!(!stderr.contains("sk-live-secret"), "stderr={stderr}");
+    assert!(!stderr.contains("sk-cli-secret"), "stderr={stderr}");
 }

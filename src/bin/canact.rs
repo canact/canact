@@ -154,10 +154,6 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
 
     let run = match runner.run_detailed().await {
         Ok(run) => run,
-        Err(ProbeError::Auth(msg)) => {
-            eprintln!("error: authentication error: {msg}");
-            return Err(1);
-        }
         Err(err) => {
             eprintln!("error: {err}");
             return Err(1);
@@ -226,8 +222,8 @@ async fn resolve_model(
             eprintln!("{}", missing_model_message(&ids));
             Err(1)
         }
-        Err(ProbeError::Auth(msg)) => {
-            eprintln!("error: authentication error: {msg}");
+        Err(err @ ProbeError::Auth(_)) => {
+            eprintln!("error: {err}");
             Err(1)
         }
         Err(err) => {
