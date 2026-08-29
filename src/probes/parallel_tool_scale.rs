@@ -66,12 +66,14 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
     unique_paths.dedup();
     let unique_count = unique_paths.len();
 
+    let named_read_file = calls.iter().any(|c| c.name == "read_file");
     let score = match unique_count {
         5.. => 1.0,
         4 => 0.8,
         3 => 0.6,
         2 => 0.4,
         1 => 0.2,
+        _ if named_read_file => 0.5,
         _ => 0.0,
     };
 
@@ -138,6 +140,26 @@ mod tests {
             "5 unique read_file calls in one response (target 5)"
         );
         assert!(!result.details.contains("src/main.rs"));
+    }
+
+    #[tokio::test]
+    async fn medium_for_named_reads_with_numeric_paths() {
+        let response = multi_tool_call_response(vec![
+            ProbeToolCall {
+                id: "1".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": 1}).as_object().unwrap().clone(),
+            },
+            ProbeToolCall {
+                id: "2".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": 2}).as_object().unwrap().clone(),
+            },
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_parallel_tool_scale(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.5);
     }
 
     #[tokio::test]

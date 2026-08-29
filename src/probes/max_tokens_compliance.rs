@@ -34,7 +34,12 @@ pub async fn probe_max_tokens_compliance<C: ProbeClient>(
     let response = llm.chat(request).await?;
     let char_count = response.text.len();
 
-    let (score, details) = if char_count <= 400 {
+    let (score, details) = if response.text.trim().is_empty() {
+        (
+            0.0,
+            format!("Response {char_count} chars with max_tokens=40 (empty)"),
+        )
+    } else if char_count <= 400 {
         (
             1.0,
             format!("Response {char_count} chars with max_tokens=40 (compliant)"),
@@ -65,6 +70,25 @@ mod tests {
     use super::*;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn empty_response_is_weak() {
+        let llm = MockLlm {
+            response: text_response(""),
+        };
+        let result = probe_max_tokens_compliance(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn whitespace_response_is_weak() {
+        let llm = MockLlm {
+            response: text_response("  \n"),
+        };
+        let result = probe_max_tokens_compliance(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
 
     #[tokio::test]
     async fn compliant_short_response() {
