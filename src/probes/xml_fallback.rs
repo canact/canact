@@ -6,6 +6,8 @@ use crate::types::{ProbeResult, classify};
 
 use super::{system_text, user_text};
 
+const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/example.txt. Do not describe what you would do. Do not ask for confirmation.";
+
 /// Probe whether the model can produce valid XML tool-call blocks.
 ///
 /// This tests the fallback path used when native function calling is not
@@ -33,7 +35,7 @@ Available tools:
 - **read_file**: Read the contents of a file at the given path.
   Parameters: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"The file path to read\"}},\"required\":[\"path\"]}";
 
-    let user = "Use the read_file tool to read the file at path '/tmp/example.txt'.";
+    let user = FORCEFUL_READ_FILE;
 
     let request = ProbeRequest {
         messages: vec![system_text(system), user_text(user)],
@@ -123,6 +125,13 @@ mod tests {
 
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[test]
+    fn xml_tool_calling_prompt_is_forceful() {
+        assert!(FORCEFUL_READ_FILE.contains("Immediately call"));
+        assert!(FORCEFUL_READ_FILE.contains("Do not describe what you would do"));
+        assert!(FORCEFUL_READ_FILE.contains("Do not ask for confirmation"));
+    }
 
     #[tokio::test]
     async fn xml_tool_calling_strong_for_valid_block() {
