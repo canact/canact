@@ -381,8 +381,8 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
 ///
 /// Scoring:
 /// - Task 1 (set value in config.toml): `doc_set` with nonempty string
-///   path+selector and a present non-null `value` (1.0), name-only
-///   `doc_set` or `edit_file` (0.5)
+///   path+selector and a usable `value` (present, non-null, nonempty
+///   if a string) (1.0), name-only `doc_set` or `edit_file` (0.5)
 /// - Task 2 (find "deprecated" in src/): `search` with string pattern (1.0),
 ///   name-only `search` or `run_command` (0.5)
 /// - Task 3 (replace markdown section): `md_replace_section` with string
@@ -525,7 +525,7 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     let t1_precise = |c: &ProbeToolCall| {
         nonempty_string_arg(&c.arguments, "path")
             && nonempty_string_arg(&c.arguments, "selector")
-            && c.arguments.get("value").is_some_and(|v| !v.is_null())
+            && c.arguments.get("value").is_some_and(usable_doc_set_value)
     };
     let t1_score = if calls.iter().any(|c| c.name == "doc_set" && t1_precise(c)) {
         1.0
@@ -562,7 +562,11 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
         name: "tool_selection".to_string(),
         score,
         max_score: 1.0,
-        level: tool_selection_level(score, used_generic),
+        level: tool_selection_level(
+            score,
+            used_generic,
+            t1_score == 1.0 && t2_score == 1.0 && t3_score == 1.0,
+        ),
         details,
     })
 }
@@ -570,13 +574,23 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
 /// Classify tool_selection. A generic file tool (`edit_file` / `search` /
 /// `run_command`) is a miss on bline-specific names, not Weak. Weak would
 /// persist `max_tools=10` for 30 days (#3315).
-fn tool_selection_level(score: f32, used_generic: bool) -> CapabilityLevel {
-    let level = classify(score);
-    if level == CapabilityLevel::Weak && used_generic {
-        CapabilityLevel::Medium
-    } else {
-        level
+fn usable_doc_set_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::String(s) => !s.trim().is_empty(),
+        _ => true,
     }
+}
+
+fn tool_selection_level(score: f32, used_generic: bool, all_precise: bool) -> CapabilityLevel {
+    let mut level = classify(score);
+    if level == CapabilityLevel::Weak && used_generic {
+        level = CapabilityLevel::Medium;
+    }
+    if level == CapabilityLevel::Strong && !all_precise {
+        level = CapabilityLevel::Medium;
+    }
+    level
 }
 
 #[cfg(test)]
@@ -1033,6 +1047,8 @@ mod tests {
         let task1_args = [
             serde_json::json!({"path": "config.toml", "selector": "port"}),
             serde_json::json!({"path": "config.toml", "selector": "port", "value": null}),
+            serde_json::json!({"path": "config.toml", "selector": "port", "value": ""}),
+            serde_json::json!({"path": "config.toml", "selector": "port", "value": " "}),
         ];
         for args in task1_args {
             let response = multi_tool_call_response(vec![
@@ -1054,9 +1070,15 @@ mod tests {
             ]);
             let result = probe_tool_selection(&MockLlm { response }).await.unwrap();
             assert!(result.score < 1.0, "{}", result.details);
+            assert_ne!(
+                result.level,
+                crate::types::CapabilityLevel::Strong,
+                "2.5/3 must not open unlimited max_tools: {}",
+                result.details
+            );
             assert!(
                 result.details.contains("task1=0.5"),
-                "doc_set without a non-null value must be 0.5: {}",
+                "doc_set without a usable value must be 0.5: {}",
                 result.details
             );
             assert!(
