@@ -416,3 +416,23 @@ fn meets_fails_on_weak_json() {
 fn capability_level_default_is_weak() {
     assert_eq!(CapabilityLevel::default(), CapabilityLevel::Weak);
 }
+
+#[test]
+fn host_policy_envelope_omits_bline_best_edit_format() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Strong,
+    );
+    let value = profile.host_policy_envelope();
+    assert!(value.get("bestEditFormat").is_none(), "{value}");
+    assert_eq!(value["model"], "test-model");
+    assert_eq!(value["provider"], "test-provider");
+    assert_eq!(value["probeLadderEditFormat"], "search_replace");
+    assert_eq!(value["canUseTools"], true);
+    assert_eq!(value["needsJsonRepair"], true);
+    assert_eq!(value["needsXmlFallback"], false);
+    assert!(value["probes"]["toolCalling"].is_object());
+    assert_eq!(value["scoreScale"]["strongMin"], 0.8);
+    assert_eq!(value["scoreScale"]["mediumMin"], 0.4);
+}

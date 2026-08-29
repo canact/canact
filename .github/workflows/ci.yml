@@ -59,6 +59,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo clippy --locked --all-targets --features runtime -- -D warnings
+      - run: cargo clippy --locked --all-targets --features cli -- -D warnings
       - run: bash scripts/deny-check.sh
 
   test:
@@ -82,6 +83,7 @@ jobs:
           save-if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' }}
       - run: cargo test --locked
       - run: cargo test --locked --features runtime
+      - run: cargo test --locked --features cli
       - run: cargo test --locked --doc
 
   workflow-sanity:
