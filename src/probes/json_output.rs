@@ -34,9 +34,14 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
 
     let (score, details) = match serde_json::from_str::<serde_json::Value>(json_str) {
         Ok(val) => {
-            let has_word = val.get("word").and_then(|v| v.as_str()).is_some();
+            let nonempty_str = |key: &str| {
+                val.get(key)
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.trim().is_empty())
+            };
+            let has_word = nonempty_str("word");
             let has_length = val.get("length").and_then(|v| v.as_u64()).is_some();
-            let has_reversed = val.get("reversed").and_then(|v| v.as_str()).is_some();
+            let has_reversed = nonempty_str("reversed");
             let field_count = u32::from(has_word) + u32::from(has_length) + u32::from(has_reversed);
 
             if field_count == 3 {
@@ -147,6 +152,25 @@ mod tests {
         assert!(result.score > 0.0);
         assert!(result.score < 1.0);
         assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn json_output_not_strong_for_empty_or_whitespace_strings() {
+        for body in [
+            r#"{"word":"","length":0,"reversed":""}"#,
+            r#"{"word":" ","length":0,"reversed":"\t"}"#,
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_json_output(&llm).await.unwrap();
+            assert!(result.score < 1.0, "{body}: {}", result.details);
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "empty json strings must not skip repair: {body}"
+            );
+        }
     }
 
     #[tokio::test]

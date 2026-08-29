@@ -50,7 +50,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      tool_selection doc_set Strong requires a present non-null value.
 /// v19: multi_turn_task_sequencing Strong requires nonempty string args;
 ///      token_efficiency empty text is Weak even when usage is 1-10.
-pub const PROBE_SUITE_VERSION: u32 = 19;
+/// v20: tool_selection Strong requires all three preferred tools
+///      precise; empty/whitespace `doc_set` value is not precise;
+///      json_output Strong requires nonempty word and reversed.
+pub const PROBE_SUITE_VERSION: u32 = 20;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
