@@ -82,7 +82,7 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
             0.5,
             format!(
                 "Had STATUS:ok prefix but body was not a single integer: \"{}\"",
-                &after_prefix[..after_prefix.len().min(60)]
+                super::utf8_prefix(after_prefix, 60)
             ),
         )
     } else if bare_int || is_single_int {
@@ -95,7 +95,7 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
             0.0,
             format!(
                 "Ignored system format/content rules (likely followed user explain request). Response: \"{}\"",
-                &trimmed[..trimmed.len().min(80)]
+                super::utf8_prefix(trimmed, 80)
             ),
         )
     };
@@ -154,5 +154,16 @@ mod tests {
         };
         let result = probe_system_message_adherence(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
+    }
+
+    #[tokio::test]
+    async fn utf8_body_does_not_panic_on_detail_prefix() {
+        let body = format!("STATUS:ok {}", "你".repeat(40));
+        let llm = MockLlm {
+            response: text_response(&body),
+        };
+        let result = probe_system_message_adherence(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert!(result.details.contains("STATUS") || result.details.contains("你"));
     }
 }

@@ -53,7 +53,8 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
 
     let mut stream = std::pin::pin!(llm.stream_chat(request));
 
-    let mut got_tool_name = false;
+    let mut got_read_file = false;
+    let mut got_other_tool = false;
     let mut args_buffer = String::new();
     let mut got_any_chunk = false;
 
@@ -63,8 +64,10 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                 got_any_chunk = true;
                 match &chunk {
                     ProbeStreamChunk::ToolCallStart { name, .. } => {
-                        if !name.is_empty() {
-                            got_tool_name = true;
+                        if name == "read_file" {
+                            got_read_file = true;
+                        } else if !name.is_empty() {
+                            got_other_tool = true;
                         }
                     }
                     ProbeStreamChunk::ToolCallArgDelta { delta } => {
@@ -83,7 +86,7 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
 
     let (score, details) = if !got_any_chunk {
         (0.0, "Stream produced no chunks".to_string())
-    } else if got_tool_name {
+    } else if got_read_file {
         match parsed_string_path(&args_buffer) {
             Ok(true) => (
                 1.0,
@@ -97,10 +100,12 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                 0.5,
                 format!(
                     "Tool call name streamed but arguments malformed: {:?}",
-                    prefix_bytes(&args_buffer, 80)
+                    super::utf8_prefix(&args_buffer, 80)
                 ),
             ),
         }
+    } else if got_other_tool {
+        (0.5, "Streamed a tool name other than read_file".to_string())
     } else {
         (
             0.0,
@@ -120,17 +125,6 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
 fn parsed_string_path(args: &str) -> Result<bool, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(args)?;
     Ok(value.get("path").and_then(|v| v.as_str()).is_some())
-}
-
-fn prefix_bytes(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }
 
 #[cfg(test)]
@@ -217,6 +211,23 @@ mod tests {
         ]);
         let result = probe_streaming_tool_calls(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn streaming_wrong_name_with_string_path_is_not_strong() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "write_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_eq!(result.score, 0.5);
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

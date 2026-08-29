@@ -39,7 +39,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      accepts 2,840.
 /// v14: SSE function_call deltas emit starts; empty max_tokens
 ///      compliance is Weak; parallel numeric paths are Medium.
-pub const PROBE_SUITE_VERSION: u32 = 14;
+/// v15: JSON fence language tags; streaming Strong requires
+///      read_file; system-adherence details are UTF-8 safe.
+pub const PROBE_SUITE_VERSION: u32 = 15;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

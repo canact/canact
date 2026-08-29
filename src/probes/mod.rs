@@ -97,18 +97,8 @@ pub(crate) fn tool_result(
 pub(crate) fn extract_json_from_text(text: &str) -> &str {
     let trimmed = text.trim();
 
-    if let Some(start) = trimmed.find("```json") {
-        let after = &trimmed[start + 7..];
-        if let Some(end) = after.find("```") {
-            return after[..end].trim();
-        }
-    }
-
-    if let Some(start) = trimmed.find("```") {
-        let after = &trimmed[start + 3..];
-        if let Some(end) = after.find("```") {
-            return after[..end].trim();
-        }
+    if let Some(body) = fenced_json_body(trimmed) {
+        return body;
     }
 
     match (trimmed.find('{'), trimmed.rfind('}')) {
@@ -117,6 +107,48 @@ pub(crate) fn extract_json_from_text(text: &str) -> &str {
     }
 
     trimmed
+}
+
+fn fenced_json_body(trimmed: &str) -> Option<&str> {
+    let start = trimmed.find("```")?;
+    let after = &trimmed[start + 3..];
+    let (inner, _) = after.split_once("```")?;
+    let inner = inner.trim_start_matches('\r');
+    let body = if let Some((first, rest)) = inner.split_once('\n') {
+        let tag = first.trim().trim_end_matches('\r');
+        if is_fence_language_tag(tag) {
+            rest
+        } else {
+            inner
+        }
+    } else {
+        inner
+    };
+    let body = body.trim();
+    if body.starts_with('{') || body.starts_with('[') {
+        Some(body)
+    } else {
+        None
+    }
+}
+
+fn is_fence_language_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'))
+}
+
+/// Prefix that never splits a UTF-8 code point.
+pub(crate) fn utf8_prefix(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value) -> ProbeTool {
@@ -318,6 +350,18 @@ mod extract_json_tests {
     #[test]
     fn extract_json_from_fenced_block() {
         let input = "```json\n{\"a\": 1}\n```";
+        assert_eq!(extract_json_from_text(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn extract_json_from_uppercase_json_fence() {
+        let input = "```JSON\n{\"a\": 1}\n```";
+        assert_eq!(extract_json_from_text(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn extract_json_from_jsonc_fence_falls_through_to_object() {
+        let input = "```jsonc\n{\"a\": 1}\n```";
         assert_eq!(extract_json_from_text(input), "{\"a\": 1}");
     }
 }
