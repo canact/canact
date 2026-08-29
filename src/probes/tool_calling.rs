@@ -377,9 +377,12 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
 /// preferred tool (1.0 points) and an acceptable alternative (0.5 points).
 ///
 /// Scoring:
-/// - Task 1 (set value in config.toml): `doc_set` (1.0), `edit_file` (0.5)
-/// - Task 2 (find "deprecated" in src/): `search` (1.0), `run_command` (0.5)
-/// - Task 3 (replace markdown section):  `md_replace_section` (1.0), `edit_file` (0.5)
+/// - Task 1 (set value in config.toml): `doc_set` with string path+selector (1.0),
+///   name-only `doc_set` or `edit_file` (0.5)
+/// - Task 2 (find "deprecated" in src/): `search` with string pattern (1.0),
+///   name-only `search` or `run_command` (0.5)
+/// - Task 3 (replace markdown section): `md_replace_section` with string
+///   path+heading+content (1.0), name-only or `edit_file` (0.5)
 /// - Final score: total_points / 3.0 (normalized to 0.0-1.0)
 pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let tools = vec![
@@ -501,10 +504,22 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     let mut points = 0.0_f32;
     let mut task_details = Vec::new();
 
+    let nonempty = |args: &serde_json::Map<String, serde_json::Value>, key: &str| {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty())
+    };
+
     let t1_score = calls
         .iter()
         .find(|c| c.name == "doc_set")
-        .map(|_| 1.0_f32)
+        .map(|c| {
+            if nonempty(&c.arguments, "path") && nonempty(&c.arguments, "selector") {
+                1.0_f32
+            } else {
+                0.5
+            }
+        })
         .or_else(|| calls.iter().find(|c| c.name == "edit_file").map(|_| 0.5))
         .unwrap_or(0.0);
     points += t1_score;
@@ -513,7 +528,13 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     let t2_score = calls
         .iter()
         .find(|c| c.name == "search")
-        .map(|_| 1.0_f32)
+        .map(|c| {
+            if nonempty(&c.arguments, "pattern") {
+                1.0_f32
+            } else {
+                0.5
+            }
+        })
         .or_else(|| calls.iter().find(|c| c.name == "run_command").map(|_| 0.5))
         .unwrap_or(0.0);
     points += t2_score;
@@ -522,7 +543,16 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     let t3_score = calls
         .iter()
         .find(|c| c.name == "md_replace_section")
-        .map(|_| 1.0_f32)
+        .map(|c| {
+            if nonempty(&c.arguments, "path")
+                && nonempty(&c.arguments, "heading")
+                && nonempty(&c.arguments, "content")
+            {
+                1.0_f32
+            } else {
+                0.5
+            }
+        })
         .or_else(|| calls.iter().find(|c| c.name == "edit_file").map(|_| 0.5))
         .unwrap_or(0.0);
     points += t3_score;
@@ -891,6 +921,20 @@ mod tests {
         let result = probe_tool_selection(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn tool_selection_medium_for_preferred_names_without_string_args() {
+        let response = multi_tool_call_response(vec![
+            call("call_1", "doc_set", serde_json::json!({})),
+            call("call_2", "search", serde_json::json!({})),
+            call("call_3", "md_replace_section", serde_json::json!({})),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_tool_selection(&llm).await.unwrap();
+        assert_eq!(result.score, 0.5);
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.level, CapabilityLevel::Medium);
     }
 
     #[tokio::test]

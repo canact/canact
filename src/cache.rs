@@ -41,7 +41,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      compliance is Weak; parallel numeric paths are Medium.
 /// v15: JSON fence language tags; streaming Strong requires
 ///      read_file; system-adherence details are UTF-8 safe.
-pub const PROBE_SUITE_VERSION: u32 = 15;
+/// v16: one_shot_tool_plan and tool_selection Strong require
+///      non-empty string args on preferred tools.
+pub const PROBE_SUITE_VERSION: u32 = 16;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
