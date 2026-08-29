@@ -10,10 +10,10 @@
 //! signal; use `multi_turn_task_sequencing` instead.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest};
+use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
-use super::{tool, user_text};
+use super::{nonempty_string_arg, tool, user_text};
 
 /// Probe one-shot ordered multi-tool planning (single LLM turn).
 ///
@@ -93,33 +93,29 @@ pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeRe
     let calls = &response.tool_calls;
     let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
 
-    let nonempty = |args: &serde_json::Map<String, serde_json::Value>, key: &str| {
-        args.get(key)
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| !s.is_empty())
-    };
-
-    let has_read = calls
-        .iter()
-        .any(|c| c.name == "read_file" && nonempty(&c.arguments, "path"));
-    let has_edit = calls.iter().any(|c| {
+    let is_precise_read =
+        |c: &ProbeToolCall| c.name == "read_file" && nonempty_string_arg(&c.arguments, "path");
+    let is_precise_edit = |c: &ProbeToolCall| {
         c.name == "edit_file"
-            && nonempty(&c.arguments, "path")
-            && nonempty(&c.arguments, "old_text")
-            && nonempty(&c.arguments, "new_text")
-    });
-    let has_run = calls
-        .iter()
-        .any(|c| c.name == "run_command" && nonempty(&c.arguments, "command"));
+            && nonempty_string_arg(&c.arguments, "path")
+            && nonempty_string_arg(&c.arguments, "old_text")
+            && nonempty_string_arg(&c.arguments, "new_text")
+    };
+    let is_precise_run =
+        |c: &ProbeToolCall| c.name == "run_command" && nonempty_string_arg(&c.arguments, "command");
+
+    let has_read = calls.iter().any(is_precise_read);
+    let has_edit = calls.iter().any(is_precise_edit);
+    let has_run = calls.iter().any(is_precise_run);
 
     let step_count = u8::from(has_read) + u8::from(has_edit) + u8::from(has_run);
     let named_count = u8::from(names.contains(&"read_file"))
         + u8::from(names.contains(&"edit_file"))
         + u8::from(names.contains(&"run_command"));
 
-    let read_pos = names.iter().position(|n| *n == "read_file");
-    let edit_pos = names.iter().position(|n| *n == "edit_file");
-    let run_pos = names.iter().position(|n| *n == "run_command");
+    let read_pos = calls.iter().position(is_precise_read);
+    let edit_pos = calls.iter().position(is_precise_edit);
+    let run_pos = calls.iter().position(is_precise_run);
 
     let correct_order = match (read_pos, edit_pos, run_pos) {
         (Some(r), Some(e), Some(t)) => r < e && e < t,
@@ -319,5 +315,68 @@ mod tests {
         let result = probe_one_shot_tool_plan(&llm).await.unwrap();
         assert_eq!(result.score, 0.0);
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn reasoning_medium_for_whitespace_only_args() {
+        let response = multi_tool_call_response(vec![
+            call("1", "read_file", serde_json::json!({"path": " "})),
+            call(
+                "2",
+                "edit_file",
+                serde_json::json!({"path": " ", "old_text": "\n", "new_text": " "}),
+            ),
+            call("3", "run_command", serde_json::json!({"command": "\n"})),
+        ]);
+        let result = probe_one_shot_tool_plan(&MockLlm { response })
+            .await
+            .unwrap();
+        assert_eq!(result.score, 0.5);
+        assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn reasoning_strong_when_first_read_is_imprecise_then_precise_order() {
+        let response = multi_tool_call_response(vec![
+            call("0", "read_file", serde_json::json!({})),
+            call(
+                "1",
+                "read_file",
+                serde_json::json!({"path": "src/parser.rs"}),
+            ),
+            call(
+                "2",
+                "edit_file",
+                serde_json::json!({"path": "src/parser.rs", "old_text": "<", "new_text": "<="}),
+            ),
+            call(
+                "3",
+                "run_command",
+                serde_json::json!({"command": "cargo test"}),
+            ),
+        ]);
+        let result = probe_one_shot_tool_plan(&MockLlm { response })
+            .await
+            .unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn reasoning_medium_when_only_imprecise_names() {
+        let response = multi_tool_call_response(vec![
+            call("1", "read_file", serde_json::json!({"path": ""})),
+            call(
+                "2",
+                "edit_file",
+                serde_json::json!({"path": "", "old_text": "", "new_text": ""}),
+            ),
+            call("3", "run_command", serde_json::json!({"command": ""})),
+        ]);
+        let result = probe_one_shot_tool_plan(&MockLlm { response })
+            .await
+            .unwrap();
+        assert_eq!(result.score, 0.5);
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 }
