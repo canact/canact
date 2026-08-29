@@ -162,9 +162,9 @@ Rename the function `greet` to `welcome` and change the greeting from \
     let response = llm.chat(request).await?;
     let text = response.text;
 
-    let has_minus_header = text.contains("--- a/") || text.contains("---");
-    let has_plus_header = text.contains("+++ b/") || text.contains("+++");
-    let has_hunk = text.contains("@@");
+    let has_minus_header = text.lines().any(|l| l.starts_with("---"));
+    let has_plus_header = text.lines().any(|l| l.starts_with("+++"));
+    let has_hunk = text.lines().any(|l| l.starts_with("@@"));
     let has_minus_line = text
         .lines()
         .any(|l| l.starts_with('-') && !l.starts_with("---"));
@@ -386,6 +386,21 @@ Rename welcome Welcome
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_prose_markers_are_not_medium() {
+        let llm = MockLlm {
+            response: text_response("Docs use ---, +++, and @@.\n- greet\n+ welcome\n"),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "prose ---/+++/@@ plus markdown list must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]
