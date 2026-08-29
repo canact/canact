@@ -28,6 +28,11 @@ pub use client::{
 #[cfg(feature = "runtime")]
 pub use runner::{FREE_CONCURRENCY, PAID_CONCURRENCY, ProbeRun, ProbeRunner, resolve_probe};
 
+#[cfg(all(feature = "runtime", feature = "openai"))]
+mod adapters;
+#[cfg(all(feature = "runtime", feature = "openai"))]
+pub use adapters::openai::{OpenAiCompatClient, list_model_ids};
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -316,6 +316,67 @@ impl CapabilityProfile {
         }
         true
     }
+
+    /// canact CLI `--json` host-policy envelope.
+    ///
+    /// Not Bline `build_probe_json`. Does not emit `bestEditFormat`.
+    pub fn host_policy_envelope(&self) -> serde_json::Value {
+        let mut probes = serde_json::Map::new();
+        for &dim in DIMENSION_NAMES {
+            if let Some(probe) = self.dimension_result(dim) {
+                probes.insert(snake_to_camel(dim), probe_envelope_json(probe));
+            }
+        }
+        serde_json::json!({
+            "model": self.model_id,
+            "provider": self.provider,
+            "overall": self.overall_level(),
+            "probeLadderEditFormat": self.best_edit_format(),
+            "canUseTools": self.can_use_tools(),
+            "supportsVision": self.supports_vision(),
+            "maxTools": self.max_tools(),
+            "needsXmlFallback": self.needs_xml_fallback(),
+            "needsJsonRepair": self.needs_json_repair(),
+            "effectiveContextTokens": self.effective_context_tokens,
+            "probedAt": self.probed_at,
+            "scoreScale": {
+                "min": 0.0,
+                "max": 1.0,
+                "strongMin": 0.8,
+                "mediumMin": 0.4,
+            },
+            "probes": probes,
+        })
+    }
+}
+
+fn snake_to_camel(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut cap_next = false;
+    for (i, ch) in s.chars().enumerate() {
+        if ch == '_' {
+            cap_next = true;
+            continue;
+        }
+        if cap_next {
+            out.extend(ch.to_uppercase());
+            cap_next = false;
+        } else if i == 0 {
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn probe_envelope_json(probe: &ProbeResult) -> serde_json::Value {
+    serde_json::json!({
+        "level": probe.level,
+        "score": probe.score,
+        "maxScore": probe.max_score,
+        "details": probe.details,
+    })
 }
 
 /// Classify a normalized score (`0.0..=1.0`) into a capability level.

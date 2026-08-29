@@ -21,13 +21,17 @@ futures = { version = "0.3", optional = true }
 [features]
 default = []
 runtime = ["dep:tokio", "dep:futures", "dep:tracing"]
-cli = ["runtime", "dep:clap", "openai"]
+cli = ["runtime", "dep:clap", "openai", "dep:dirs"]
 openai = ["dep:reqwest"]
 
 [dependencies.clap]
 version = "4"
 optional = true
 features = ["derive"]
+
+[dependencies.dirs]
+version = "6"
+optional = true
 
 [dependencies.reqwest]
 version = "0.12"
@@ -42,4 +46,9 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 [[bin]]
 name = "canact"
 path = "src/bin/canact.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "cli_goldens"
+path = "tests/cli_goldens/main.rs"
 required-features = ["cli"]
