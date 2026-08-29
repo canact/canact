@@ -2,6 +2,10 @@
 
 Local gate: `make check`
 
+Targeted probe tests:
+`cargo test --locked --features runtime --lib <filter>`
+`cargo test --lib` without `runtime` compiles and runs 0 probe tests.
+
 DCO: `git commit -s`
 
 Do not add GitHub topics, a repo description, README badges, or
