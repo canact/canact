@@ -48,7 +48,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      call; tool_calling/xml/streaming reject empty path.
 /// v18: remaining tool probes reject empty/whitespace string args;
 ///      tool_selection doc_set Strong requires a present non-null value.
-pub const PROBE_SUITE_VERSION: u32 = 18;
+/// v19: multi_turn_task_sequencing Strong requires nonempty string args;
+///      token_efficiency empty text is Weak even when usage is 1-10.
+pub const PROBE_SUITE_VERSION: u32 = 19;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

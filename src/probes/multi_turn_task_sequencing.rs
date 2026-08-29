@@ -9,7 +9,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
-use super::{assistant_tool_calls, tool, tool_result, user_text};
+use super::{assistant_tool_calls, nonempty_string_arg, tool, tool_result, user_text};
 
 fn tool_specs() -> Vec<crate::client::ProbeTool> {
     vec![
@@ -66,6 +66,21 @@ fn first_tool_name(calls: &[ProbeToolCall]) -> Option<&str> {
     calls.first().map(|t| t.name.as_str())
 }
 
+fn is_precise_read(c: &ProbeToolCall) -> bool {
+    c.name == "read_file" && nonempty_string_arg(&c.arguments, "path")
+}
+
+fn is_precise_edit(c: &ProbeToolCall) -> bool {
+    c.name == "edit_file"
+        && nonempty_string_arg(&c.arguments, "path")
+        && nonempty_string_arg(&c.arguments, "old_string")
+        && nonempty_string_arg(&c.arguments, "new_string")
+}
+
+fn is_precise_run(c: &ProbeToolCall) -> bool {
+    c.name == "run_command" && nonempty_string_arg(&c.arguments, "command")
+}
+
 /// Probe multi-turn dependent tool sequencing with synthetic tool results.
 ///
 /// Loop (up to 3 model turns):
@@ -75,9 +90,10 @@ fn first_tool_name(calls: &[ProbeToolCall]) -> Option<&str> {
 /// 4. After `run_command`, stop.
 ///
 /// Scoring:
-/// - `1.0` - observed read, then edit, then run across turns
+/// - `1.0` - observed read, then edit, then run across turns, each with
+///   nonempty string args (`path`; `path`+`old_string`+`new_string`; `command`)
 /// - `0.7` - read then edit (missing verify) or read then run (skipped explicit edit)
-/// - `0.5` - read then a non-progress tool, or edit first then continue partially
+/// - `0.5` - full name chain with empty, whitespace, or imprecise args
 /// - `0.3` - sensible first tool only (`read_file` or `edit_file`) then stops
 /// - `0.0` - no tools or wrong-only start
 pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
@@ -95,6 +111,9 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
     let mut saw_read = false;
     let mut saw_edit = false;
     let mut saw_run = false;
+    let mut precise_read = false;
+    let mut precise_edit = false;
+    let mut precise_run = false;
     let mut first_tool: Option<String> = None;
     let mut turns = 0u32;
 
@@ -125,14 +144,17 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
             let result_text = match tool_name {
                 "read_file" => {
                     saw_read = true;
+                    precise_read |= is_precise_read(call);
                     "fn parse(items: &[u8]) -> usize {\n    let mut i = 0;\n    while i < items.len() { // bug: should be <=\n        i += 1;\n    }\n    i\n}\n".to_string()
                 }
                 "edit_file" => {
                     saw_edit = true;
+                    precise_edit |= is_precise_edit(call);
                     "ok: file updated".to_string()
                 }
                 "run_command" => {
                     saw_run = true;
+                    precise_run |= is_precise_run(call);
                     "test result: ok. 3 passed".to_string()
                 }
                 other => format!("ok: {other}"),
@@ -146,9 +168,13 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
     }
 
     let (score, details) = match (saw_read, saw_edit, saw_run) {
-        (true, true, true) => (
+        (true, true, true) if precise_read && precise_edit && precise_run => (
             1.0,
             format!("Completed read → edit → verify across {turns} turn(s)"),
+        ),
+        (true, true, true) => (
+            0.5,
+            format!("Completed read → edit → verify but arguments imprecise (turns={turns})"),
         ),
         (true, true, false) => (
             0.7,
@@ -208,6 +234,35 @@ mod tests {
         }
     }
 
+    fn tc_args(name: &str, id: &str, arguments: serde_json::Value) -> ProbeToolCall {
+        ProbeToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: arguments.as_object().unwrap().clone(),
+        }
+    }
+
+    fn precise_tc(name: &str, id: &str) -> ProbeToolCall {
+        match name {
+            "read_file" => tc_args(name, id, serde_json::json!({"path": "src/parser.rs"})),
+            "edit_file" => tc_args(
+                name,
+                id,
+                serde_json::json!({
+                    "path": "src/parser.rs",
+                    "old_string": "<",
+                    "new_string": "<="
+                }),
+            ),
+            "run_command" => tc_args(
+                name,
+                id,
+                serde_json::json!({"command": "cargo test -p parser"}),
+            ),
+            _ => tc(name, id),
+        }
+    }
+
     fn tool_resp(calls: Vec<ProbeToolCall>) -> crate::client::ProbeResponse {
         multi_tool_call_response(calls)
     }
@@ -215,13 +270,54 @@ mod tests {
     #[tokio::test]
     async fn strong_for_full_chain() {
         let llm = SequentialMock::new(vec![
+            tool_resp(vec![precise_tc("read_file", "1")]),
+            tool_resp(vec![precise_tc("edit_file", "2")]),
+            tool_resp(vec![precise_tc("run_command", "3")]),
+        ]);
+        let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert!((result.score - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn empty_maps_full_chain_is_not_strong() {
+        let llm = SequentialMock::new(vec![
             tool_resp(vec![tc("read_file", "1")]),
             tool_resp(vec![tc("edit_file", "2")]),
             tool_resp(vec![tc("run_command", "3")]),
         ]);
         let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
-        assert_eq!(result.level, CapabilityLevel::Strong);
-        assert!((result.score - 1.0).abs() < f32::EPSILON);
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert!((result.score - 0.5).abs() < f32::EPSILON);
+        assert_eq!(result.level, CapabilityLevel::Medium);
+    }
+
+    #[tokio::test]
+    async fn whitespace_args_full_chain_is_not_strong() {
+        let llm = SequentialMock::new(vec![
+            tool_resp(vec![tc_args(
+                "read_file",
+                "1",
+                serde_json::json!({"path": " "}),
+            )]),
+            tool_resp(vec![tc_args(
+                "edit_file",
+                "2",
+                serde_json::json!({
+                    "path": "\n",
+                    "old_string": " ",
+                    "new_string": "\t"
+                }),
+            )]),
+            tool_resp(vec![tc_args(
+                "run_command",
+                "3",
+                serde_json::json!({"command": "  "}),
+            )]),
+        ]);
+        let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert!((result.score - 0.5).abs() < f32::EPSILON);
     }
 
     #[tokio::test]

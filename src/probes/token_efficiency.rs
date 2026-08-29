@@ -17,11 +17,12 @@ use super::user_text;
 ///
 /// Scoring uses provider completion tokens when the host reported them.
 /// Fall back to a character estimate (`len.div_ceil(4)`) when usage is
-/// missing. Reasoning tokens are reported separately, else 0.
+/// missing. Empty or whitespace-only text is Weak before usage is
+/// trusted. Reasoning tokens are reported separately, else 0.
 ///
 /// - `1.0` - completion <= 10 (concise)
 /// - `0.5` - 11-50 (moderate)
-/// - `0.0` - > 50 (verbose)
+/// - `0.0` - > 50 (verbose) or empty text
 pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let request = ProbeRequest {
         messages: vec![user_text("What is 2+2?")],
@@ -34,18 +35,24 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     let response = llm.chat(request).await?;
     let empty_text = response.text.trim().is_empty();
 
-    let (completion_tokens, reasoning_tokens) = match response.usage.as_ref() {
-        Some(usage) => {
-            let completion = match usage.completion_tokens {
-                Some(n) if n > 0 => n,
-                _ if empty_text => u32::MAX,
-                Some(n) => n,
-                None => (response.text.len() as u32).div_ceil(4),
-            };
-            (completion, usage.reasoning_tokens.unwrap_or(0))
+    let (completion_tokens, reasoning_tokens) = if empty_text {
+        let reasoning = response
+            .usage
+            .as_ref()
+            .and_then(|u| u.reasoning_tokens)
+            .unwrap_or(0);
+        (u32::MAX, reasoning)
+    } else {
+        match response.usage.as_ref() {
+            Some(usage) => {
+                let completion = match usage.completion_tokens {
+                    Some(n) => n,
+                    None => (response.text.len() as u32).div_ceil(4),
+                };
+                (completion, usage.reasoning_tokens.unwrap_or(0))
+            }
+            None => ((response.text.len() as u32).div_ceil(4), 0),
         }
-        None if empty_text => (u32::MAX, 0),
-        None => ((response.text.len() as u32).div_ceil(4), 0),
     };
 
     let band = if completion_tokens <= 10 {
@@ -156,6 +163,58 @@ mod tests {
         let result = probe_token_efficiency(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn empty_text_with_small_completion_tokens_is_weak() {
+        for n in [1u32, 10] {
+            let llm = MockLlm {
+                response: ProbeResponse {
+                    text: String::new(),
+                    tool_calls: Vec::new(),
+                    finish: ProbeFinish::Stop,
+                    usage: Some(ProbeUsage {
+                        prompt_tokens: Some(8),
+                        completion_tokens: Some(n),
+                        reasoning_tokens: Some(0),
+                    }),
+                },
+            };
+            let result = probe_token_efficiency(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "empty text + completion_tokens={n} must be Weak"
+            );
+            assert_eq!(result.score, 0.0);
+            assert_ne!(result.level, CapabilityLevel::Strong);
+        }
+    }
+
+    #[tokio::test]
+    async fn whitespace_text_with_small_completion_tokens_is_weak() {
+        for n in [1u32, 10] {
+            let llm = MockLlm {
+                response: ProbeResponse {
+                    text: "  \n\t".into(),
+                    tool_calls: Vec::new(),
+                    finish: ProbeFinish::Stop,
+                    usage: Some(ProbeUsage {
+                        prompt_tokens: Some(8),
+                        completion_tokens: Some(n),
+                        reasoning_tokens: Some(0),
+                    }),
+                },
+            };
+            let result = probe_token_efficiency(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "whitespace text + completion_tokens={n} must be Weak"
+            );
+            assert_eq!(result.score, 0.0);
+            assert_ne!(result.level, CapabilityLevel::Strong);
+        }
     }
 
     #[tokio::test]
