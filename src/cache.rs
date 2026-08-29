@@ -94,7 +94,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (does not open can_use_tools).
 /// v35: unified_diff Strong requires `fn greet` / `fn welcome` in
 ///      code +/- lines; comment-only +/- is Weak (not UnifiedDiff).
-pub const PROBE_SUITE_VERSION: u32 = 35;
+/// v36: SEARCH/REPLACE and unified_diff ignore `/* */` comment
+///      tokens the same way as `//` comments.
+pub const PROBE_SUITE_VERSION: u32 = 36;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
