@@ -9,7 +9,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{tool, user_text};
+use super::{nonempty_string_arg, tool, user_text};
 
 /// Probe whether the model can produce 5 parallel tool calls.
 ///
@@ -57,7 +57,7 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
 
     let valid_calls: Vec<&str> = calls
         .iter()
-        .filter(|c| c.name == "read_file")
+        .filter(|c| c.name == "read_file" && nonempty_string_arg(&c.arguments, "path"))
         .filter_map(|c| c.arguments.get("path").and_then(|v| v.as_str()))
         .collect();
 
@@ -160,6 +160,22 @@ mod tests {
         let result = probe_parallel_tool_scale(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn not_strong_for_five_distinct_blank_paths() {
+        let response = multi_tool_call_response(vec![
+            read_file_call("1", ""),
+            read_file_call("2", " "),
+            read_file_call("3", "  "),
+            read_file_call("4", "\t"),
+            read_file_call("5", "\n"),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_parallel_tool_scale(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.score, 0.5);
+        assert_eq!(result.level, CapabilityLevel::Medium);
     }
 
     #[tokio::test]

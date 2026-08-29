@@ -46,7 +46,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v17: whitespace-only args are not Strong; tool_selection scores
 ///      the best same-name call; one_shot order uses first precise
 ///      call; tool_calling/xml/streaming reject empty path.
-pub const PROBE_SUITE_VERSION: u32 = 17;
+/// v18: remaining tool probes reject empty/whitespace string args;
+///      tool_selection doc_set Strong requires a present non-null value.
+pub const PROBE_SUITE_VERSION: u32 = 18;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
