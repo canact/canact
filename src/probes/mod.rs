@@ -5,6 +5,7 @@
 
 mod code_syntax;
 mod context_faithfulness;
+mod context_ladder;
 mod edit_format;
 mod json_output;
 mod max_tokens_compliance;
@@ -21,6 +22,7 @@ mod xml_fallback;
 
 pub use code_syntax::probe_code_syntax;
 pub use context_faithfulness::probe_context_faithfulness;
+pub use context_ladder::probe_effective_context_tokens;
 pub use edit_format::{probe_search_replace, probe_unified_diff};
 pub use json_output::{probe_instruction_following, probe_json_output};
 pub use max_tokens_compliance::probe_max_tokens_compliance;

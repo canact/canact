@@ -230,6 +230,17 @@ impl<C: ProbeClient> ProbeRunner<C> {
             )?
         };
 
+        let effective_context_tokens = {
+            let _permit = sem
+                .acquire()
+                .await
+                .map_err(|_| ProbeError::Internal("probe semaphore closed unexpectedly".into()))?;
+            take_ladder(
+                &mut cacheable,
+                probes::probe_effective_context_tokens(&self.client, self.skip_expensive).await,
+            )?
+        };
+
         let vision = if self.client.catalog().supports_vision == Some(true) {
             take_probe(
                 &mut cacheable,
@@ -287,7 +298,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 token_efficiency,
                 parallel_tool_scale,
                 probed_at: unix_now(),
-                effective_context_tokens: None,
+                effective_context_tokens,
             },
             cacheable,
         };
@@ -323,6 +334,20 @@ fn take_probe(
     let (probe, ok_to_cache) = resolve_probe(result, name)?;
     *cacheable &= ok_to_cache;
     Ok(probe)
+}
+
+fn take_ladder(
+    cacheable: &mut bool,
+    result: Result<Option<u32>, ProbeError>,
+) -> Result<Option<u32>, ProbeError> {
+    match result {
+        Ok(tokens) => Ok(tokens),
+        Err(err) => {
+            let (_, ok_to_cache) = resolve_probe(Err(err), "effective_context_tokens")?;
+            *cacheable &= ok_to_cache;
+            Ok(None)
+        }
+    }
 }
 
 fn expensive_skip(name: &str) -> ProbeResult {

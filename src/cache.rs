@@ -22,7 +22,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v4: context-faithfulness timeout synonyms (#3317).
 /// v5: generic edit_file on tool_selection is not 30-day Weak/max_tools=10 (#3315).
 /// v6: forceful tool-call prompts (Goose #6281) and stricter arg schema.
-pub const PROBE_SUITE_VERSION: u32 = 6;
+/// v7: persisted effective_context_tokens ladder.
+pub const PROBE_SUITE_VERSION: u32 = 7;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
