@@ -65,8 +65,8 @@ Rename the function `greet` to `welcome` and change the greeting from \
         let mut best = 0.4_f64;
         for block in parse_search_replace_blocks(&text) {
             let has_file_ref = block.path.contains("greet.rs");
-            let search = strip_line_comments(block.search);
-            let replace = strip_line_comments(block.replace);
+            let search = strip_comments(block.search);
+            let replace = strip_comments(block.replace);
             // Strong requires the function signatures in code, not comments.
             let has_old_content = search.contains("fn greet(") && search.contains("Hello");
             let has_new_content = replace.contains("fn welcome(") && replace.contains("Welcome");
@@ -177,12 +177,12 @@ Rename the function `greet` to `welcome` and change the greeting from \
         let minus_has_greet = text.lines().any(|l| {
             l.starts_with('-')
                 && !l.starts_with("---")
-                && strip_line_comments(&l[1..]).contains("fn greet")
+                && strip_comments(&l[1..]).contains("fn greet")
         });
         let plus_has_welcome = text.lines().any(|l| {
             l.starts_with('+')
                 && !l.starts_with("+++")
-                && strip_line_comments(&l[1..]).contains("fn welcome")
+                && strip_comments(&l[1..]).contains("fn welcome")
         });
         if has_file_ref && minus_has_greet && plus_has_welcome {
             (1.0, "Valid unified diff with correct +/- lines".to_string())
@@ -218,7 +218,25 @@ fn is_code_diff_line(line: &str, mark: char) -> bool {
     if !line.starts_with(mark) {
         return false;
     }
-    !strip_line_comments(&line[1..]).trim().is_empty()
+    !strip_comments(&line[1..]).trim().is_empty()
+}
+
+fn strip_comments(text: &str) -> String {
+    strip_line_comments(&strip_block_comments(text))
+}
+
+fn strip_block_comments(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        match rest[start + 2..].find("*/") {
+            Some(end) => rest = &rest[start + 4 + end..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn strip_line_comments(text: &str) -> String {
@@ -337,6 +355,27 @@ Rename greet to welcome and Hello to Welcome in src/greet.rs
     }
 
     #[tokio::test]
+    async fn search_replace_block_comment_tokens_are_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+/* keep fn greet( and Hello */
+=======
+/* emit fn welcome( and Welcome */
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "block-comment tokens must not set SearchReplace: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn search_replace_comment_tokens_are_not_strong() {
         let response_text = "\
 <<<<<<< SEARCH
@@ -436,6 +475,27 @@ Rename welcome Welcome
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_block_comment_tokens_are_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,1 +1,1 @@
+-/* fn greet */
++/* fn welcome */
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "block-comment +/- must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
