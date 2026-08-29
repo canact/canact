@@ -75,7 +75,10 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("no image")
         || lower.contains("no text")
         || lower.contains("no letter")
-        || lower.contains("no character");
+        || lower.contains("no character")
+        || lower.contains("text-only")
+        || lower.contains("text only")
+        || lower.contains("black box");
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
     // is still Medium.
@@ -195,6 +198,34 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_text_only_model_does_not_set_medium() {
+        let llm = MockLlm {
+            response: text_response("This is a text-only model."),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "text-only must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_black_box_idiom_does_not_set_medium() {
+        let llm = MockLlm {
+            response: text_response("This is a black box to me."),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "black box idiom must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
