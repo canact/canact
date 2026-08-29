@@ -96,7 +96,7 @@ Available tools:
             }
         }
     } else if has_tool_call_open {
-        if xml_block_names_read_file(&text) {
+        if xml_open_span_names_read_file(&text) {
             (
                 0.4,
                 "Opening <tool_call> tag found but no closing tag".to_string(),
@@ -141,9 +141,12 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
     })
 }
 
-/// True when an unparsed block still names `read_file` (an attempt, not a tag mention).
-fn xml_block_names_read_file(text: &str) -> bool {
-    text.contains("<name>read_file</name>")
+/// Open-only Medium only when `read_file` is named after `<tool_call>`.
+fn xml_open_span_names_read_file(text: &str) -> bool {
+    let Some(start) = text.find("<tool_call>") else {
+        return false;
+    };
+    text[start + "<tool_call>".len()..].contains("<name>read_file</name>")
 }
 
 /// Closed unparseable Medium only when the first block names `read_file` and
@@ -230,6 +233,23 @@ mod tests {
             response: text_response("I would read /tmp/example.txt for you."),
         };
         let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_name_before_open_tag_does_not_open_tools() {
+        let llm = MockLlm {
+            response: text_response(
+                "Use <name>read_file</name> as shown.\n<tool_call>\nI cannot emit a tool call.\n",
+            ),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "name mention before <tool_call> must not set canUseTools: {result:?}"
+        );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
     }
