@@ -80,7 +80,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      XML JSON Schema paste do not open host policy.
 /// v28: unified_diff headers and hunks must start a line
 ///      (prose `---` / `+++` / `@@` is Weak).
-pub const PROBE_SUITE_VERSION: u32 = 28;
+/// v29: vision "text-only" / "black box" is Weak; XML
+///      `{"path":"value"}` is format-card echo.
+pub const PROBE_SUITE_VERSION: u32 = 29;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
