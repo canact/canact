@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    CORE_DIMENSION_NAMES, CapabilityProfile, CatalogPriors, DIMENSION_NAMES, OpenAiCompatClient,
-    ProbeCache, ProbeError, ProbeRunner, list_model_ids,
+    CapabilityProfile, CatalogPriors, OpenAiCompatClient, ProbeCache, ProbeError, ProbeRunner,
+    list_model_ids, missing_model_message,
 };
 use clap::{Parser, Subcommand};
 
@@ -181,83 +181,14 @@ fn emit_profile(profile: &CapabilityProfile, json: bool, verbose: bool) -> Resul
             }
         }
     } else {
-        print_human(profile, verbose);
+        print!("{}", profile.format_human_table(verbose));
     }
-    if profile.can_use_tools() {
-        Ok(())
-    } else {
+    if let Some(msg) = profile.tool_gate_error() {
+        eprintln!("{msg}");
         Err(2)
-    }
-}
-
-fn print_human(profile: &CapabilityProfile, verbose: bool) {
-    println!("=== Probe Results ===");
-    println!("Weak < 0.4   Medium >= 0.4   Strong >= 0.8");
-    if !verbose {
-        println!("(Showing core dimensions; use --verbose for all.)");
-    }
-    println!();
-    let dims: &[&str] = if verbose {
-        DIMENSION_NAMES
     } else {
-        CORE_DIMENSION_NAMES
-    };
-    for &dim in dims {
-        if let Some(probe) = profile.dimension_result(dim) {
-            println!(
-                "{:<28}{:?}  {:.1} / {:.1}",
-                format!("{}:", display_name(dim)),
-                probe.level,
-                probe.score,
-                probe.max_score
-            );
-            println!("{:<28}{}", "", probe.details);
-        }
+        Ok(())
     }
-    println!();
-    println!("{:<28}{:?}", "Overall:", profile.overall_level());
-    println!(
-        "{:<28}{:?}",
-        "Edit format (probe ladder):",
-        profile.best_edit_format()
-    );
-    println!(
-        "{:<28}{}",
-        "Can use tools:",
-        if profile.can_use_tools() { "yes" } else { "no" }
-    );
-    println!(
-        "{:<28}{}",
-        "Vision:",
-        if profile.supports_vision() {
-            "supported"
-        } else {
-            "not supported"
-        }
-    );
-    match profile.max_tools() {
-        Some(n) => println!("{:<28}{n}", "Max tools:"),
-        None => println!("{:<28}unlimited", "Max tools:"),
-    }
-    if profile.needs_xml_fallback() {
-        println!("{:<28}XML fallback needed", "");
-    }
-    if profile.needs_json_repair() {
-        println!("{:<28}JSON repair needed", "");
-    }
-}
-
-fn display_name(dim: &str) -> String {
-    dim.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn resolve_api_key(cli: Option<String>) -> (Option<String>, bool) {
@@ -291,8 +222,8 @@ async fn resolve_model(
     }
     match list_model_ids(base_url, api_key).await {
         Ok(ids) if ids.len() == 1 => Ok(ids[0].clone()),
-        Ok(_) => {
-            eprintln!("error: --model is required unless GET /models returns exactly one id");
+        Ok(ids) => {
+            eprintln!("{}", missing_model_message(&ids));
             Err(1)
         }
         Err(ProbeError::Auth(msg)) => {

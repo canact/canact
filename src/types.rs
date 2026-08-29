@@ -13,6 +13,8 @@
 //! Re-exporting the types is not enough for `tool_filter.rs` to compile;
 //! every call site must import `CapabilityProfileExt`.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 /// Individual probe result.
@@ -130,9 +132,10 @@ macro_rules! define_probe_dimensions {
         impl CapabilityProfile {
             /// Look up the capability level for a named probe dimension.
             ///
-            /// Returns `None` for unrecognised dimension names.
+            /// Accepts snake_case (`tool_calling`) and host-envelope camelCase
+            /// (`toolCalling`). Returns `None` for unrecognised names.
             pub fn dimension_level(&self, dimension: &str) -> Option<CapabilityLevel> {
-                match dimension {
+                match normalize_dimension_name(dimension).as_ref() {
                     $(stringify!($req_field) => Some(self.$req_field.level),)*
                     $(stringify!($def_field) => Some(self.$def_field.level),)*
                     _ => None,
@@ -141,9 +144,10 @@ macro_rules! define_probe_dimensions {
 
             /// Look up the full [`ProbeResult`] for a named dimension.
             ///
-            /// Returns `None` for unrecognised dimension names.
+            /// Accepts snake_case and host-envelope camelCase. Returns `None`
+            /// for unrecognised names.
             pub fn dimension_result(&self, dimension: &str) -> Option<&ProbeResult> {
-                match dimension {
+                match normalize_dimension_name(dimension).as_ref() {
                     $(stringify!($req_field) => Some(&self.$req_field),)*
                     $(stringify!($def_field) => Some(&self.$def_field),)*
                     _ => None,
@@ -348,6 +352,29 @@ impl CapabilityProfile {
             "probes": probes,
         })
     }
+}
+
+fn normalize_dimension_name(dimension: &str) -> Cow<'_, str> {
+    if dimension.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(camel_to_snake(dimension))
+    } else {
+        Cow::Borrowed(dimension)
+    }
+}
+
+fn camel_to_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn snake_to_camel(s: &str) -> String {
