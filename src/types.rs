@@ -153,6 +153,15 @@ macro_rules! define_probe_dimensions {
                     _ => None,
                 }
             }
+
+            /// Mutable lookup for a named dimension (cache migration).
+            pub fn dimension_result_mut(&mut self, dimension: &str) -> Option<&mut ProbeResult> {
+                match normalize_dimension_name(dimension).as_ref() {
+                    $(stringify!($req_field) => Some(&mut self.$req_field),)*
+                    $(stringify!($def_field) => Some(&mut self.$def_field),)*
+                    _ => None,
+                }
+            }
         }
     };
 }
@@ -205,6 +214,19 @@ define_probe_dimensions! {
         parallel_tool_scale,
     }
 }
+
+/// Probe names scored Weak when the provider reports "does not support tools".
+/// Shared by `resolve_probe` and stale-cache migration.
+pub const TOOL_PROBE_NAMES: &[&str] = &[
+    "tool_calling",
+    "complex_tool_calling",
+    "nested_arguments",
+    "tool_selection",
+    "streaming_tool_calls",
+    "parallel_tool_scale",
+    "one_shot_tool_plan",
+    "multi_turn_task_sequencing",
+];
 
 /// First 9 of [`DIMENSION_NAMES`]. Zips 1:1 with Bline `ToolRequirements::as_slice()`.
 /// Do not zip [`CORE_DIMENSION_NAMES`] against that slice.

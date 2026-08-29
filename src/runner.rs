@@ -11,7 +11,7 @@ use crate::cache::ProbeCache;
 use crate::client::ProbeClient;
 use crate::error::ProbeError;
 use crate::probes;
-use crate::types::{CapabilityLevel, CapabilityProfile, ProbeResult};
+use crate::types::{CapabilityLevel, CapabilityProfile, ProbeResult, TOOL_PROBE_NAMES};
 
 /// Default concurrency for paid providers (effectively unlimited).
 pub const PAID_CONCURRENCY: usize = 64;
@@ -138,6 +138,14 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let sys_msg_fut = Self::gated(&sem, probes::probe_system_message_adherence(&self.client));
         let efficiency_fut = Self::gated(&sem, probes::probe_token_efficiency(&self.client));
         let par_scale_fut = Self::gated(&sem, probes::probe_parallel_tool_scale(&self.client));
+        let vision_enabled = self.client.catalog().supports_vision == Some(true);
+        let vision_fut = async {
+            if vision_enabled {
+                Self::gated(&sem, probes::probe_vision(&self.client)).await
+            } else {
+                Ok(vision_skip())
+            }
+        };
 
         let (
             tool_result,
@@ -154,6 +162,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             sys_msg_result,
             efficiency_result,
             par_scale_result,
+            vision_result,
         ) = tokio::join!(
             tool_fut,
             json_fut,
@@ -169,6 +178,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             sys_msg_fut,
             efficiency_fut,
             par_scale_fut,
+            vision_fut,
         );
 
         let mut cacheable = true;
@@ -192,6 +202,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let token_efficiency = take_probe(&mut cacheable, efficiency_result, "token_efficiency")?;
         let parallel_tool_scale =
             take_probe(&mut cacheable, par_scale_result, "parallel_tool_scale")?;
+        let vision = take_probe(&mut cacheable, vision_result, "vision")?;
 
         let (plan_r, seq_r, faith_r, mem_r) = tokio::join!(
             Self::gated_or_skip(
@@ -234,22 +245,6 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 &mut cacheable,
                 probes::probe_effective_context_tokens(&self.client, self.skip_expensive).await,
             )?
-        };
-
-        let vision = if self.client.catalog().supports_vision == Some(true) {
-            take_probe(
-                &mut cacheable,
-                Self::gated(&sem, probes::probe_vision(&self.client)).await,
-                "vision",
-            )?
-        } else {
-            ProbeResult {
-                name: "vision".to_string(),
-                score: 0.0,
-                max_score: 1.0,
-                level: CapabilityLevel::Weak,
-                details: VISION_SKIP.to_string(),
-            }
         };
 
         let xml_tool_calling = if tool_calling.level == CapabilityLevel::Strong {
@@ -371,6 +366,16 @@ fn expensive_skip(name: &str) -> ProbeResult {
     }
 }
 
+fn vision_skip() -> ProbeResult {
+    ProbeResult {
+        name: "vision".to_string(),
+        score: 0.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Weak,
+        details: VISION_SKIP.to_string(),
+    }
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -393,17 +398,7 @@ pub fn resolve_probe(
         Err(err @ ProbeError::Auth(_)) => Err(err),
         Err(err) => {
             let err_msg = err.to_string();
-            let is_tool_probe = matches!(
-                name,
-                "tool_calling"
-                    | "complex_tool_calling"
-                    | "nested_arguments"
-                    | "tool_selection"
-                    | "streaming_tool_calls"
-                    | "parallel_tool_scale"
-                    | "one_shot_tool_plan"
-                    | "multi_turn_task_sequencing"
-            );
+            let is_tool_probe = TOOL_PROBE_NAMES.contains(&name);
             let tools_not_supported = err_msg.contains("does not support tools");
 
             if is_tool_probe && tools_not_supported {

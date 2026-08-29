@@ -1,6 +1,6 @@
 use canact::{
-    CACHE_TTL_SECS, CacheEntry, CapabilityProfile, DEFAULT_PROBE_EFFORT, PROBE_SUITE_VERSION,
-    ProbeCache, ProbeResult, classify,
+    CACHE_TTL_SECS, CacheEntry, CapabilityLevel, CapabilityProfile, DEFAULT_PROBE_EFFORT,
+    PROBE_SUITE_VERSION, ProbeCache, ProbeResult, classify,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -162,6 +162,48 @@ fn put_then_load_preserves_effective_context_tokens() {
     let loaded = ProbeCache::load(&path).expect("load");
     let got = loaded.get("m", "p").expect("hit after reload");
     assert_eq!(got.effective_context_tokens, Some(8192));
+}
+
+#[test]
+fn load_migrates_stale_no_tools_v7_to_weak_and_persists() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut profile = sample_profile();
+    let stale = |name: &str| ProbeResult {
+        name: name.to_owned(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: LLM error: does not support tools".to_owned(),
+    };
+    profile.tool_calling = stale("tool_calling");
+    profile.one_shot_tool_plan = stale("one_shot_tool_plan");
+    profile.multi_turn_task_sequencing = stale("multi_turn_task_sequencing");
+    profile.json_output = stale("json_output");
+    let mut cache = ProbeCache::default();
+    cache.put(profile);
+    cache.save(&path).expect("save stale v7");
+
+    let loaded = ProbeCache::load(&path).expect("load migrates");
+    let got = loaded.get("m", "p").expect("v7 hit after load");
+    assert_eq!(got.tool_calling.level, CapabilityLevel::Weak);
+    assert_eq!(got.tool_calling.score, 0.0);
+    assert_eq!(got.one_shot_tool_plan.level, CapabilityLevel::Weak);
+    assert_eq!(got.one_shot_tool_plan.score, 0.0);
+    assert_eq!(got.multi_turn_task_sequencing.level, CapabilityLevel::Weak);
+    assert_eq!(got.multi_turn_task_sequencing.score, 0.0);
+    assert_eq!(got.json_output.level, CapabilityLevel::Medium);
+    assert_eq!(got.json_output.score, 0.5);
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("reread")).expect("json");
+    let key = ProbeCache::cache_key("m", "p", DEFAULT_PROBE_EFFORT, PROBE_SUITE_VERSION);
+    let stored = &raw["profiles"][&key]["profile"];
+    assert_eq!(stored["toolCalling"]["level"], "weak");
+    assert_eq!(stored["toolCalling"]["score"].as_f64(), Some(0.0));
+    assert_eq!(stored["oneShotToolPlan"]["level"], "weak");
+    assert_eq!(stored["multiTurnTaskSequencing"]["level"], "weak");
+    assert_eq!(stored["jsonOutput"]["level"], "medium");
 }
 
 #[test]

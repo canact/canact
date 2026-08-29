@@ -229,7 +229,7 @@ fn join_url(base: &str, suffix: &str) -> String {
 }
 
 fn map_transport(err: reqwest::Error) -> ProbeError {
-    ProbeError::Transient(err.to_string())
+    ProbeError::Transient(redact_secrets(&err.to_string()))
 }
 
 async fn ensure_success(resp: reqwest::Response) -> Result<reqwest::Response, ProbeError> {
@@ -264,15 +264,114 @@ fn body_or_status(code: u16, body: &str) -> String {
     if trimmed.is_empty() {
         format!("HTTP {code}")
     } else {
-        trimmed.to_owned()
+        redact_secrets(trimmed)
     }
 }
 
 fn error_message(err: &Value) -> String {
-    err.get("message")
+    let raw = err
+        .get("message")
         .and_then(|m| m.as_str())
         .map(str::to_owned)
-        .unwrap_or_else(|| err.to_string())
+        .unwrap_or_else(|| err.to_string());
+    redact_secrets(&raw)
+}
+
+/// Strip Bearer tokens, `sk-` keys, and Authorization values from error text.
+fn redact_secrets(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let lower = input.to_ascii_lowercase();
+    let mut i = 0;
+    while i < input.len() {
+        if starts_at(&lower, i, "authorization") && is_ascii_word_at(input, i, 13) {
+            out.push_str(&input[i..i + 13]);
+            i += 13;
+            i = copy_separators(input, i, &mut out);
+            continue;
+        }
+        if starts_at(&lower, i, "bearer") && is_ascii_word_at(input, i, 6) {
+            out.push_str(&input[i..i + 6]);
+            i += 6;
+            i = copy_whitespace(input, i, &mut out);
+            if i < input.len() {
+                out.push_str("[REDACTED]");
+                i = skip_token(input, i);
+            }
+            continue;
+        }
+        if input[i..].starts_with("sk-") {
+            out.push_str("sk-[REDACTED]");
+            i = skip_secret_key(input, i + 3);
+            continue;
+        }
+        let ch = input[i..].chars().next().expect("i is a char boundary");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn starts_at(lower: &str, i: usize, needle: &str) -> bool {
+    lower.get(i..).is_some_and(|s| s.starts_with(needle))
+}
+
+fn is_ascii_word_at(input: &str, i: usize, len: usize) -> bool {
+    let before_ok = i == 0 || !input.as_bytes()[i - 1].is_ascii_alphanumeric();
+    let after = i + len;
+    let after_ok = input
+        .as_bytes()
+        .get(after)
+        .is_none_or(|b| !b.is_ascii_alphanumeric());
+    before_ok && after_ok
+}
+
+fn copy_separators(input: &str, mut i: usize, out: &mut String) -> usize {
+    while i < input.len() {
+        let ch = input[i..].chars().next().expect("i is a char boundary");
+        if ch == ':' || ch.is_ascii_whitespace() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+fn copy_whitespace(input: &str, mut i: usize, out: &mut String) -> usize {
+    while i < input.len() {
+        let ch = input[i..].chars().next().expect("i is a char boundary");
+        if ch.is_ascii_whitespace() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+fn skip_token(input: &str, mut i: usize) -> usize {
+    while i < input.len() {
+        let ch = input[i..].chars().next().expect("i is a char boundary");
+        if ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | ',' | '}' | ']' | '&') {
+            break;
+        }
+        i += ch.len_utf8();
+    }
+    i
+}
+
+fn skip_secret_key(input: &str, mut i: usize) -> usize {
+    while i < input.len() {
+        let ch = input[i..].chars().next().expect("i is a char boundary");
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    i
 }
 
 fn chat_body(req: &ProbeRequest, stream: bool) -> Value {
@@ -686,6 +785,35 @@ mod tests {
         assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
         let text = err.to_string();
         assert!(!text.contains(SECRET), "{text}");
+    }
+
+    #[test]
+    fn redact_secrets_strips_bearer_sk_and_authorization() {
+        let raw = "Authorization: Bearer SECRET leaked sk-live-secret";
+        let redacted = redact_secrets(raw);
+        assert!(!redacted.contains("SECRET"), "{redacted}");
+        assert!(!redacted.contains("sk-live-secret"), "{redacted}");
+        assert!(!redacted.contains("live-secret"), "{redacted}");
+        assert!(redacted.contains("Authorization"), "{redacted}");
+        assert!(redacted.contains("Bearer [REDACTED]"), "{redacted}");
+        assert!(redacted.contains("sk-[REDACTED]"), "{redacted}");
+    }
+
+    #[tokio::test]
+    async fn chat_401_redacts_bearer_and_sk_from_body() {
+        let base = spawn_http(
+            401,
+            "Unauthorized",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"Bearer SECRET sk-live-secret"}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("401");
+        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(!text.contains("sk-live-secret"), "{text}");
+        assert!(!text.contains("live-secret"), "{text}");
+        assert!(text.matches("authentication error:").count() == 1, "{text}");
     }
 
     #[tokio::test]

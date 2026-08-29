@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ProbeError;
-use crate::types::{CapabilityLevel, CapabilityProfile};
+use crate::types::{CapabilityLevel, CapabilityProfile, TOOL_PROBE_NAMES};
 
 /// How long a cached entry remains valid (30 days in seconds).
 pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
@@ -69,7 +69,10 @@ impl ProbeCache {
         }
         let contents = std::fs::read_to_string(path)?;
         let mut cache: Self = serde_json::from_str(&contents)?;
-        cache.migrate_stale_tool_scores();
+        if cache.migrate_stale_tool_scores() {
+            // In-memory only was not enough: the next process would reload Medium.
+            let _ = cache.save(path);
+        }
         Ok(cache)
     }
 
@@ -155,26 +158,25 @@ impl ProbeCache {
     /// scoring fix. Tool-related probes that failed because the provider
     /// returned "does not support tools" were incorrectly scored as Medium
     /// (0.5) instead of Weak (0.0) by the old `probe_or_default`.
-    fn migrate_stale_tool_scores(&mut self) {
+    ///
+    /// Returns true when any row was rewritten so [`Self::load`] can persist.
+    fn migrate_stale_tool_scores(&mut self) -> bool {
+        let mut changed = false;
         for entry in self.profiles.values_mut() {
-            let p = &mut entry.profile;
-            let tool_probes = [
-                &mut p.tool_calling,
-                &mut p.complex_tool_calling,
-                &mut p.nested_arguments,
-                &mut p.tool_selection,
-                &mut p.streaming_tool_calls,
-                &mut p.parallel_tool_scale,
-            ];
-            for probe in tool_probes {
+            for name in TOOL_PROBE_NAMES {
+                let Some(probe) = entry.profile.dimension_result_mut(name) else {
+                    continue;
+                };
                 if probe.details.contains("does not support tools")
                     && probe.level != CapabilityLevel::Weak
                 {
                     probe.level = CapabilityLevel::Weak;
                     probe.score = 0.0;
+                    changed = true;
                 }
             }
         }
+        changed
     }
 
     /// Cache key for model+provider+effort+suite.
