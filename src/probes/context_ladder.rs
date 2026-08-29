@@ -127,7 +127,18 @@ fn recalls_all_facts(text: &str) -> bool {
     let lower = text.to_lowercase();
     lower.contains(&FACT_WAREHOUSE.to_lowercase())
         && lower.contains(&FACT_PROTOCOL.to_lowercase())
-        && lower.contains(FACT_HEARTBEAT)
+        && recalls_heartbeat(&lower)
+}
+
+fn recalls_heartbeat(lower: &str) -> bool {
+    if lower.contains(FACT_HEARTBEAT) || lower.contains("2,840") {
+        return true;
+    }
+    let compact: String = lower
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != ',')
+        .collect();
+    compact.contains(FACT_HEARTBEAT)
 }
 
 fn estimate_tokens(chars: usize) -> u32 {
@@ -283,6 +294,14 @@ mod tests {
     fn rung_request_meets_token_target() {
         let req = build_rung_request("test-model", 4096);
         assert_is_4k(estimate_request_tokens(&req));
+    }
+
+    #[test]
+    fn recalls_heartbeat_accepts_comma_form() {
+        let ok = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2,840 ms");
+        assert!(recalls_all_facts(&ok));
+        let miss = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2000");
+        assert!(!recalls_all_facts(&miss));
     }
 
     #[test]

@@ -171,6 +171,8 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
     let has_list_dir = calls
         .iter()
         .any(|c| c.name == "list_dir" && path_is_string(c));
+    let has_read_name = calls.iter().any(|c| c.name == "read_file");
+    let has_list_name = calls.iter().any(|c| c.name == "list_dir");
 
     let any_valid = calls.iter().any(|c| {
         [
@@ -190,6 +192,11 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
                 "Two correct tool calls with proper arguments ({} total)",
                 calls.len()
             ),
+        )
+    } else if has_read_name && has_list_name {
+        (
+            0.5,
+            "Both expected tools present but arguments imprecise".to_string(),
         )
     } else if has_read_file || has_list_dir {
         let found = if has_read_file {
@@ -677,6 +684,18 @@ mod tests {
         let result = probe_complex_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn complex_tool_calling_medium_when_both_names_have_numeric_path() {
+        let response = multi_tool_call_response(vec![
+            call("call_1", "read_file", serde_json::json!({"path": 1})),
+            call("call_2", "list_dir", serde_json::json!({"path": 2})),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_complex_tool_calling(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.5);
     }
 
     #[tokio::test]

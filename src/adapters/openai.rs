@@ -534,13 +534,18 @@ fn parse_chat_response(value: &Value) -> Result<ProbeResponse, ProbeError> {
         .ok_or_else(|| ProbeError::Llm("chat completion missing choices".into()))?;
     let message = choice.get("message").unwrap_or(choice);
     let text = extract_text(message.get("content"));
-    let tool_calls = message
+    let mut tool_calls = message
         .get("tool_calls")
         .map(parse_tool_calls)
         .unwrap_or_default();
+    if tool_calls.is_empty() {
+        if let Some(call) = parse_legacy_function(message) {
+            tool_calls.push(call);
+        }
+    }
     let finish = match choice.get("finish_reason").and_then(|v| v.as_str()) {
         Some("stop") => ProbeFinish::Stop,
-        Some("tool_calls") => ProbeFinish::ToolCalls,
+        Some("tool_calls") | Some("function_call") => ProbeFinish::ToolCalls,
         Some("length") => ProbeFinish::Length,
         Some(_) => ProbeFinish::Other,
         None if !tool_calls.is_empty() => ProbeFinish::ToolCalls,
@@ -596,6 +601,26 @@ fn extract_text(content: Option<&Value>) -> String {
             .join(""),
         _ => String::new(),
     }
+}
+
+fn parse_legacy_function(message: &Value) -> Option<ProbeToolCall> {
+    let func = message
+        .get("function")
+        .filter(|f| f.is_object())
+        .or_else(|| message.get("function_call").filter(|f| f.is_object()))?;
+    let name = func
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+    if name.is_empty() {
+        return None;
+    }
+    Some(ProbeToolCall {
+        id: String::new(),
+        name,
+        arguments: parse_arguments(func.get("arguments")),
+    })
 }
 
 fn parse_tool_calls(value: &Value) -> Vec<ProbeToolCall> {
@@ -773,7 +798,7 @@ fn end_open_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{ProbeRequest, ProbeStreamChunk, ProbeTool};
+    use crate::client::{ProbeFinish, ProbeRequest, ProbeStreamChunk, ProbeTool};
     use futures::StreamExt;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -972,6 +997,51 @@ mod tests {
         });
         let resp = parse_chat_response(&value).expect("parse");
         assert!(resp.usage.is_none());
+    }
+
+    #[test]
+    fn parse_chat_response_legacy_function_is_tool_call() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{\"path\":\"/tmp/a\"}"
+                    }
+                },
+                "finish_reason": "function_call"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert_eq!(resp.finish, ProbeFinish::ToolCalls);
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].name, "read_file");
+        assert_eq!(
+            resp.tool_calls[0]
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str()),
+            Some("/tmp/a")
+        );
+    }
+
+    #[test]
+    fn parse_chat_response_function_call_field_is_tool_call() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "function_call": {
+                        "name": "list_dir",
+                        "arguments": "{\"path\":\"/tmp\"}"
+                    }
+                },
+                "finish_reason": "function_call"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert_eq!(resp.tool_calls[0].name, "list_dir");
+        assert_eq!(resp.finish, ProbeFinish::ToolCalls);
     }
 
     fn chat_req(model: &str) -> ProbeRequest {
