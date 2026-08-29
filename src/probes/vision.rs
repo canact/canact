@@ -73,13 +73,18 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("unable")
         || lower.contains("don't")
         || lower.contains("no image")
-        || lower.contains("no text");
-    // Partial reads name glyphs. Color-only words often appear in
-    // refusals ("cannot process this black and white image").
-    let saw_glyphs = has_surface_word(&lower, "letter")
-        || has_surface_word(&lower, "letters")
-        || has_surface_word(&lower, "character")
-        || has_surface_word(&lower, "characters");
+        || lower.contains("no text")
+        || lower.contains("no letter")
+        || lower.contains("no character");
+    // Partial reads name glyphs. "no letters" is a refusal, not a read.
+    // Do not gate on `refused`: "I see letters but cannot make them out"
+    // is still Medium.
+    let negated_glyphs = lower.contains("no letter") || lower.contains("no character");
+    let saw_glyphs = !negated_glyphs
+        && (has_surface_word(&lower, "letter")
+            || has_surface_word(&lower, "letters")
+            || has_surface_word(&lower, "character")
+            || has_surface_word(&lower, "characters"));
     // Word tokens only. "whitespace" is not "white"; "context" is not "text".
     let processed_surface = has_surface_word(&lower, "pattern")
         || has_surface_word(&lower, "pixel")
@@ -181,6 +186,21 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_no_letters_visible() {
+        let llm = MockLlm {
+            response: text_response("There are no letters visible"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "no-letters refusal must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]
