@@ -291,6 +291,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn advertised_8192_tries_4k_and_8k_not_16k() {
+        let llm = LadderMock::new(Some(8192), None);
+        let got = probe_effective_context_tokens(&llm, false).await.unwrap();
+        assert_eq!(got, Some(8192));
+        let calls = llm.recorded();
+        assert_eq!(calls.len(), 2);
+        assert_is_4k(calls[0]);
+        assert_is_8k(calls[1]);
+        assert!(
+            calls.iter().all(|&tokens| tokens < 16384),
+            "must not issue a 16k rung, got {calls:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn advertised_128k_with_4k_fail_is_none_not_advertised() {
         let llm = LadderMock::new(Some(128000), Some(4096));
         let got = probe_effective_context_tokens(&llm, false).await.unwrap();

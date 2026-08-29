@@ -436,3 +436,17 @@ fn host_policy_envelope_omits_bline_best_edit_format() {
     assert_eq!(value["scoreScale"]["strongMin"], 0.8);
     assert_eq!(value["scoreScale"]["mediumMin"], 0.4);
 }
+
+#[test]
+fn host_policy_envelope_includes_effective_context_tokens() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Strong,
+    );
+    profile.effective_context_tokens = Some(8192);
+    let value = profile.host_policy_envelope();
+    assert!(value.get("effectiveContextTokens").is_some(), "{value}");
+    assert!(value["effectiveContextTokens"].is_number(), "{value}");
+    assert_eq!(value["effectiveContextTokens"], 8192);
+}

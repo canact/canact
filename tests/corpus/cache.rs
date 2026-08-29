@@ -151,6 +151,20 @@ fn put_then_load_round_trip() {
 }
 
 #[test]
+fn put_then_load_preserves_effective_context_tokens() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.effective_context_tokens = Some(8192);
+    cache.put(profile);
+    cache.save(&path).expect("save");
+    let loaded = ProbeCache::load(&path).expect("load");
+    let got = loaded.get("m", "p").expect("hit after reload");
+    assert_eq!(got.effective_context_tokens, Some(8192));
+}
+
+#[test]
 fn load_missing_file_is_empty() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("missing.json");

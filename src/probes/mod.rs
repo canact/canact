@@ -134,7 +134,8 @@ pub(crate) mod test_support {
     use std::sync::Mutex;
 
     use crate::client::{
-        ProbeClient, ProbeFinish, ProbeRequest, ProbeResponse, ProbeStreamChunk, ProbeToolCall,
+        ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeRequest, ProbeResponse,
+        ProbeRole, ProbeStreamChunk, ProbeToolCall,
     };
     use crate::error::ProbeError;
     use futures::Stream;
@@ -239,6 +240,66 @@ pub(crate) mod test_support {
             tool_calls: calls,
             finish: ProbeFinish::ToolCalls,
         }
+    }
+
+    pub(crate) struct RecordingMock {
+        inner: MockLlm,
+        pub(crate) requests: Mutex<Vec<ProbeRequest>>,
+    }
+
+    impl RecordingMock {
+        pub(crate) fn new(response: ProbeResponse) -> Self {
+            Self {
+                inner: MockLlm { response },
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ProbeClient for RecordingMock {
+        fn chat(
+            &self,
+            req: ProbeRequest,
+        ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
+            self.requests.lock().expect("lock").push(req.clone());
+            self.inner.chat(req)
+        }
+
+        fn stream_chat(
+            &self,
+            req: ProbeRequest,
+        ) -> impl Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+            self.requests.lock().expect("lock").push(req.clone());
+            self.inner.stream_chat(req)
+        }
+
+        fn model_id(&self) -> &str {
+            self.inner.model_id()
+        }
+
+        fn provider(&self) -> &str {
+            self.inner.provider()
+        }
+    }
+
+    pub(crate) fn request_user_text(req: &ProbeRequest) -> String {
+        let mut out = String::new();
+        for message in &req.messages {
+            if message.role != ProbeRole::User {
+                continue;
+            }
+            match &message.content {
+                ProbeContent::Text(text) => out.push_str(text),
+                ProbeContent::Parts(parts) => {
+                    for part in parts {
+                        if let ProbeContentPart::Text { text } = part {
+                            out.push_str(text);
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 }
 

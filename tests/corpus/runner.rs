@@ -437,6 +437,7 @@ async fn auth_aborts_run_detailed_and_does_not_persist() {
 enum LadderReply {
     Recall,
     Transient,
+    Auth,
 }
 
 struct ContextLadderLlm {
@@ -473,6 +474,7 @@ impl ProbeClient for ContextLadderLlm {
                     finish: ProbeFinish::Stop,
                 }),
                 LadderReply::Transient => Err(ProbeError::Transient("timeout".into())),
+                LadderReply::Auth => Err(ProbeError::Auth("bad".into())),
             };
             futures::future::Either::Left(std::future::ready(result))
         } else {
@@ -590,4 +592,36 @@ async fn ladder_transient_leaves_none_and_uncacheable() {
         !run.cacheable,
         "transient ladder must not be a 30-day cache hit"
     );
+}
+
+#[tokio::test]
+async fn ladder_auth_aborts_run_detailed_and_does_not_persist() {
+    let (llm, requests) = ContextLadderLlm::wrap(MockLlm::new("m", "p"), LadderReply::Auth);
+    let runner = ProbeRunner::new(llm);
+    let result = runner.run_detailed().await;
+    match result {
+        Err(ProbeError::Auth(msg)) => assert_eq!(msg, "bad"),
+        other => panic!("expected Auth abort, got {other:?}"),
+    }
+
+    let rec = requests.lock().expect("lock");
+    assert!(
+        rec.iter().any(|req| !is_ladder_request(req)),
+        "non-ladder probes must still run"
+    );
+    assert!(
+        rec.iter().any(is_ladder_request),
+        "ladder chat must return Auth after non-ladder probes succeed"
+    );
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = runner.persist(&mut cache, &path).expect("persist");
+    assert!(!wrote, "ladder auth abort must not persist");
+    assert!(
+        !path.exists(),
+        "ladder auth abort must not write a cache file"
+    );
+    assert!(cache.get("m", "p").is_none(), "last_run must stay empty");
 }

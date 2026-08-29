@@ -126,11 +126,18 @@ mod tests {
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
 
-    #[test]
-    fn xml_tool_calling_prompt_is_forceful() {
-        assert!(FORCEFUL_READ_FILE.contains("Immediately call"));
-        assert!(FORCEFUL_READ_FILE.contains("Do not describe what you would do"));
-        assert!(FORCEFUL_READ_FILE.contains("Do not ask for confirmation"));
+    #[tokio::test]
+    async fn xml_tool_calling_prompt_is_forceful() {
+        let llm = RecordingMock::new(text_response(
+            "<tool_call>\n<name>read_file</name>\n<arguments>{\"path\": \"/tmp/example.txt\"}</arguments>\n</tool_call>",
+        ));
+        let _ = probe_xml_tool_calling(&llm).await.unwrap();
+        let rec = llm.requests.lock().expect("lock");
+        assert_eq!(rec.len(), 1);
+        let user = request_user_text(&rec[0]);
+        assert!(user.contains("Immediately call"), "{user}");
+        assert!(user.contains("Do not describe what you would do"), "{user}");
+        assert!(user.contains("Do not ask for confirmation"), "{user}");
     }
 
     #[tokio::test]

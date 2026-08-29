@@ -134,29 +134,34 @@ fn prefix_bytes(s: &str, max: usize) -> &str {
 mod tests {
     use super::*;
     use crate::client::{ProbeResponse, ProbeStreamChunk};
+    use crate::probes::test_support::request_user_text;
     use futures::Stream;
 
     struct StreamMockLlm {
         chunks: std::sync::Mutex<Option<Vec<Result<ProbeStreamChunk, ProbeError>>>>,
+        requests: std::sync::Mutex<Vec<ProbeRequest>>,
     }
 
     impl StreamMockLlm {
         fn new(chunks: Vec<Result<ProbeStreamChunk, ProbeError>>) -> Self {
             Self {
                 chunks: std::sync::Mutex::new(Some(chunks)),
+                requests: std::sync::Mutex::new(Vec::new()),
             }
         }
     }
 
     impl ProbeClient for StreamMockLlm {
-        async fn chat(&self, _req: ProbeRequest) -> Result<ProbeResponse, ProbeError> {
+        async fn chat(&self, req: ProbeRequest) -> Result<ProbeResponse, ProbeError> {
+            self.requests.lock().expect("lock").push(req);
             Err(ProbeError::Transient("not used".into()))
         }
 
         fn stream_chat(
             &self,
-            _req: ProbeRequest,
+            req: ProbeRequest,
         ) -> impl Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+            self.requests.lock().expect("lock").push(req);
             let chunks = self.chunks.lock().unwrap().take().unwrap_or_default();
             futures::stream::iter(chunks)
         }
@@ -170,11 +175,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn streaming_prompt_is_forceful() {
-        assert!(FORCEFUL_READ_FILE.contains("Immediately call"));
-        assert!(FORCEFUL_READ_FILE.contains("Do not describe what you would do"));
-        assert!(FORCEFUL_READ_FILE.contains("Do not ask for confirmation"));
+    #[tokio::test]
+    async fn streaming_prompt_is_forceful() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let _ = probe_streaming_tool_calls(&llm).await.unwrap();
+        let rec = llm.requests.lock().expect("lock");
+        assert_eq!(rec.len(), 1);
+        let user = request_user_text(&rec[0]);
+        assert!(user.contains("Immediately call"), "{user}");
+        assert!(user.contains("Do not describe what you would do"), "{user}");
+        assert!(user.contains("Do not ask for confirmation"), "{user}");
     }
 
     #[tokio::test]
