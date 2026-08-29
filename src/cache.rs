@@ -90,7 +90,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (does not open can_use_tools).
 /// v33: SEARCH/REPLACE Strong ignores `//` comment tokens
 ///      (`fn greet(` / Hello in comments is not a rename).
-pub const PROBE_SUITE_VERSION: u32 = 33;
+/// v34: xml_tool_calling empty or whitespace `<name>` is Weak
+///      (does not open can_use_tools).
+pub const PROBE_SUITE_VERSION: u32 = 34;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

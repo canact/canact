@@ -55,7 +55,9 @@ Available tools:
     let (score, details) = if has_tool_call_open && has_tool_call_close {
         match parse_xml_tool_block(&text) {
             Some((name, args)) => {
-                if is_xml_format_card_echo(&name, &args) {
+                if name.is_empty() {
+                    (0.0, "XML tool call has empty name".to_string())
+                } else if is_xml_format_card_echo(&name, &args) {
                     (
                         0.0,
                         "Echoed the XML format card, not a tool call".to_string(),
@@ -281,6 +283,25 @@ mod tests {
                 "empty/whitespace path must not be Strong: {args}"
             );
             assert_eq!(result.score, 0.7, "imprecise XML path: {args}");
+        }
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_weak_for_empty_or_whitespace_name() {
+        for name in ["", "   "] {
+            let response_text = format!(
+                "<tool_call>\n<name>{name}</name>\n<arguments>{{\"path\": \"/tmp/example.txt\"}}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "empty XML name must not open can_use_tools: {name:?} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "name={name:?}");
         }
     }
 
