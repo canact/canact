@@ -2,9 +2,10 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use canact::{
-    CapabilityLevel, CapabilityProfile, CatalogPriors, MockLlm, ProbeCache, ProbeClient,
-    ProbeContent, ProbeContentPart, ProbeError, ProbeFinish, ProbeRequest, ProbeResponse,
-    ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool, classify, resolve_probe,
+    CapabilityLevel, CapabilityProfile, CatalogPriors, DIMENSION_NAMES, MockLlm, ProbeCache,
+    ProbeClient, ProbeContent, ProbeContentPart, ProbeError, ProbeFinish, ProbeRequest,
+    ProbeResponse, ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool, classify,
+    resolve_probe,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -373,6 +374,25 @@ async fn cheap_sets_expensive_dims_to_free_tier_skip() {
 }
 
 const NOT_PROBED: &str = "Not probed (cached before this probe existed)";
+
+#[tokio::test]
+async fn runner_returns_complete_profile() {
+    let profile = ProbeRunner::new(MockLlm::new("m", "p"))
+        .run()
+        .await
+        .expect("run");
+    assert_eq!(DIMENSION_NAMES.len(), 20);
+    for &name in DIMENSION_NAMES {
+        let result = profile
+            .dimension_result(name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(result.name, name, "{name}");
+        assert_ne!(
+            result.details, NOT_PROBED,
+            "{name} must run instead of named_default"
+        );
+    }
+}
 
 #[tokio::test]
 async fn run_fills_edit_json_instruction_probes() {
