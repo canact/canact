@@ -163,8 +163,7 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
     let response = llm.chat(request).await?;
     let calls = &response.tool_calls;
 
-    let path_is_string =
-        |c: &ProbeToolCall| c.arguments.get("path").and_then(|v| v.as_str()).is_some();
+    let path_is_string = |c: &ProbeToolCall| nonempty_string_arg(&c.arguments, "path");
     let has_read_file = calls
         .iter()
         .any(|c| c.name == "read_file" && path_is_string(c));
@@ -251,8 +250,10 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
 /// and asks the model to apply two edits.
 ///
 /// Scoring:
-/// - `1.0` - `file_path` is a string and `edits` is an array of 2+ objects with string fields
-/// - `0.5` - `edits` is a single object, only 1 valid edit, or `file_path` is not a string
+/// - `1.0` - `file_path` is a nonempty string and `edits` is an array of 2+
+///   objects with nonempty string fields
+/// - `0.5` - `edits` is a single object, only 1 valid edit, or `file_path`
+///   is not a nonempty string
 /// - `0.0` - missing `file_path`/`edits`, or `edits` is a string/number
 pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let edit_file = tool(
@@ -299,14 +300,16 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
             if file_path.is_none() || edits.is_none() {
                 (0.0, "Missing required key file_path or edits".to_string())
             } else {
-                let file_path_is_string = file_path.and_then(|v| v.as_str()).is_some();
+                let file_path_is_string = nonempty_string_arg(&call.arguments, "file_path");
                 match edits {
                     Some(serde_json::Value::Array(arr)) => {
                         let valid_edits = arr
                             .iter()
                             .filter(|e| {
-                                e.get("old_text").and_then(|v| v.as_str()).is_some()
-                                    && e.get("new_text").and_then(|v| v.as_str()).is_some()
+                                e.as_object().is_some_and(|m| {
+                                    nonempty_string_arg(m, "old_text")
+                                        && nonempty_string_arg(m, "new_text")
+                                })
                             })
                             .count();
 
@@ -377,8 +380,9 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
 /// preferred tool (1.0 points) and an acceptable alternative (0.5 points).
 ///
 /// Scoring:
-/// - Task 1 (set value in config.toml): `doc_set` with string path+selector (1.0),
-///   name-only `doc_set` or `edit_file` (0.5)
+/// - Task 1 (set value in config.toml): `doc_set` with nonempty string
+///   path+selector and a present non-null `value` (1.0), name-only
+///   `doc_set` or `edit_file` (0.5)
 /// - Task 2 (find "deprecated" in src/): `search` with string pattern (1.0),
 ///   name-only `search` or `run_command` (0.5)
 /// - Task 3 (replace markdown section): `md_replace_section` with string
@@ -518,7 +522,21 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
         }
     };
 
-    let t1_score = preferred("doc_set", &["path", "selector"], "edit_file");
+    let t1_precise = |c: &ProbeToolCall| {
+        nonempty_string_arg(&c.arguments, "path")
+            && nonempty_string_arg(&c.arguments, "selector")
+            && c.arguments.get("value").is_some_and(|v| !v.is_null())
+    };
+    let t1_score = if calls.iter().any(|c| c.name == "doc_set" && t1_precise(c)) {
+        1.0
+    } else if calls
+        .iter()
+        .any(|c| c.name == "doc_set" || c.name == "edit_file")
+    {
+        0.5
+    } else {
+        0.0
+    };
     points += t1_score;
     task_details.push(format!("task1={t1_score}"));
 
@@ -724,6 +742,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complex_tool_calling_not_strong_when_path_is_empty_or_whitespace() {
+        for path in ["", " "] {
+            let response = multi_tool_call_response(vec![
+                call("call_1", "read_file", serde_json::json!({"path": path})),
+                call("call_2", "list_dir", serde_json::json!({"path": path})),
+            ]);
+            let result = probe_complex_tool_calling(&MockLlm { response })
+                .await
+                .unwrap();
+            assert_ne!(result.level, CapabilityLevel::Strong, "path={path:?}");
+            assert_eq!(result.score, 0.5, "path={path:?}");
+            assert_eq!(result.level, CapabilityLevel::Medium, "path={path:?}");
+        }
+    }
+
+    #[tokio::test]
     async fn complex_tool_calling_not_strong_when_path_is_number() {
         let response = multi_tool_call_response(vec![
             call("call_1", "read_file", serde_json::json!({"path": 1})),
@@ -827,6 +861,50 @@ mod tests {
         let result = probe_nested_arguments(&llm).await.unwrap();
         assert_ne!(result.level, CapabilityLevel::Strong);
         assert!(result.score <= 0.5);
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_not_strong_when_file_path_is_empty_or_whitespace() {
+        for file_path in ["", " "] {
+            let response = multi_tool_call_response(vec![call(
+                "call_1",
+                "edit_file",
+                serde_json::json!({
+                    "file_path": file_path,
+                    "edits": [
+                        {"old_text": "Hello", "new_text": "Hi"},
+                        {"old_text": "World", "new_text": "Earth"}
+                    ]
+                }),
+            )]);
+            let result = probe_nested_arguments(&MockLlm { response }).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "file_path={file_path:?}"
+            );
+            assert!(result.score <= 0.5, "file_path={file_path:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_not_strong_when_edit_strings_are_empty_or_whitespace() {
+        for text in ["", " "] {
+            let response = multi_tool_call_response(vec![call(
+                "call_1",
+                "edit_file",
+                serde_json::json!({
+                    "file_path": "/tmp/app.py",
+                    "edits": [
+                        {"old_text": text, "new_text": text},
+                        {"old_text": text, "new_text": text}
+                    ]
+                }),
+            )]);
+            let result = probe_nested_arguments(&MockLlm { response }).await.unwrap();
+            assert_ne!(result.level, CapabilityLevel::Strong, "text={text:?}");
+            assert!(result.score <= 0.5, "text={text:?}");
+        }
     }
 
     #[tokio::test]
@@ -948,6 +1026,45 @@ mod tests {
         let result = probe_tool_selection(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn tool_selection_not_strong_when_doc_set_omits_or_nulls_value() {
+        let task1_args = [
+            serde_json::json!({"path": "config.toml", "selector": "port"}),
+            serde_json::json!({"path": "config.toml", "selector": "port", "value": null}),
+        ];
+        for args in task1_args {
+            let response = multi_tool_call_response(vec![
+                call("call_1", "doc_set", args),
+                call(
+                    "call_2",
+                    "search",
+                    serde_json::json!({"pattern": "deprecated", "directory": "src/"}),
+                ),
+                call(
+                    "call_3",
+                    "md_replace_section",
+                    serde_json::json!({
+                        "path": "README.md",
+                        "heading": "Installation",
+                        "content": "new instructions"
+                    }),
+                ),
+            ]);
+            let result = probe_tool_selection(&MockLlm { response }).await.unwrap();
+            assert!(result.score < 1.0, "{}", result.details);
+            assert!(
+                result.details.contains("task1=0.5"),
+                "doc_set without a non-null value must be 0.5: {}",
+                result.details
+            );
+            assert!(
+                (result.score - 2.5 / 3.0).abs() < 0.01,
+                "precise task2+task3 with imprecise task1: {}",
+                result.score
+            );
+        }
     }
 
     #[tokio::test]
