@@ -432,3 +432,162 @@ async fn auth_aborts_run_detailed_and_does_not_persist() {
     assert!(!path.exists(), "auth abort must not write a cache file");
     assert!(cache.get("m", "p").is_none());
 }
+
+#[derive(Clone, Copy)]
+enum LadderReply {
+    Recall,
+    Transient,
+}
+
+struct ContextLadderLlm {
+    inner: MockLlm,
+    requests: Arc<Mutex<Vec<ProbeRequest>>>,
+    ladder: LadderReply,
+}
+
+impl ContextLadderLlm {
+    fn wrap(inner: MockLlm, ladder: LadderReply) -> (Self, Arc<Mutex<Vec<ProbeRequest>>>) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                inner,
+                requests: requests.clone(),
+                ladder,
+            },
+            requests,
+        )
+    }
+}
+
+impl ProbeClient for ContextLadderLlm {
+    fn chat(
+        &self,
+        req: ProbeRequest,
+    ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
+        self.requests.lock().expect("lock").push(req.clone());
+        if is_ladder_request(&req) {
+            let result = match self.ladder {
+                LadderReply::Recall => Ok(ProbeResponse {
+                    text: "WH-4481\nproto-9.2.11\n2840".to_owned(),
+                    tool_calls: Vec::new(),
+                    finish: ProbeFinish::Stop,
+                }),
+                LadderReply::Transient => Err(ProbeError::Transient("timeout".into())),
+            };
+            futures::future::Either::Left(std::future::ready(result))
+        } else {
+            futures::future::Either::Right(self.inner.chat(req))
+        }
+    }
+
+    fn stream_chat(
+        &self,
+        req: ProbeRequest,
+    ) -> impl futures::Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+        self.requests.lock().expect("lock").push(req.clone());
+        self.inner.stream_chat(req)
+    }
+
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    fn provider(&self) -> &str {
+        self.inner.provider()
+    }
+
+    fn catalog(&self) -> CatalogPriors {
+        self.inner.catalog()
+    }
+}
+
+fn request_plain_text(req: &ProbeRequest) -> String {
+    let mut out = String::new();
+    for message in &req.messages {
+        match &message.content {
+            ProbeContent::Text(text) => out.push_str(text),
+            ProbeContent::Parts(parts) => {
+                for part in parts {
+                    if let ProbeContentPart::Text { text } = part {
+                        out.push_str(text);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn is_ladder_request(req: &ProbeRequest) -> bool {
+    request_plain_text(req).contains("inventory warehouse code")
+}
+
+fn request_token_estimate(req: &ProbeRequest) -> u32 {
+    u32::try_from((request_plain_text(req).chars().count() / 4).max(1)).unwrap_or(u32::MAX)
+}
+
+fn ladder_requests(recorded: &[ProbeRequest]) -> Vec<&ProbeRequest> {
+    recorded
+        .iter()
+        .filter(|req| is_ladder_request(req))
+        .collect()
+}
+
+#[tokio::test]
+async fn full_run_populates_effective_context_tokens() {
+    let (llm, requests) = ContextLadderLlm::wrap(MockLlm::new("m", "p"), LadderReply::Recall);
+    let profile = ProbeRunner::new(llm).run().await.expect("run");
+    assert_eq!(profile.effective_context_tokens, Some(16384));
+    let rec = requests.lock().expect("lock");
+    let ladder = ladder_requests(&rec);
+    assert_eq!(ladder.len(), 3);
+    let t0 = request_token_estimate(ladder[0]);
+    let t1 = request_token_estimate(ladder[1]);
+    let t2 = request_token_estimate(ladder[2]);
+    assert!((4096..8192).contains(&t0), "{t0}");
+    assert!((8192..16384).contains(&t1), "{t1}");
+    assert!(t2 >= 16384, "{t2}");
+}
+
+#[tokio::test]
+async fn cheap_run_attempts_at_most_4k_rung() {
+    for throttled in [true, false] {
+        let (llm, requests) = ContextLadderLlm::wrap(MockLlm::new("m", "p"), LadderReply::Recall);
+        let profile = if throttled {
+            ProbeRunner::new_throttled(llm).run().await.expect("run")
+        } else {
+            ProbeRunner::new(llm).cheap().run().await.expect("run")
+        };
+        assert_eq!(
+            profile.effective_context_tokens,
+            Some(4096),
+            "throttled={throttled}"
+        );
+        assert_eq!(
+            profile.context_faithfulness.details, EXPENSIVE_SKIP,
+            "cheap must still skip context_faithfulness"
+        );
+        let rec = requests.lock().expect("lock");
+        let ladder = ladder_requests(&rec);
+        assert_eq!(ladder.len(), 1, "throttled={throttled}");
+        let tokens = request_token_estimate(ladder[0]);
+        assert!(
+            (4096..8192).contains(&tokens),
+            "throttled={throttled} tokens={tokens}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn ladder_transient_leaves_none_and_uncacheable() {
+    let (llm, _) = ContextLadderLlm::wrap(MockLlm::new("m", "p"), LadderReply::Transient);
+    let run = ProbeRunner::new(llm)
+        .run_detailed()
+        .await
+        .expect("run_detailed");
+    assert_eq!(run.profile.effective_context_tokens, None);
+    assert!(
+        !run.cacheable,
+        "transient ladder must not be a 30-day cache hit"
+    );
+}

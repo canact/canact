@@ -46,8 +46,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v6() {
-    assert_eq!(PROBE_SUITE_VERSION, 6);
+fn cache_key_format_is_model_provider_unset_v7() {
+    assert_eq!(PROBE_SUITE_VERSION, 7);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -55,7 +55,7 @@ fn cache_key_format_is_model_provider_unset_v6() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v6");
+    assert_eq!(k, "model|provider|unset|v7");
 }
 
 #[test]
@@ -98,12 +98,12 @@ fn get_misses_when_effort_differs() {
 #[test]
 fn get_misses_when_suite_differs() {
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(sample_profile(), "unset", 1);
+    cache.put_with_settings(sample_profile(), "unset", 6);
     assert!(
         cache
             .get_with_settings("m", "p", "unset", PROBE_SUITE_VERSION)
             .is_none(),
-        "suite v6 must not hit v1 cache entry"
+        "suite v7 must not hit v6 cache entry"
     );
 }
 
