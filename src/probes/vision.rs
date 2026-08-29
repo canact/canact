@@ -75,7 +75,8 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("can't")
         || lower.contains("unable")
         || lower.contains("don't")
-        || lower.contains("no image");
+        || lower.contains("no image")
+        || lower.contains("no text");
     // Partial reads name glyphs. Color-only words often appear in
     // refusals ("cannot process this black and white image").
     let saw_glyphs = lower.contains("letter") || lower.contains("character");
@@ -153,6 +154,21 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_no_text_visible() {
+        let llm = MockLlm {
+            response: text_response("There is no text visible"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "no-text refusal must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

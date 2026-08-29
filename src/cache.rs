@@ -58,7 +58,11 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      search_replace / unified_diff Strong require the edit bodies
 ///      (not whole-response contains) to hold greet/Hello and
 ///      welcome/Welcome.
-pub const PROBE_SUITE_VERSION: u32 = 21;
+/// v22: json_output Strong requires word=hello, length=5,
+///      reversed=olleh (prompt example is not Strong);
+///      stream ignores leftover function_call when tool_calls is
+///      present; vision "no text" is Weak.
+pub const PROBE_SUITE_VERSION: u32 = 22;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
