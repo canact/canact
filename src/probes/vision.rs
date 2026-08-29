@@ -61,12 +61,9 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("bline")
         || lower.contains("\"bl\"")
         || lower.contains("'bl'")
-        || lower.contains("letters bl")
-        || lower.contains("text bl")
-        || lower.contains("says bl")
-        || lower.contains("reads bl")
-        || lower.contains("bl and")
-        || lower.contains(": bl");
+        || lower
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| word == "bl");
 
     // User-facing details only. Ground-truth text in the probe image stays
     // internal (see PROBE_IMAGE_BASE64 / scoring above); do not echo it or
@@ -119,6 +116,25 @@ mod tests {
 
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn vision_color_words_are_not_strong() {
+        for text in [
+            "I see: black and white pixels only",
+            "The letters blend together",
+            "There is no text black",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "color/no-read must not set supportsVision Strong: {text:?} -> {result:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn vision_strong_when_text_identified() {
