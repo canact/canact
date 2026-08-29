@@ -15,10 +15,9 @@ use super::user_text;
 /// following probe already tests constraint adherence). This measures
 /// the model's *natural* verbosity.
 ///
-/// Scoring uses **visible completion tokens only**. Prefer live
-/// `ProbeResponse.usage.completion_tokens` when the host reported them.
+/// Scoring uses provider completion tokens when the host reported them.
 /// Fall back to a character estimate (`len.div_ceil(4)`) when usage is
-/// missing. Reasoning tokens are reported from usage, else 0.
+/// missing. Reasoning tokens are reported separately, else 0.
 ///
 /// - `1.0` - completion <= 10 (concise)
 /// - `0.5` - 11-50 (moderate)
@@ -60,7 +59,7 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     };
     let details = format!(
         "completion={completion_tokens} reasoning={reasoning_tokens} \
-         (effort=unset, score on visible completion only, {band})"
+         (effort=unset, score on completion tokens only, {band})"
     );
 
     Ok(ProbeResult {

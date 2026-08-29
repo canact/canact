@@ -94,7 +94,7 @@ pub struct ProbeRequest {
 pub struct ProbeUsage {
     /// Prompt / input tokens, if the provider sent them.
     pub prompt_tokens: Option<u32>,
-    /// Visible completion / output tokens.
+    /// Provider completion / output count (not a char estimate).
     pub completion_tokens: Option<u32>,
     /// Hidden reasoning tokens, if the provider sent them.
     pub reasoning_tokens: Option<u32>,
