@@ -32,14 +32,19 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     };
 
     let response = llm.chat(request).await?;
+    let empty_text = response.text.trim().is_empty();
 
     let (completion_tokens, reasoning_tokens) = match response.usage.as_ref() {
         Some(usage) => {
-            let completion = usage
-                .completion_tokens
-                .unwrap_or_else(|| (response.text.len() as u32).div_ceil(4));
+            let completion = match usage.completion_tokens {
+                Some(n) if n > 0 => n,
+                _ if empty_text => u32::MAX,
+                Some(n) => n,
+                None => (response.text.len() as u32).div_ceil(4),
+            };
             (completion, usage.reasoning_tokens.unwrap_or(0))
         }
+        None if empty_text => (u32::MAX, 0),
         None => ((response.text.len() as u32).div_ceil(4), 0),
     };
 
@@ -131,6 +136,44 @@ mod tests {
             "{}",
             result.details
         );
+    }
+
+    #[tokio::test]
+    async fn empty_text_without_usage_is_weak() {
+        let llm = MockLlm {
+            response: text_response(""),
+        };
+        let result = probe_token_efficiency(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn whitespace_only_without_usage_is_weak() {
+        let llm = MockLlm {
+            response: text_response("  \n\t"),
+        };
+        let result = probe_token_efficiency(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn empty_text_zero_completion_tokens_is_weak() {
+        let llm = MockLlm {
+            response: ProbeResponse {
+                text: String::new(),
+                tool_calls: Vec::new(),
+                finish: ProbeFinish::Stop,
+                usage: Some(ProbeUsage {
+                    prompt_tokens: Some(8),
+                    completion_tokens: Some(0),
+                    reasoning_tokens: Some(0),
+                }),
+            },
+        };
+        let result = probe_token_efficiency(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
