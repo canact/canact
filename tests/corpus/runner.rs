@@ -89,6 +89,24 @@ fn resolve_probe_rate_limit_is_not_cacheable() {
 }
 
 #[test]
+fn transient_xml_medium_does_not_open_can_use_tools() {
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient("timeout".into()));
+    let (xml, cacheable) = resolve_probe(err, "xml_tool_calling").expect("synthesized");
+    assert_eq!(xml.level, CapabilityLevel::Medium);
+    assert!(!cacheable, "transient XML must not persist");
+    let mut card = sample_profile();
+    card.tool_calling = ProbeResult {
+        name: "tool_calling".into(),
+        score: 0.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Weak,
+        details: "does not support tools".into(),
+    };
+    card.xml_tool_calling = xml;
+    assert!(!card.can_use_tools());
+}
+
+#[test]
 fn resolve_probe_no_tools_is_weak_and_cacheable() {
     let err: Result<ProbeResult, ProbeError> =
         Err(ProbeError::Llm("does not support tools".into()));
@@ -607,9 +625,13 @@ async fn cheap_run_attempts_at_most_4k_rung() {
             ProbeRunner::new(llm).cheap().run().await.expect("run")
         };
         assert_eq!(
-            profile.effective_context_tokens,
-            Some(4096),
-            "throttled={throttled}"
+            profile.effective_context_tokens, None,
+            "cheap 4k pass is not a finished size; throttled={throttled}"
+        );
+        let envelope = profile.host_policy_envelope();
+        assert!(
+            envelope["effectiveContextTokens"].is_null(),
+            "throttled={throttled} envelope={envelope}"
         );
         assert_eq!(
             profile.context_faithfulness.details, EXPENSIVE_SKIP,

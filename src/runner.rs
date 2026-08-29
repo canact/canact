@@ -240,7 +240,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let context_faithfulness = take_probe(&mut cacheable, faith_r, "context_faithfulness")?;
         let multi_turn_memory = take_probe(&mut cacheable, mem_r, "multi_turn_memory")?;
 
-        let effective_context_tokens = {
+        let ladder_tokens = {
             let _permit = sem
                 .acquire()
                 .await
@@ -249,6 +249,13 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 &mut cacheable,
                 probes::probe_effective_context_tokens(&self.client, self.skip_expensive).await,
             )?
+        };
+        // Cheap / auto-cheap stops after 4k. That pass is not a finished
+        // 4k/8k/16k climb, so do not publish it as effectiveContextTokens.
+        let effective_context_tokens = if self.skip_expensive {
+            None
+        } else {
+            ladder_tokens
         };
 
         let xml_tool_calling = if tool_calling.level == CapabilityLevel::Strong {

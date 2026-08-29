@@ -33,6 +33,14 @@ pub struct ProbeResult {
     pub details: String,
 }
 
+impl ProbeResult {
+    /// Synthesized `resolve_probe` error (timeout / 429 / 5xx), not a
+    /// completed score. Details always start with `Probe failed:`.
+    pub fn is_synthesized_error(&self) -> bool {
+        self.details.starts_with("Probe failed:")
+    }
+}
+
 /// Recommended edit format based on probe results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -277,10 +285,11 @@ impl CapabilityProfile {
 
     /// Whether the model can be used for agentic work (tool calling).
     ///
-    /// Returns `false` if both native and XML tool calling are Weak.
+    /// Returns `false` if both native and XML failed to complete at
+    /// Medium or above. A synthesized error Medium (timeout / 429)
+    /// does not count.
     pub fn can_use_tools(&self) -> bool {
-        self.tool_calling.level >= CapabilityLevel::Medium
-            || self.xml_tool_calling.level >= CapabilityLevel::Medium
+        completed_usable_tools(&self.tool_calling) || completed_usable_tools(&self.xml_tool_calling)
     }
 
     /// How well the model picks the right tool from a set.
@@ -374,6 +383,10 @@ impl CapabilityProfile {
             "probes": probes,
         })
     }
+}
+
+fn completed_usable_tools(pr: &ProbeResult) -> bool {
+    pr.level >= CapabilityLevel::Medium && !pr.is_synthesized_error()
 }
 
 fn normalize_dimension_name(dimension: &str) -> Cow<'_, str> {

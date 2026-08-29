@@ -329,6 +329,9 @@ fn secret_header_len(lower: &str, input: &str, i: usize) -> Option<usize> {
         && is_ascii_word_at(input, i, 7)
     {
         Some(7)
+    } else if starts_at(lower, i, "apikey") && is_ascii_word_at(input, i, 6) {
+        // camelCase apiKey lowercases to apikey, not api_key / api-key.
+        Some(6)
     } else {
         None
     }
@@ -884,6 +887,17 @@ mod tests {
         let redacted = redact_secrets(escaped);
         assert!(!redacted.contains("SECRET"), "{redacted}");
         assert!(redacted.contains("[REDACTED]"), "{redacted}");
+    }
+
+    #[test]
+    fn redact_secrets_strips_camel_case_api_key() {
+        let raw = r#"{"apiKey":"SECRET"}"#;
+        let redacted = redact_secrets(raw);
+        assert!(!redacted.contains("SECRET"), "{redacted}");
+        assert!(
+            redacted.contains(r#"{"apiKey":"[REDACTED]"}"#),
+            "{redacted}"
+        );
     }
 
     #[test]

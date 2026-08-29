@@ -84,7 +84,7 @@ impl CapabilityProfile {
         if self.can_use_tools() {
             None
         } else {
-            Some("error: cannot use tools (native and XML both Weak)")
+            Some("error: cannot use tools (native and XML both failed to complete)")
         }
     }
 }
