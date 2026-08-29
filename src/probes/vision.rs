@@ -76,24 +76,25 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("unable")
         || lower.contains("don't")
         || lower.contains("no image");
-    // "text" alone is too common in refusals ("cannot see any text").
-    let processed_content = lower.contains("letter")
-        || lower.contains("character")
-        || lower.contains("pattern")
+    // Partial reads name glyphs. Color-only words often appear in
+    // refusals ("cannot process this black and white image").
+    let saw_glyphs = lower.contains("letter") || lower.contains("character");
+    let processed_surface = lower.contains("pattern")
         || lower.contains("pixel")
         || lower.contains("black")
-        || lower.contains("white");
+        || lower.contains("white")
+        || lower.contains("text");
 
     let (score, details) = if identified_text {
         (1.0, "Can read text from images".to_string())
-    } else if processed_content {
+    } else if saw_glyphs {
         (
             0.5,
             "Processed the image but could not read the text clearly".to_string(),
         )
     } else if refused {
         (0.0, "Cannot process images".to_string())
-    } else if lower.contains("text") {
+    } else if processed_surface {
         (
             0.5,
             "Processed the image but could not read the text clearly".to_string(),
@@ -158,6 +159,17 @@ mod tests {
     async fn vision_weak_when_refusal_mentions_text() {
         let llm = MockLlm {
             response: text_response("I cannot see any text in this image"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+        assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_refusal_mentions_black_white() {
+        let llm = MockLlm {
+            response: text_response("I cannot process this black and white image"),
         };
         let result = probe_vision(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);

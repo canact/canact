@@ -90,7 +90,9 @@ pub async fn probe_instruction_following<C: ProbeClient>(
     let trimmed = response.text.trim();
     let word_count = trimmed.split_whitespace().count();
 
-    let (score, details) = if word_count == 1 {
+    let (score, details) = if word_count == 0 {
+        (0.0, "Empty response".to_string())
+    } else if word_count == 1 {
         (1.0, format!("Single word response: \"{trimmed}\""))
     } else if word_count < 5 {
         (
@@ -157,6 +159,17 @@ mod tests {
         let result = probe_json_output(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn instruction_following_weak_for_empty() {
+        let llm = MockLlm {
+            response: text_response(""),
+        };
+        let result = probe_instruction_following(&llm).await.unwrap();
+        assert_eq!(result.score, 0.0);
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.details, "Empty response");
     }
 
     #[tokio::test]
