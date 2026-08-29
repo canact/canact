@@ -65,11 +65,11 @@ Rename the function `greet` to `welcome` and change the greeting from \
         let mut best = 0.4_f64;
         for block in parse_search_replace_blocks(&text) {
             let has_file_ref = block.path.contains("greet.rs");
-            // Strong requires the function body, not prose that names greet/Hello.
+            // Strong requires the function signatures, not "fn greet Hello" prose.
             let has_old_content =
-                block.search.contains("fn greet") && block.search.contains("Hello");
+                block.search.contains("fn greet(") && block.search.contains("Hello");
             let has_new_content =
-                block.replace.contains("fn welcome") && block.replace.contains("Welcome");
+                block.replace.contains("fn welcome(") && block.replace.contains("Welcome");
             let block_score = if has_file_ref && has_old_content && has_new_content {
                 1.0
             } else if has_old_content || has_new_content {
@@ -300,6 +300,27 @@ Rename greet to welcome and Hello to Welcome in src/greet.rs
             result.level,
             CapabilityLevel::Strong,
             "echoed system markers plus user words must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_replace_fn_tokens_without_signature_are_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+fn greet Hello
+=======
+fn welcome Welcome
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "fn greet without a signature must not set SearchReplace: {result:?}"
         );
     }
 
