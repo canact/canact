@@ -2,6 +2,7 @@
 //!
 //! Do not copy `bline-llm`. Never log `Authorization`.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use futures::Stream;
@@ -94,7 +95,7 @@ impl OpenAiCompatClient {
         use futures::StreamExt;
         let mut bytes = resp.bytes_stream();
         let mut rest = String::new();
-        let mut open_tool: Option<String> = None;
+        let mut open_tools: HashMap<u64, String> = HashMap::new();
         while let Some(item) = bytes.next().await {
             let chunk = item.map_err(map_transport)?;
             rest.push_str(&String::from_utf8_lossy(&chunk));
@@ -104,7 +105,7 @@ impl OpenAiCompatClient {
                 if line.ends_with('\r') {
                     line.pop();
                 }
-                if let Err(err) = emit_sse_line(&line, &mut open_tool, tx) {
+                if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
                     let _ = tx.unbounded_send(Err(err));
                     return Ok(());
                 }
@@ -112,14 +113,12 @@ impl OpenAiCompatClient {
         }
         if !rest.is_empty() {
             let line = rest.trim_end_matches('\r');
-            if let Err(err) = emit_sse_line(line, &mut open_tool, tx) {
+            if let Err(err) = emit_sse_line(line, &mut open_tools, tx) {
                 let _ = tx.unbounded_send(Err(err));
                 return Ok(());
             }
         }
-        if open_tool.is_some() {
-            let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallEnd));
-        }
+        end_open_tools(&mut open_tools, tx);
         Ok(())
     }
 }
@@ -638,7 +637,7 @@ fn parse_arguments(value: Option<&Value>) -> Map<String, Value> {
 
 fn emit_sse_line(
     line: &str,
-    open_tool: &mut Option<String>,
+    open_tools: &mut HashMap<u64, String>,
     tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
 ) -> Result<(), ProbeError> {
     let data = if let Some(rest) = line.strip_prefix("data:") {
@@ -657,13 +656,13 @@ fn emit_sse_line(
     if let Some(err) = value.get("error") {
         return Err(ProbeError::Llm(error_message(err)));
     }
-    emit_delta(&value, open_tool, tx);
+    emit_delta(&value, open_tools, tx);
     Ok(())
 }
 
 fn emit_delta(
     value: &Value,
-    open_tool: &mut Option<String>,
+    open_tools: &mut HashMap<u64, String>,
     tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
 ) {
     let Some(choice) = value.get("choices").and_then(|c| c.get(0)) else {
@@ -683,28 +682,29 @@ fn emit_delta(
     }
 
     if let Some(func) = delta.get("function").filter(|f| f.is_object()) {
-        emit_function(func, None, open_tool, tx, true);
+        emit_function(func, None, 0, open_tools, tx, true);
     }
 
     if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
         for tc in tcs {
             let id = tc.get("id").and_then(|v| v.as_str());
+            let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
             let func = tc.get("function").unwrap_or(&Value::Null);
-            emit_function(func, id, open_tool, tx, false);
+            emit_function(func, id, index, open_tools, tx, false);
         }
     }
 
     let finish = choice.get("finish_reason").and_then(|v| v.as_str());
-    if matches!(finish, Some("tool_calls") | Some("stop")) && open_tool.is_some() {
-        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallEnd));
-        *open_tool = None;
+    if matches!(finish, Some("tool_calls") | Some("stop")) {
+        end_open_tools(open_tools, tx);
     }
 }
 
 fn emit_function(
     func: &Value,
     id: Option<&str>,
-    open_tool: &mut Option<String>,
+    index: u64,
+    open_tools: &mut HashMap<u64, String>,
     tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
     assembled: bool,
 ) {
@@ -712,13 +712,13 @@ fn emit_function(
     let args = func.get("arguments");
 
     if !name.is_empty() {
-        match open_tool.as_deref() {
+        match open_tools.get(&index).map(String::as_str) {
             None | Some("") => {
                 let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
                     id: id.unwrap_or("").to_owned(),
                     name: name.to_owned(),
                 }));
-                *open_tool = Some(name.to_owned());
+                open_tools.insert(index, name.to_owned());
             }
             Some(_) => {}
         }
@@ -726,23 +726,11 @@ fn emit_function(
 
     match args {
         Some(Value::String(s)) if !s.is_empty() => {
-            if open_tool.is_none() {
-                let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
-                    id: id.unwrap_or("").to_owned(),
-                    name: name.to_owned(),
-                }));
-                *open_tool = Some(name.to_owned());
-            }
+            ensure_tool_started(index, id, name, open_tools, tx);
             let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallArgDelta { delta: s.clone() }));
         }
         Some(obj) if obj.is_object() => {
-            if open_tool.is_none() {
-                let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
-                    id: id.unwrap_or("").to_owned(),
-                    name: name.to_owned(),
-                }));
-                *open_tool = Some(name.to_owned());
-            }
+            ensure_tool_started(index, id, name, open_tools, tx);
             let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: obj.to_string(),
             }));
@@ -750,9 +738,35 @@ fn emit_function(
         _ => {}
     }
 
-    if assembled && open_tool.is_some() {
+    if assembled && open_tools.remove(&index).is_some() {
         let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallEnd));
-        *open_tool = None;
+    }
+}
+
+fn ensure_tool_started(
+    index: u64,
+    id: Option<&str>,
+    name: &str,
+    open_tools: &mut HashMap<u64, String>,
+    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
+) {
+    open_tools.entry(index).or_insert_with(|| {
+        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
+            id: id.unwrap_or("").to_owned(),
+            name: name.to_owned(),
+        }));
+        name.to_owned()
+    });
+}
+
+fn end_open_tools(
+    open_tools: &mut HashMap<u64, String>,
+    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
+) {
+    let n = open_tools.len();
+    open_tools.clear();
+    for _ in 0..n {
+        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallEnd));
     }
 }
 
@@ -1156,6 +1170,47 @@ mod tests {
                 .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
             "{chunks:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn stream_parallel_indexes_emit_two_starts() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c0\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"p\\\":\\\"a\\\"}\"}},{\"index\":1,\"id\":\"c1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"p\\\":\\\"b\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        let starts: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::ToolCallStart { id, name } => Some((id.as_str(), name.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts, vec![("c0", "read_file"), ("c1", "write_file")]);
+        let args: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::ToolCallArgDelta { delta } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(args.len(), 2, "{chunks:?}");
+        assert!(args[0].contains('a'), "{args:?}");
+        assert!(args[1].contains('b'), "{args:?}");
+        assert!(!args[0].contains('b'), "{args:?}");
+        let ends = chunks
+            .iter()
+            .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
+            .count();
+        assert_eq!(ends, 2, "{chunks:?}");
     }
 
     #[tokio::test]

@@ -32,7 +32,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v11: synthesized error Medium does not open host policy (vision,
 ///      XML fallback, edit format, meets); o-series chat uses
 ///      max_completion_tokens and omits temperature.
-pub const PROBE_SUITE_VERSION: u32 = 11;
+/// v12: empty token_efficiency is Weak; SSE tool_calls indexes
+///      each emit ToolCallStart.
+pub const PROBE_SUITE_VERSION: u32 = 12;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
