@@ -53,7 +53,12 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v20: tool_selection Strong requires all three preferred tools
 ///      precise; empty/whitespace `doc_set` value is not precise;
 ///      json_output Strong requires nonempty word and reversed.
-pub const PROBE_SUITE_VERSION: u32 = 20;
+/// v21: streaming_tool_calls Strong requires a string `path` on the
+///      `read_file` start that produced the args (no other-tool merge);
+///      search_replace / unified_diff Strong require the edit bodies
+///      (not whole-response contains) to hold greet/Hello and
+///      welcome/Welcome.
+pub const PROBE_SUITE_VERSION: u32 = 21;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

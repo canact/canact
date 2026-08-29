@@ -62,16 +62,29 @@ Rename the function `greet` to `welcome` and change the greeting from \
     let has_replace = text.contains(">>>>>>> REPLACE");
 
     let (score, details) = if has_search && has_separator && has_replace {
-        let has_file_ref = text.contains("greet.rs");
-        let has_old_content = text.contains("greet") && text.contains("Hello");
-        let has_new_content = text.contains("welcome") && text.contains("Welcome");
-
-        if has_file_ref && has_old_content && has_new_content {
+        let mut best = 0.4_f64;
+        for block in parse_search_replace_blocks(&text) {
+            let has_file_ref = block.path.contains("greet.rs");
+            let has_old_content = block.search.contains("greet") && block.search.contains("Hello");
+            let has_new_content =
+                block.replace.contains("welcome") && block.replace.contains("Welcome");
+            let block_score = if has_file_ref && has_old_content && has_new_content {
+                1.0
+            } else if has_old_content || has_new_content {
+                0.7
+            } else {
+                0.4
+            };
+            if block_score > best {
+                best = block_score;
+            }
+        }
+        if (best - 1.0).abs() < f64::EPSILON {
             (
                 1.0,
                 "Valid SEARCH/REPLACE block with correct content".to_string(),
             )
-        } else if has_old_content || has_new_content {
+        } else if best > 0.4 {
             (
                 0.7,
                 "Parseable SEARCH/REPLACE block but content has drift".to_string(),
@@ -159,8 +172,16 @@ Rename the function `greet` to `welcome` and change the greeting from \
 
     let (score, details) =
         if has_minus_header && has_plus_header && has_hunk && has_minus_line && has_plus_line {
-            let has_correct_content = text.contains("greet") && text.contains("welcome");
-            if has_correct_content {
+            let has_file_ref = text
+                .lines()
+                .any(|l| (l.starts_with("---") || l.starts_with("+++")) && l.contains("greet.rs"));
+            let minus_has_greet = text
+                .lines()
+                .any(|l| l.starts_with('-') && !l.starts_with("---") && l.contains("greet"));
+            let plus_has_welcome = text
+                .lines()
+                .any(|l| l.starts_with('+') && !l.starts_with("+++") && l.contains("welcome"));
+            if has_file_ref && minus_has_greet && plus_has_welcome {
                 (1.0, "Valid unified diff with correct +/- lines".to_string())
             } else {
                 (0.5, "Valid diff structure but content unclear".to_string())
@@ -181,6 +202,48 @@ Rename the function `greet` to `welcome` and change the greeting from \
         level: classify(score),
         details,
     })
+}
+
+struct SearchReplaceBlock<'a> {
+    path: &'a str,
+    search: &'a str,
+    replace: &'a str,
+}
+
+fn parse_search_replace_blocks(text: &str) -> Vec<SearchReplaceBlock<'_>> {
+    let mut blocks = Vec::new();
+    let mut rest = text;
+    const START: &str = "<<<<<<< SEARCH";
+    const DASH: &str = "\n-------\n";
+    const SEP: &str = "\n=======\n";
+    const END: &str = "\n>>>>>>> REPLACE";
+    while let Some(start) = rest.find(START) {
+        let after_marker = &rest[start + START.len()..];
+        let after_nl = after_marker.strip_prefix('\n').unwrap_or(after_marker);
+        let Some(dash) = after_nl.find(DASH) else {
+            rest = after_marker;
+            continue;
+        };
+        let path = after_nl[..dash].trim();
+        let after_dash = &after_nl[dash + DASH.len()..];
+        let Some(sep) = after_dash.find(SEP) else {
+            rest = after_dash;
+            continue;
+        };
+        let search = &after_dash[..sep];
+        let after_sep = &after_dash[sep + SEP.len()..];
+        let Some(end) = after_sep.find(END) else {
+            rest = after_sep;
+            continue;
+        };
+        blocks.push(SearchReplaceBlock {
+            path,
+            search,
+            replace: &after_sep[..end],
+        });
+        rest = &after_sep[end + END.len()..];
+    }
+    blocks
 }
 
 #[cfg(test)]
@@ -209,6 +272,30 @@ fn welcome(name: &str) -> String {
         let result = probe_search_replace(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn search_replace_prompt_echo_is_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+path/to/file.rs
+-------
+exact lines to find
+=======
+replacement lines
+>>>>>>> REPLACE
+
+Rename greet to welcome and Hello to Welcome in src/greet.rs
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "echoed system markers plus user words must not be Strong: {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -248,6 +335,30 @@ fn welcome(name: &str) -> String {
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_prompt_echo_is_not_strong() {
+        let response_text = "\
+--- a/path/to/file.rs
++++ b/path/to/file.rs
+@@ -10,4 +10,5 @@
+ context line
+-removed line
++added line
+ context line
+
+Rename greet to welcome and Hello to Welcome in src/greet.rs
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "echoed system diff plus user words must not be Strong: {result:?}"
+        );
     }
 
     #[tokio::test]
