@@ -1,6 +1,6 @@
 use canact::{
     CACHE_TTL_SECS, CacheEntry, CapabilityLevel, CapabilityProfile, DEFAULT_PROBE_EFFORT,
-    PROBE_SUITE_VERSION, ProbeCache, ProbeResult, classify,
+    DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, PROBE_SUITE_VERSION, ProbeCache, ProbeResult, classify,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -42,7 +42,7 @@ fn sample_profile() -> CapabilityProfile {
 #[test]
 fn cache_key_includes_effort_and_suite() {
     let k = ProbeCache::cache_key("gpt", "openai", "unset", 2);
-    assert_eq!(k, "gpt|openai|unset|v2");
+    assert_eq!(k, "gpt|openai|unset|v2|full|novision");
 }
 
 #[test]
@@ -55,7 +55,19 @@ fn cache_key_format_is_model_provider_unset_v7() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v7");
+    assert_eq!(k, "model|provider|unset|v7|full|novision");
+}
+
+#[test]
+fn cache_key_includes_cheap_and_vision_knobs() {
+    let cheap = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, true, false);
+    let full = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, false);
+    let vision = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, true);
+    assert_ne!(cheap, full);
+    assert_ne!(full, vision);
+    assert_eq!(cheap, "m|p|unset|v7|cheap|novision");
+    assert_eq!(full, "m|p|unset|v7|full|novision");
+    assert_eq!(vision, "m|p|unset|v7|full|vision");
 }
 
 #[test]
@@ -81,16 +93,36 @@ fn put_get_round_trip() {
 #[test]
 fn get_misses_when_effort_differs() {
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(sample_profile(), "unset", PROBE_SUITE_VERSION);
+    cache.put_with_settings(
+        sample_profile(),
+        "unset",
+        PROBE_SUITE_VERSION,
+        DEFAULT_SKIP_EXPENSIVE,
+        DEFAULT_VISION,
+    );
     assert!(
         cache
-            .get_with_settings("m", "p", "xhigh", PROBE_SUITE_VERSION)
+            .get_with_settings(
+                "m",
+                "p",
+                "xhigh",
+                PROBE_SUITE_VERSION,
+                DEFAULT_SKIP_EXPENSIVE,
+                DEFAULT_VISION,
+            )
             .is_none(),
         "xhigh must not hit unset cache entry"
     );
     assert!(
         cache
-            .get_with_settings("m", "p", "unset", PROBE_SUITE_VERSION)
+            .get_with_settings(
+                "m",
+                "p",
+                "unset",
+                PROBE_SUITE_VERSION,
+                DEFAULT_SKIP_EXPENSIVE,
+                DEFAULT_VISION,
+            )
             .is_some()
     );
 }
@@ -98,12 +130,47 @@ fn get_misses_when_effort_differs() {
 #[test]
 fn get_misses_when_suite_differs() {
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(sample_profile(), "unset", 6);
+    cache.put_with_settings(
+        sample_profile(),
+        "unset",
+        6,
+        DEFAULT_SKIP_EXPENSIVE,
+        DEFAULT_VISION,
+    );
     assert!(
         cache
-            .get_with_settings("m", "p", "unset", PROBE_SUITE_VERSION)
+            .get_with_settings(
+                "m",
+                "p",
+                "unset",
+                PROBE_SUITE_VERSION,
+                DEFAULT_SKIP_EXPENSIVE,
+                DEFAULT_VISION,
+            )
             .is_none(),
         "suite v7 must not hit v6 cache entry"
+    );
+}
+
+#[test]
+fn cheap_cache_misses_on_full_and_vision() {
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(sample_profile(), true, false);
+    assert!(
+        cache.get_with_knobs("m", "p", true, false).is_some(),
+        "cheap/novision must hit its own entry"
+    );
+    assert!(
+        cache.get_with_knobs("m", "p", false, false).is_none(),
+        "full must not return a cheap-cached profile"
+    );
+    assert!(
+        cache.get_with_knobs("m", "p", true, true).is_none(),
+        "vision must not return a no-vision cheap-cached profile"
+    );
+    assert!(
+        cache.get("m", "p").is_none(),
+        "default get is full/novision and must miss cheap"
     );
 }
 
@@ -212,6 +279,41 @@ fn load_missing_file_is_empty() {
     let path = dir.path().join("missing.json");
     let loaded = ProbeCache::load(&path).expect("missing file");
     assert!(loaded.profiles.is_empty());
+}
+
+#[test]
+fn load_keeps_migrated_profile_when_save_fails() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut profile = sample_profile();
+    profile.tool_calling = ProbeResult {
+        name: "tool_calling".to_owned(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: LLM error: does not support tools".to_owned(),
+    };
+    let mut cache = ProbeCache::default();
+    cache.put(profile);
+    cache.save(&path).expect("save stale");
+
+    // save() writes path.with_extension("tmp"); a directory there blocks rewrite.
+    std::fs::create_dir(path.with_extension("tmp")).expect("block save tmp");
+
+    let loaded = ProbeCache::load(&path).expect("load still returns migrated rows");
+    let got = loaded.get("m", "p").expect("session-correct migrated hit");
+    assert_eq!(got.tool_calling.level, CapabilityLevel::Weak);
+    assert_eq!(got.tool_calling.score, 0.0);
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("reread")).expect("json");
+    let key = ProbeCache::cache_key("m", "p", DEFAULT_PROBE_EFFORT, PROBE_SUITE_VERSION);
+    let stored = &raw["profiles"][&key]["profile"];
+    assert_eq!(
+        stored["toolCalling"]["level"], "medium",
+        "disk stays unmigrated when save fails"
+    );
+    assert_eq!(stored["toolCalling"]["score"].as_f64(), Some(0.5));
 }
 
 #[test]

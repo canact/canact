@@ -6,7 +6,8 @@ mod report;
 mod types;
 
 pub use cache::{
-    CACHE_TTL_SECS, CacheEntry, DEFAULT_PROBE_EFFORT, PROBE_SUITE_VERSION, ProbeCache,
+    CACHE_TTL_SECS, CacheEntry, DEFAULT_PROBE_EFFORT, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION,
+    PROBE_SUITE_VERSION, ProbeCache,
 };
 pub use error::ProbeError;
 pub use report::missing_model_message;

@@ -2,7 +2,8 @@
 //!
 //! Persists [`CapabilityProfile`] results to disk so that probing is only
 //! performed once per model+provider+settings combination (with a 30-day
-//! TTL). Cache keys include reasoning effort and probe suite version.
+//! TTL). Cache keys include reasoning effort, probe suite version, and the
+//! cheap/full plus vision suite knobs.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,6 +29,12 @@ pub const PROBE_SUITE_VERSION: u32 = 7;
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
 
+/// Default cost knob: paid/full suite (`skip_expensive = false`).
+pub const DEFAULT_SKIP_EXPENSIVE: bool = false;
+
+/// Default vision knob: vision probe not requested.
+pub const DEFAULT_VISION: bool = false;
+
 /// A cached probe result together with the time it was stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +59,7 @@ fn default_suite_v1() -> u32 {
     1
 }
 
-/// File-based probe cache keyed by model|provider|effort|suite.
+/// File-based probe cache keyed by model|provider|effort|suite|cost|vision.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProbeCache {
     /// All cached entries.
@@ -70,8 +77,14 @@ impl ProbeCache {
         let contents = std::fs::read_to_string(path)?;
         let mut cache: Self = serde_json::from_str(&contents)?;
         if cache.migrate_stale_tool_scores() {
-            // In-memory only was not enough: the next process would reload Medium.
-            let _ = cache.save(path);
+            // Keep the migrated rows in memory even when rewrite fails.
+            // The next process retries migrate against the stale file.
+            if let Err(err) = cache.save(path) {
+                eprintln!(
+                    "warning: failed to persist migrated probe cache ({}): {err}",
+                    path.display()
+                );
+            }
         }
         Ok(cache)
     }
@@ -88,25 +101,47 @@ impl ProbeCache {
         Ok(())
     }
 
-    /// Get a cached profile for the current suite and default probe effort.
+    /// Get a cached profile for the current suite, default effort, and default knobs.
     pub fn get(&self, model_id: &str, provider: &str) -> Option<&CapabilityProfile> {
+        self.get_with_knobs(model_id, provider, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION)
+    }
+
+    /// Get a cached profile for the current suite and explicit cheap/vision knobs.
+    pub fn get_with_knobs(
+        &self,
+        model_id: &str,
+        provider: &str,
+        skip_expensive: bool,
+        vision: bool,
+    ) -> Option<&CapabilityProfile> {
         self.get_with_settings(
             model_id,
             provider,
             DEFAULT_PROBE_EFFORT,
             PROBE_SUITE_VERSION,
+            skip_expensive,
+            vision,
         )
     }
 
-    /// Get a cached profile for explicit effort/suite settings.
+    /// Get a cached profile for explicit effort/suite/knob settings.
     pub fn get_with_settings(
         &self,
         model_id: &str,
         provider: &str,
         reasoning_effort: &str,
         suite_version: u32,
+        skip_expensive: bool,
+        vision: bool,
     ) -> Option<&CapabilityProfile> {
-        let key = Self::cache_key(model_id, provider, reasoning_effort, suite_version);
+        let key = Self::cache_key_with_knobs(
+            model_id,
+            provider,
+            reasoning_effort,
+            suite_version,
+            skip_expensive,
+            vision,
+        );
         self.profiles.get(&key).and_then(|entry| {
             if Self::is_valid(entry) {
                 Some(&entry.profile)
@@ -118,32 +153,65 @@ impl ProbeCache {
 
     /// Look up the full cache entry (for doctor/probe display metadata).
     pub fn get_entry(&self, model_id: &str, provider: &str) -> Option<&CacheEntry> {
-        let key = Self::cache_key(
+        self.get_entry_with_knobs(model_id, provider, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION)
+    }
+
+    /// Look up the full cache entry for explicit cheap/vision knobs.
+    pub fn get_entry_with_knobs(
+        &self,
+        model_id: &str,
+        provider: &str,
+        skip_expensive: bool,
+        vision: bool,
+    ) -> Option<&CacheEntry> {
+        let key = Self::cache_key_with_knobs(
             model_id,
             provider,
             DEFAULT_PROBE_EFFORT,
             PROBE_SUITE_VERSION,
+            skip_expensive,
+            vision,
         );
         self.profiles.get(&key).filter(|e| Self::is_valid(e))
     }
 
-    /// Store a profile under the current suite and default probe effort.
+    /// Store a profile under the current suite, default effort, and default knobs.
     pub fn put(&mut self, profile: CapabilityProfile) {
-        self.put_with_settings(profile, DEFAULT_PROBE_EFFORT, PROBE_SUITE_VERSION);
+        self.put_with_knobs(profile, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION);
     }
 
-    /// Store a profile with explicit effort/suite metadata.
+    /// Store a profile under the current suite with explicit cheap/vision knobs.
+    pub fn put_with_knobs(
+        &mut self,
+        profile: CapabilityProfile,
+        skip_expensive: bool,
+        vision: bool,
+    ) {
+        self.put_with_settings(
+            profile,
+            DEFAULT_PROBE_EFFORT,
+            PROBE_SUITE_VERSION,
+            skip_expensive,
+            vision,
+        );
+    }
+
+    /// Store a profile with explicit effort/suite/knob metadata.
     pub fn put_with_settings(
         &mut self,
         profile: CapabilityProfile,
         reasoning_effort: &str,
         suite_version: u32,
+        skip_expensive: bool,
+        vision: bool,
     ) {
-        let key = Self::cache_key(
+        let key = Self::cache_key_with_knobs(
             &profile.model_id,
             &profile.provider,
             reasoning_effort,
             suite_version,
+            skip_expensive,
+            vision,
         );
         let entry = CacheEntry {
             cached_at: unix_now(),
@@ -179,14 +247,35 @@ impl ProbeCache {
         changed
     }
 
-    /// Cache key for model+provider+effort+suite.
+    /// Cache key for model+provider+effort+suite and default cheap/vision knobs.
     pub fn cache_key(
         model_id: &str,
         provider: &str,
         reasoning_effort: &str,
         suite_version: u32,
     ) -> String {
-        format!("{model_id}|{provider}|{reasoning_effort}|v{suite_version}")
+        Self::cache_key_with_knobs(
+            model_id,
+            provider,
+            reasoning_effort,
+            suite_version,
+            DEFAULT_SKIP_EXPENSIVE,
+            DEFAULT_VISION,
+        )
+    }
+
+    /// Cache key including cheap/full and vision suite knobs.
+    pub fn cache_key_with_knobs(
+        model_id: &str,
+        provider: &str,
+        reasoning_effort: &str,
+        suite_version: u32,
+        skip_expensive: bool,
+        vision: bool,
+    ) -> String {
+        let cost = if skip_expensive { "cheap" } else { "full" };
+        let vis = if vision { "vision" } else { "novision" };
+        format!("{model_id}|{provider}|{reasoning_effort}|v{suite_version}|{cost}|{vis}")
     }
 
     /// Check whether a cache entry is still valid (less than 30 days old).

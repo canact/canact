@@ -160,6 +160,29 @@ async fn mock_llm_chat_without_tools_returns_text() {
 }
 
 #[test]
+fn persist_cheap_run_is_not_returned_as_full() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let run = ProbeRun {
+        profile: sample_profile(),
+        cacheable: true,
+        skip_expensive: true,
+        vision: false,
+    };
+    let wrote = run.persist(&mut cache, &path).expect("persist");
+    assert!(wrote);
+    assert!(
+        cache.get_with_knobs("m", "p", true, false).is_some(),
+        "cheap persist must be readable with cheap knobs"
+    );
+    assert!(
+        cache.get("m", "p").is_none(),
+        "full/default get must not return a cheap-persisted profile"
+    );
+}
+
+#[test]
 fn persist_does_not_write_when_cacheable_false() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
@@ -167,6 +190,8 @@ fn persist_does_not_write_when_cacheable_false() {
     let run = ProbeRun {
         profile: sample_profile(),
         cacheable: false,
+        skip_expensive: false,
+        vision: false,
     };
     let wrote = run.persist(&mut cache, &path).expect("persist");
     assert!(!wrote, "persist must skip uncacheable runs");

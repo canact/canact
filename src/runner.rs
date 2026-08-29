@@ -31,6 +31,10 @@ pub struct ProbeRun {
     /// False when any required probe hit a transient error (timeout, 429,
     /// network, 5xx). Callers must not persist this profile for 30 days.
     pub cacheable: bool,
+    /// Whether this run skipped the expensive suite (`--cheap` / free-tier).
+    pub skip_expensive: bool,
+    /// Whether this run requested the vision probe (`--vision`).
+    pub vision: bool,
 }
 
 impl ProbeRun {
@@ -43,7 +47,7 @@ impl ProbeRun {
             warn!("skipping probe cache persist: transient probe error");
             return Ok(false);
         }
-        cache.put(self.profile.clone());
+        cache.put_with_knobs(self.profile.clone(), self.skip_expensive, self.vision);
         cache.save(path)?;
         Ok(true)
     }
@@ -291,6 +295,8 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 effective_context_tokens,
             },
             cacheable,
+            skip_expensive: self.skip_expensive,
+            vision: vision_enabled,
         };
 
         {

@@ -137,6 +137,83 @@ fn probe_cached_weak_tools_exits_2_and_explains() {
     assert!(stdout.contains("Effective context tokens:"), "{stdout}");
 }
 
+#[test]
+fn probe_cheap_cache_is_not_returned_on_full() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(
+        cached_profile(CapabilityLevel::Weak, CapabilityLevel::Weak),
+        true,
+        false,
+    );
+    cache.save(&cache_path).expect("save cheap cache");
+    let cache_str = cache_path.to_str().expect("utf8 cache path");
+
+    let cheap_hit = canact()
+        .args([
+            "probe",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cheap",
+            "--cache",
+            cache_str,
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn cheap probe");
+    let cheap_stdout = String::from_utf8_lossy(&cheap_hit.stdout);
+    let cheap_stderr = String::from_utf8_lossy(&cheap_hit.stderr);
+    assert_eq!(
+        cheap_hit.status.code(),
+        Some(2),
+        "cheap must hit cache; stdout={cheap_stdout}\nstderr={cheap_stderr}"
+    );
+    assert!(
+        cheap_stdout.contains("=== Probe Results ==="),
+        "{cheap_stdout}"
+    );
+
+    let base = spawn_401(br#"{"error":{"message":"full must miss cheap cache"}}"#);
+    let full_miss = canact()
+        .args([
+            "probe",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--full",
+            "--base-url",
+            &base,
+            "--api-key",
+            "sk-cli-secret",
+            "--cache",
+            cache_str,
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn full probe");
+    let full_stdout = String::from_utf8_lossy(&full_miss.stdout);
+    let full_stderr = String::from_utf8_lossy(&full_miss.stderr);
+    assert_eq!(
+        full_miss.status.code(),
+        Some(1),
+        "full must miss cheap cache and probe; stdout={full_stdout}\nstderr={full_stderr}"
+    );
+    assert!(
+        !full_stdout.contains("=== Probe Results ==="),
+        "full must not emit the cheap-cached table; stdout={full_stdout}"
+    );
+    assert!(
+        full_stderr.contains("authentication error:"),
+        "stderr={full_stderr}"
+    );
+}
+
 fn spawn_401(body: &[u8]) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -213,4 +290,41 @@ fn probe_auth_prints_authentication_error_once() {
     assert!(!stderr.contains("SECRET"), "stderr={stderr}");
     assert!(!stderr.contains("sk-live-secret"), "stderr={stderr}");
     assert!(!stderr.contains("sk-cli-secret"), "stderr={stderr}");
+}
+
+#[test]
+fn probe_auth_redacts_api_key_underscore() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let base = spawn_401(br#"{"api_key":"SECRET","error":{"message":"api_key=SECRET"}}"#);
+    let out = canact()
+        .args([
+            "probe",
+            "--model",
+            "m",
+            "--provider",
+            "test",
+            "--base-url",
+            &base,
+            "--api-key",
+            "sk-cli-secret",
+            "--cache",
+            cache_path.to_str().expect("utf8 cache path"),
+            "--force",
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn canact probe");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(!stderr.contains("SECRET"), "stderr={stderr}");
+    assert!(!stdout.contains("SECRET"), "stdout={stdout}");
+    assert!(stderr.contains("[REDACTED]"), "stderr={stderr}");
+    assert!(stderr.contains("authentication error:"), "stderr={stderr}");
 }
