@@ -592,15 +592,53 @@ fn first_u32(value: &Value, keys: &[&str]) -> Option<u32> {
 }
 
 fn extract_text(content: Option<&Value>) -> String {
-    match content {
+    let raw = match content {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Array(parts)) => parts
             .iter()
-            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+            .filter(|p| !is_hidden_reasoning_part(p))
+            .filter_map(visible_part_text)
             .collect::<Vec<_>>()
             .join(""),
         _ => String::new(),
+    };
+    strip_think_blocks(&raw)
+}
+
+fn is_hidden_reasoning_part(part: &Value) -> bool {
+    part.get("type").and_then(|t| t.as_str()).is_some_and(|t| {
+        t.eq_ignore_ascii_case("thinking")
+            || t.eq_ignore_ascii_case("reasoning")
+            || t.eq_ignore_ascii_case("reasoning_content")
+    })
+}
+
+fn visible_part_text(part: &Value) -> Option<&str> {
+    part.get("text")
+        .or_else(|| part.get("output_text"))
+        .and_then(|t| t.as_str())
+}
+
+fn strip_think_blocks(input: &str) -> String {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    let lower = input.to_ascii_lowercase();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        let Some(open_at) = lower.get(i..).and_then(|rest| rest.find(OPEN)) else {
+            out.push_str(&input[i..]);
+            break;
+        };
+        let open_at = i + open_at;
+        out.push_str(&input[i..open_at]);
+        let after_open = open_at + OPEN.len();
+        match lower.get(after_open..).and_then(|rest| rest.find(CLOSE)) {
+            Some(rel) => i = after_open + rel + CLOSE.len(),
+            None => break,
+        }
     }
+    out
 }
 
 fn parse_legacy_function(message: &Value) -> Option<ProbeToolCall> {
@@ -1030,6 +1068,67 @@ mod tests {
         assert_eq!(usage.completion_tokens, Some(80));
         assert_eq!(usage.reasoning_tokens, Some(40));
         assert_eq!(resp.text, "4");
+    }
+
+    #[test]
+    fn parse_chat_response_strips_think_tags() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "<think>WH-4481 secret</think>{\"word\":\"hello\"}"
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert!(!resp.text.contains("WH-4481"), "{:?}", resp.text);
+        assert!(resp.text.contains("hello"), "{:?}", resp.text);
+    }
+
+    #[test]
+    fn parse_chat_response_drops_thinking_parts() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "thinking", "text": "count these words now"},
+                        {"type": "text", "text": "ok"}
+                    ]
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert_eq!(resp.text, "ok");
+    }
+
+    #[test]
+    fn parse_chat_response_ignores_reasoning_content_field() {
+        let reasoning = "long cot that restates the secret fact WH-4481. ".repeat(40);
+        let value = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "reasoning_content": reasoning,
+                    "content": "final"
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert_eq!(resp.text, "final");
+    }
+
+    #[test]
+    fn parse_chat_response_strips_unclosed_think() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": { "content": "<think>partial" },
+                "finish_reason": "stop"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert!(!resp.text.contains("partial"), "{:?}", resp.text);
+        assert_eq!(resp.text, "");
     }
 
     #[test]
