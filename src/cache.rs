@@ -110,7 +110,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      `Added line`) is Weak.
 /// v43: vision "white space" / "white-box" / "text-processing" is Weak
 ///      (does not set supportsVision).
-pub const PROBE_SUITE_VERSION: u32 = 43;
+/// v44: SEARCH/REPLACE and unified_diff ignore `#` comment tokens
+///      the same way as `//` (`# fn greet` is not a rename).
+///      Rust attributes (`#[derive]`) are not comments.
+pub const PROBE_SUITE_VERSION: u32 = 44;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
