@@ -291,7 +291,7 @@ fn xml_closed_block_is_read_file_attempt(text: &str) -> bool {
 /// Unparseable `{'param':'value'}` (and extra-key siblings) is the card.
 fn xml_arguments_text_is_format_card(args: &str) -> bool {
     let t = args.trim();
-    let lower = t.to_ascii_lowercase();
+    let lower = xml_visible_card_token(t).to_ascii_lowercase();
     if !((lower.contains("param") || lower.contains("path")) && lower.contains("value")) {
         return false;
     }
@@ -629,6 +629,29 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_unparseable_zwsp_key_card_is_echo() {
+        for args in [
+            "{p\u{200B}ath: 'value'}",
+            "{p\u{200B}aram: 'value'}",
+            "{\u{FF50}\u{FF41}\u{FF54}\u{FF48}: 'value'}",
+        ] {
+            let response_text = format!(
+                "<tool_call>\n<name>read_file</name>\n<arguments>{args}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "unparseable ZWSP/fullwidth key card must not set canUseTools: {args} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "args={args}");
+        }
     }
 
     #[tokio::test]
