@@ -98,7 +98,7 @@ Available tools:
             }
         }
     } else if has_tool_call_open {
-        if xml_open_span_names_read_file(&text) {
+        if xml_open_span_names_read_file(&text) && !xml_open_span_is_format_card(&text) {
             (
                 0.4,
                 "Opening <tool_call> tag found but no closing tag".to_string(),
@@ -127,6 +127,9 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
     if name == "TOOL_NAME" {
         return true;
     }
+    if let Some(arr) = args.as_array() {
+        return arr.len() == 1 && is_xml_format_card_echo(name, &arr[0]);
+    }
     args.as_object().is_some_and(|o| {
         let has_real_path = nonempty_string_arg(o, "path")
             && o.get("path").and_then(|v| v.as_str()) != Some("value");
@@ -152,6 +155,23 @@ fn xml_open_span_names_read_file(text: &str) -> bool {
         return false;
     };
     text[start + "<tool_call>".len()..].contains("<name>read_file</name>")
+}
+
+/// Open-only param/value card (even without `</tool_call>`) is echo.
+fn xml_open_span_is_format_card(text: &str) -> bool {
+    let Some(start) = text.find("<tool_call>") else {
+        return false;
+    };
+    let after = &text[start + "<tool_call>".len()..];
+    let Some(args_pos) = after.find("<arguments>") else {
+        return false;
+    };
+    let args = &after[args_pos + "<arguments>".len()..];
+    let args = match args.find("</arguments>") {
+        Some(end) => &args[..end],
+        None => args,
+    };
+    xml_arguments_text_is_format_card(args)
 }
 
 /// Closed unparseable Medium only when the first block names `read_file` and
@@ -355,6 +375,84 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert!(result.score < 0.4, "card echo score: {}", result.score);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_array_wrapped_card_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>[{\"param\":\"value\"}]</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "array-wrapped param/value card must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_unclosed_card_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"param\":\"value\"}
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "unclosed param/value card must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_array_wrapped_real_path_is_still_attempt() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>[{\"path\":\"/tmp/example.txt\"}]</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Medium,
+            "array-wrapped real path is still an attempt: {result:?}"
+        );
+        assert_eq!(result.score, 0.7);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_unclosed_real_path_is_still_attempt() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"path\":\"/tmp/example.txt\"}
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Medium,
+            "unclosed real path is still an attempt: {result:?}"
+        );
+        assert_eq!(result.score, 0.4);
     }
 
     #[tokio::test]
