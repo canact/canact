@@ -69,6 +69,8 @@ impl CapabilityProfile {
         }
         if let Some(n) = self.effective_context_tokens {
             let _ = writeln!(out, "{:<28}{n}", "Effective context tokens:");
+        } else if let Some(n) = self.probed_context_floor {
+            let _ = writeln!(out, "{:<28}{n}", "Probed context floor:");
         }
         if self.needs_xml_fallback() {
             let _ = writeln!(out, "{:<28}XML fallback needed", "");

@@ -41,6 +41,7 @@ fn sample_profile() -> CapabilityProfile {
         parallel_tool_scale: pr("parallel_tool_scale"),
         probed_at: 1,
         effective_context_tokens: None,
+        probed_context_floor: None,
     }
 }
 
@@ -187,6 +188,7 @@ fn persist_cheap_run_is_not_returned_as_full() {
         cacheable: true,
         skip_expensive: true,
         vision: false,
+        advertised_context_tokens: None,
     };
     let wrote = run.persist(&mut cache, &path).expect("persist");
     assert!(wrote);
@@ -210,6 +212,7 @@ fn persist_does_not_write_when_cacheable_false() {
         cacheable: false,
         skip_expensive: false,
         vision: false,
+        advertised_context_tokens: None,
     };
     let wrote = run.persist(&mut cache, &path).expect("persist");
     assert!(!wrote, "persist must skip uncacheable runs");
@@ -218,6 +221,21 @@ fn persist_does_not_write_when_cacheable_false() {
         "cache file must not be written when cacheable=false"
     );
     assert!(cache.get("m", "p").is_none());
+}
+
+#[test]
+fn uncacheable_run_envelope_cacheable_false() {
+    let run = ProbeRun {
+        profile: sample_profile(),
+        cacheable: false,
+        skip_expensive: true,
+        vision: false,
+        advertised_context_tokens: Some(40960),
+    };
+    let envelope = run.host_policy_envelope();
+    assert_eq!(envelope["cacheable"], false, "{envelope}");
+    assert_eq!(envelope["skipExpensive"], true, "{envelope}");
+    assert_eq!(envelope["advertisedContextTokens"], 40960, "{envelope}");
 }
 
 #[test]
@@ -410,6 +428,16 @@ async fn new_throttled_sets_expensive_dims_to_free_tier_skip() {
         assert_eq!(result.score, 0.5, "{name}");
         assert_eq!(result.name, name);
     }
+    assert!(
+        !profile.meets(&[("one_shot_tool_plan", CapabilityLevel::Medium)]),
+        "cheap skip must not satisfy a Medium requirement"
+    );
+    assert_eq!(
+        profile.dimension_level("one_shot_tool_plan"),
+        Some(CapabilityLevel::Weak)
+    );
+    let envelope = profile.host_policy_envelope();
+    assert_eq!(envelope["probes"]["oneShotToolPlan"]["status"], "skipped");
 }
 
 #[tokio::test]
@@ -604,6 +632,13 @@ async fn full_run_populates_effective_context_tokens() {
     let (llm, requests) = ContextLadderLlm::wrap(MockLlm::new("m", "p"), LadderReply::Recall);
     let profile = ProbeRunner::new(llm).run().await.expect("run");
     assert_eq!(profile.effective_context_tokens, Some(16384));
+    assert_eq!(profile.probed_context_floor, Some(16384));
+    let envelope = profile.host_policy_envelope();
+    assert_eq!(envelope["effectiveContextTokens"], 16384);
+    assert_eq!(
+        envelope["probedContextFloor"], 16384,
+        "finished climb floor matches effective; envelope={envelope}"
+    );
     let rec = requests.lock().expect("lock");
     let ladder = ladder_requests(&rec);
     assert_eq!(ladder.len(), 3);
@@ -632,6 +667,15 @@ async fn cheap_run_attempts_at_most_4k_rung() {
         assert!(
             envelope["effectiveContextTokens"].is_null(),
             "throttled={throttled} envelope={envelope}"
+        );
+        assert_eq!(
+            profile.probed_context_floor,
+            Some(4096),
+            "cheap 4k pass must persist a floor; throttled={throttled}"
+        );
+        assert_eq!(
+            envelope["probedContextFloor"], 4096,
+            "cheap 4k pass must publish a floor; throttled={throttled} envelope={envelope}"
         );
         assert_eq!(
             profile.context_faithfulness.details, EXPENSIVE_SKIP,
@@ -671,6 +715,8 @@ async fn ladder_mid_climb_transient_keeps_4k_and_uncacheable() {
         .await
         .expect("run_detailed");
     assert_eq!(run.profile.effective_context_tokens, Some(4096));
+    assert_eq!(run.profile.probed_context_floor, Some(4096));
+    assert_eq!(run.host_policy_envelope()["cacheable"], false);
     assert!(
         !run.cacheable,
         "mid-climb transient must not be a 30-day cache hit"

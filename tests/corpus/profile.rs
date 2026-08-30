@@ -1,6 +1,6 @@
 use canact::{
     CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
-    EditFormatRecommendation, ProbeResult, REQUIREMENT_DIMENSION_NAMES, classify,
+    EditFormatRecommendation, HostPolicyMeta, ProbeResult, REQUIREMENT_DIMENSION_NAMES, classify,
     missing_model_message,
 };
 
@@ -51,6 +51,7 @@ fn make_profile(
         parallel_tool_scale: make_probe("parallel_tool_scale", CapabilityLevel::Strong),
         probed_at: 1_700_000_000,
         effective_context_tokens: None,
+        probed_context_floor: None,
     }
 }
 
@@ -672,6 +673,23 @@ fn human_table_includes_effective_context_tokens_when_some() {
 }
 
 #[test]
+fn human_table_prints_probed_context_floor_when_effective_unset() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.probed_context_floor = Some(4096);
+    let table = profile.format_human_table(false);
+    assert!(table.contains("4096"), "{table}");
+    assert!(table.contains("Probed context floor:"), "{table}");
+    assert!(
+        !table.to_ascii_lowercase().contains("effective context"),
+        "{table}"
+    );
+}
+
+#[test]
 fn human_table_omits_effective_context_tokens_when_none() {
     let profile = make_profile(
         CapabilityLevel::Strong,
@@ -683,6 +701,157 @@ fn human_table_omits_effective_context_tokens_when_none() {
         !table.to_ascii_lowercase().contains("effective context"),
         "{table}"
     );
+}
+
+const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
+const XML_INFERRED: &str = "Not tested (native tool calling is Strong; XML fallback unused)";
+
+fn cheap_skip_probe(name: &str) -> ProbeResult {
+    ProbeResult {
+        name: name.to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: EXPENSIVE_SKIP.to_string(),
+    }
+}
+
+#[test]
+fn is_skipped_matches_skipped_prefix_only() {
+    let skip = cheap_skip_probe("one_shot_tool_plan");
+    assert!(skip.is_skipped());
+    let xml = ProbeResult {
+        name: "xml_tool_calling".to_string(),
+        score: 1.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Strong,
+        details: XML_INFERRED.to_string(),
+    };
+    assert!(!xml.is_skipped());
+    let failed = ProbeResult {
+        name: "tool_calling".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: timeout".to_string(),
+    };
+    assert!(!failed.is_skipped());
+}
+
+#[test]
+fn cheap_skip_is_not_measured_medium() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.one_shot_tool_plan = cheap_skip_probe("one_shot_tool_plan");
+    assert_eq!(profile.one_shot_tool_plan.level, CapabilityLevel::Medium);
+    assert_eq!(profile.one_shot_tool_plan.score, 0.5);
+    assert_eq!(profile.one_shot_tool_plan.details, EXPENSIVE_SKIP);
+    assert!(
+        !profile.meets(&[("one_shot_tool_plan", CapabilityLevel::Medium)]),
+        "cheap skip must not satisfy a Medium requirement"
+    );
+    assert_eq!(
+        profile.dimension_level("one_shot_tool_plan"),
+        Some(CapabilityLevel::Weak)
+    );
+    let value = profile.host_policy_envelope();
+    assert_eq!(value["probes"]["oneShotToolPlan"]["status"], "skipped");
+    assert_eq!(value["probes"]["oneShotToolPlan"]["level"], "medium");
+}
+
+#[test]
+fn xml_inferred_strong_is_not_skipped() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.xml_tool_calling = ProbeResult {
+        name: "xml_tool_calling".to_string(),
+        score: 1.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Strong,
+        details: XML_INFERRED.to_string(),
+    };
+    assert_eq!(
+        profile.dimension_level("xml_tool_calling"),
+        Some(CapabilityLevel::Strong)
+    );
+    let value = profile.host_policy_envelope();
+    assert_eq!(value["probes"]["xmlToolCalling"]["status"], "completed");
+}
+
+#[test]
+fn unprobed_default_envelope_status_is_unprobed() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.vision = ProbeResult {
+        name: "vision".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Not probed (cached before this probe existed)".to_string(),
+    };
+    let value = profile.host_policy_envelope();
+    assert_eq!(value["probes"]["vision"]["status"], "unprobed");
+}
+
+#[test]
+fn synthesized_error_envelope_status_is_error() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.tool_calling = ProbeResult {
+        name: "tool_calling".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: timeout".to_string(),
+    };
+    let value = profile.host_policy_envelope();
+    assert_eq!(value["probes"]["toolCalling"]["status"], "error");
+}
+
+#[test]
+fn host_policy_envelope_with_emits_session_flags() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Strong,
+    );
+    profile.probed_context_floor = Some(4096);
+    let value = profile.host_policy_envelope_with(HostPolicyMeta {
+        cacheable: false,
+        skip_expensive: true,
+        advertised_context_tokens: Some(40960),
+    });
+    assert_eq!(value["cacheable"], false, "{value}");
+    assert_eq!(value["skipExpensive"], true, "{value}");
+    assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
+    assert_eq!(value["probedContextFloor"], 4096, "{value}");
+    assert!(value["effectiveContextTokens"].is_null(), "{value}");
+}
+
+#[test]
+fn host_policy_envelope_default_meta_is_cacheable_full() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Strong,
+    );
+    let value = profile.host_policy_envelope();
+    assert_eq!(value["cacheable"], true, "{value}");
+    assert_eq!(value["skipExpensive"], false, "{value}");
+    assert!(value["advertisedContextTokens"].is_null(), "{value}");
+    assert!(value["probedContextFloor"].is_null(), "{value}");
 }
 
 #[test]

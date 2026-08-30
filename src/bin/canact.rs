@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    CapabilityProfile, CatalogPriors, OpenAiCompatClient, ProbeCache, ProbeError, ProbeRunner,
-    list_model_ids, missing_model_message,
+    CapabilityProfile, CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError,
+    ProbeRun, ProbeRunner, list_model_ids, missing_model_message,
 };
 use clap::{Parser, Subcommand};
 
@@ -71,6 +71,10 @@ struct ProbeArgs {
     /// Cache file [default: platform cache dir / canact / probes.json]
     #[arg(long)]
     cache: Option<PathBuf>,
+
+    /// Catalog prior: advertised context window in tokens
+    #[arg(long, value_name = "N")]
+    advertised_context: Option<u32>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -103,7 +107,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         .clone()
         .unwrap_or_else(|| provider_from_url(&base_url));
     let catalog = CatalogPriors {
-        advertised_context_tokens: None,
+        advertised_context_tokens: args.advertised_context,
         supports_vision: if args.vision {
             Some(true)
         } else if args.no_vision {
@@ -129,7 +133,16 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             .get_with_knobs(&model, &provider, cheap, vision)
             .cloned()
         {
-            return emit_profile(&profile, args.json, args.verbose);
+            return emit_profile(
+                &profile,
+                args.json,
+                args.verbose,
+                HostPolicyMeta {
+                    cacheable: true,
+                    skip_expensive: cheap,
+                    advertised_context_tokens: args.advertised_context,
+                },
+            );
         }
     }
 
@@ -168,12 +181,35 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         eprintln!("warning: failed to save probe cache: {err}");
     }
 
-    emit_profile(&run.profile, args.json, args.verbose)
+    emit_run(&run, args.json, args.verbose)
 }
 
-fn emit_profile(profile: &CapabilityProfile, json: bool, verbose: bool) -> Result<(), u8> {
+fn emit_run(run: &ProbeRun, json: bool, verbose: bool) -> Result<(), u8> {
+    emit_envelope(&run.profile, json, verbose, run.host_policy_envelope())
+}
+
+fn emit_profile(
+    profile: &CapabilityProfile,
+    json: bool,
+    verbose: bool,
+    meta: HostPolicyMeta,
+) -> Result<(), u8> {
+    emit_envelope(
+        profile,
+        json,
+        verbose,
+        profile.host_policy_envelope_with(meta),
+    )
+}
+
+fn emit_envelope(
+    profile: &CapabilityProfile,
+    json: bool,
+    verbose: bool,
+    envelope: serde_json::Value,
+) -> Result<(), u8> {
     if json {
-        match serde_json::to_string_pretty(&profile.host_policy_envelope()) {
+        match serde_json::to_string_pretty(&envelope) {
             Ok(s) => println!("{s}"),
             Err(err) => {
                 eprintln!("error: failed to serialize probe JSON: {err}");
