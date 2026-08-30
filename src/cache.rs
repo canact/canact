@@ -125,7 +125,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      is Weak.
 /// v50: XML multi-element `[{"param":"value"},{"param":"value"}]`
 ///      is format-card echo (does not set canUseTools).
-pub const PROBE_SUITE_VERSION: u32 = 50;
+/// v51: unified_diff hyphenated or double-space format-card body
+///      (`removed-line` / `added-line`, `removed  line` / `added  line`)
+///      is Weak.
+pub const PROBE_SUITE_VERSION: u32 = 51;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
