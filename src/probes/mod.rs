@@ -207,6 +207,17 @@ pub fn refuse_truncated_tool_call(resp: &ProbeResponse) -> Result<(), ProbeError
     }
 }
 
+/// Length plus a score below Strong is a truncated half-call, not a 30-day Medium.
+pub fn refuse_truncated_incomplete(finish: ProbeFinish, score: f32) -> Result<(), ProbeError> {
+    if finish == ProbeFinish::Length && score < 1.0 {
+        Err(ProbeError::Transient(
+            "response truncated before a complete tool call".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::collections::VecDeque;
@@ -487,8 +498,8 @@ mod extract_json_tests {
 
 #[cfg(test)]
 mod refuse_truncated_tests {
-    use super::refuse_truncated_tool_call;
     use super::test_support::{text_response, tool_call_response};
+    use super::{refuse_truncated_incomplete, refuse_truncated_tool_call};
     use crate::client::{ProbeFinish, ProbeResponse};
     use crate::error::ProbeError;
 
@@ -518,5 +529,24 @@ mod refuse_truncated_tests {
         let mut resp = tool_call_response();
         resp.finish = ProbeFinish::Length;
         assert!(refuse_truncated_tool_call(&resp).is_ok());
+    }
+
+    #[test]
+    fn refuse_truncated_incomplete_errors_on_length_below_strong() {
+        let err = refuse_truncated_incomplete(ProbeFinish::Length, 0.5).expect_err("must refuse");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn refuse_truncated_incomplete_allows_length_at_strong() {
+        assert!(refuse_truncated_incomplete(ProbeFinish::Length, 1.0).is_ok());
+    }
+
+    #[test]
+    fn refuse_truncated_incomplete_allows_stop_below_strong() {
+        assert!(refuse_truncated_incomplete(ProbeFinish::Stop, 0.5).is_ok());
     }
 }

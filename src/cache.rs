@@ -160,7 +160,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v66: adapter strips <think> / thinking parts so CoT is not graded.
 /// v67: Length + no tool call is truncated (uncacheable), not 30-day Weak.
 /// v68: recommendedContextTokens = min(advertised, measured); advertised in cache key.
-pub const PROBE_SUITE_VERSION: u32 = 68;
+/// v69: Length + incomplete tool/XML is truncated, not 30-day Medium.
+pub const PROBE_SUITE_VERSION: u32 = 69;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

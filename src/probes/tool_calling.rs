@@ -5,7 +5,8 @@ use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{CapabilityLevel, ProbeResult, classify};
 
 use super::{
-    has_visible_arg_text, nonempty_string_arg, refuse_truncated_tool_call, tool, user_text,
+    has_visible_arg_text, nonempty_string_arg, refuse_truncated_incomplete,
+    refuse_truncated_tool_call, tool, user_text,
 };
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
@@ -69,6 +70,7 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
         }
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "tool_calling".to_string(),
         score,
@@ -241,6 +243,7 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
         (0.0, "No tool calls in response".to_string())
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "complex_tool_calling".to_string(),
         score,
@@ -372,6 +375,7 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
         }
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "nested_arguments".to_string(),
         score,
@@ -566,6 +570,7 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
         .iter()
         .any(|c| matches!(c.name.as_str(), "edit_file" | "search" | "run_command"));
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "tool_selection".to_string(),
         score,
@@ -701,6 +706,69 @@ mod tests {
         assert_ne!(result.score, 0.0, "must not persist Weak 0.0");
         assert!(!cacheable, "truncation must not be a 30-day cache hit");
         assert!(result.details.contains("truncated"), "{}", result.details);
+    }
+
+    #[tokio::test]
+    async fn tool_calling_length_incomplete_is_transient() {
+        for arguments in [serde_json::json!({}), serde_json::json!({"path": ""})] {
+            let response = ProbeResponse {
+                text: String::new(),
+                tool_calls: vec![call("call_1", "read_file", arguments.clone())],
+                finish: ProbeFinish::Length,
+                usage: None,
+            };
+            let err = probe_tool_calling(&MockLlm { response })
+                .await
+                .expect_err("Length + incomplete tool must not score Medium");
+            assert!(
+                matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+                "{err:?} args={arguments}"
+            );
+            let (result, cacheable) =
+                crate::runner::resolve_probe(Err(err), "tool_calling").expect("synthesized Medium");
+            assert_eq!(result.level, CapabilityLevel::Medium);
+            assert!(
+                !cacheable,
+                "Length + incomplete must not be a 30-day cache hit: {arguments}"
+            );
+            assert!(result.details.contains("truncated"), "{}", result.details);
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_calling_stop_empty_path_stays_medium() {
+        let response = ProbeResponse {
+            text: String::new(),
+            tool_calls: vec![call("call_1", "read_file", serde_json::json!({"path": ""}))],
+            finish: ProbeFinish::Stop,
+            usage: None,
+        };
+        let result = probe_tool_calling(&MockLlm { response })
+            .await
+            .expect("Stop + empty path is a real Medium");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.5);
+        let (result, cacheable) =
+            crate::runner::resolve_probe(Ok(result), "tool_calling").expect("cacheable Medium");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.5);
+        assert!(cacheable, "Stop + incomplete args stays cacheable Medium");
+    }
+
+    #[tokio::test]
+    async fn tool_calling_length_complete_stays_strong() {
+        let mut response = tool_call_response();
+        response.finish = ProbeFinish::Length;
+        let result = probe_tool_calling(&MockLlm { response })
+            .await
+            .expect("Length + complete Strong must stay Strong");
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.score, 1.0);
+        let (result, cacheable) =
+            crate::runner::resolve_probe(Ok(result), "tool_calling").expect("cacheable Strong");
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.score, 1.0);
+        assert!(cacheable, "complete Strong on Length stays cacheable");
     }
 
     #[tokio::test]

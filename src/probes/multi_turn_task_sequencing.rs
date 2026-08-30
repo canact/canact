@@ -6,12 +6,12 @@
 //! competence, unlike [`super::one_shot_tool_plan`].
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
+use crate::client::{ProbeClient, ProbeFinish, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    assistant_tool_calls, nonempty_string_arg, refuse_truncated_tool_call, tool, tool_result,
-    user_text,
+    assistant_tool_calls, nonempty_string_arg, refuse_truncated_incomplete,
+    refuse_truncated_tool_call, tool, tool_result, user_text,
 };
 
 fn tool_specs() -> Vec<crate::client::ProbeTool> {
@@ -119,6 +119,7 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
     let mut precise_run = false;
     let mut first_tool: Option<String> = None;
     let mut turns = 0u32;
+    let mut last_finish = ProbeFinish::Stop;
 
     for _ in 0..3 {
         turns += 1;
@@ -131,6 +132,7 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
         };
         let response = llm.chat(request).await?;
         refuse_truncated_tool_call(&response)?;
+        last_finish = response.finish;
         let calls = response.tool_calls;
         if calls.is_empty() {
             break;
@@ -215,6 +217,7 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
         }
     };
 
+    refuse_truncated_incomplete(last_finish, score)?;
     Ok(ProbeResult {
         name: "multi_turn_task_sequencing".to_string(),
         score,

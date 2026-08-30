@@ -5,7 +5,8 @@ use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    has_visible_arg_text, nonempty_string_arg, refuse_truncated_tool_call, system_text, user_text,
+    has_visible_arg_text, nonempty_string_arg, refuse_truncated_incomplete,
+    refuse_truncated_tool_call, system_text, user_text,
 };
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/example.txt. Do not describe what you would do. Do not ask for confirmation.";
@@ -52,6 +53,7 @@ Available tools:
     if !response.text.contains("<tool_call>") {
         refuse_truncated_tool_call(&response)?;
     }
+    let finish = response.finish;
     let text = response.text;
 
     let has_tool_call_open = text.contains("<tool_call>");
@@ -118,6 +120,7 @@ Available tools:
         (0.0, "No <tool_call> tags in response".to_string())
     };
 
+    refuse_truncated_incomplete(finish, score)?;
     Ok(ProbeResult {
         name: "xml_tool_calling".to_string(),
         score,
@@ -377,6 +380,31 @@ mod tests {
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_length_unclosed_is_transient() {
+        let response = crate::client::ProbeResponse {
+            text: "<tool_call>\n<name>read_file</name>".into(),
+            tool_calls: Vec::new(),
+            finish: crate::client::ProbeFinish::Length,
+            usage: None,
+        };
+        let err = probe_xml_tool_calling(&MockLlm { response })
+            .await
+            .expect_err("Length + unclosed XML must not score Medium");
+        assert!(
+            matches!(&err, crate::ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+        let (result, cacheable) =
+            crate::runner::resolve_probe(Err(err), "xml_tool_calling").expect("synthesized Medium");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert!(
+            !cacheable,
+            "Length + unclosed XML must not be a 30-day cache hit"
+        );
+        assert!(result.details.contains("truncated"), "{}", result.details);
     }
 
     #[tokio::test]
