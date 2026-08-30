@@ -137,9 +137,7 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
 fn xml_args_have_real_path(args: &serde_json::Value) -> bool {
     match args {
         serde_json::Value::Object(o) => {
-            let own = xml_map_get_ci(o, "path")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("value"));
+            let own = xml_map_get_ci(o, "path").is_some_and(xml_path_value_is_real);
             own || o.values().any(xml_args_have_real_path)
         }
         serde_json::Value::Array(arr) => arr.iter().any(xml_args_have_real_path),
@@ -168,9 +166,7 @@ fn xml_args_are_card_tokens(args: &serde_json::Value) -> bool {
 
 fn xml_object_is_card(o: &serde_json::Map<String, serde_json::Value>) -> bool {
     let param_value_echo = xml_map_get_ci(o, "param").is_some_and(xml_value_is_card_value);
-    let path_value_echo = xml_map_get_ci(o, "path")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| s.eq_ignore_ascii_case("value"));
+    let path_value_echo = xml_map_get_ci(o, "path").is_some_and(xml_value_is_card_value);
     let schema_echo = xml_map_get_ci(o, "type")
         .and_then(|v| v.as_str())
         .is_some_and(|s| s.eq_ignore_ascii_case("object"))
@@ -181,16 +177,30 @@ fn xml_object_is_card(o: &serde_json::Map<String, serde_json::Value>) -> bool {
     param_value_echo || path_value_echo || schema_echo
 }
 
+/// A string or array `path` that is not the card token `value`.
+/// Schema objects under `properties.path` are not a real call.
+fn xml_path_value_is_real(v: &serde_json::Value) -> bool {
+    if let Some(s) = v.as_str() {
+        let t = s.trim();
+        return !t.is_empty() && !t.eq_ignore_ascii_case("value");
+    }
+    v.as_array()
+        .is_some_and(|arr| !arr.is_empty() && !xml_value_is_card_value(v))
+}
+
 /// `{"param":"value"}` and `{"param":["value"]}`.
 fn xml_value_is_card_value(v: &serde_json::Value) -> bool {
-    if v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("value")) {
+    if v.as_str()
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case("value"))
+    {
         return true;
     }
     v.as_array().is_some_and(|arr| {
         !arr.is_empty()
-            && arr
-                .iter()
-                .all(|el| el.as_str().is_some_and(|s| s.eq_ignore_ascii_case("value")))
+            && arr.iter().all(|el| {
+                el.as_str()
+                    .is_some_and(|s| s.trim().eq_ignore_ascii_case("value"))
+            })
     })
 }
 
@@ -736,6 +746,30 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_path_array_and_padded_value_are_echo() {
+        for args in [
+            "{\"path\":[\"value\"]}",
+            "{\"path\":[\"Value\"]}",
+            "{\"path\":\"value \"}",
+            "{\"path\":\" Value\"}",
+        ] {
+            let response_text = format!(
+                "<tool_call>\n<name>read_file</name>\n<arguments>{args}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "path card variants must not set canUseTools: {args} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "args={args}");
+        }
     }
 
     #[tokio::test]
