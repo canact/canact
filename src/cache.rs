@@ -2,8 +2,8 @@
 //!
 //! Persists [`CapabilityProfile`] results to disk so that probing is only
 //! performed once per model+provider+settings combination (with a 30-day
-//! TTL). Cache keys include reasoning effort, probe suite version, and the
-//! cheap/full plus vision suite knobs.
+//! TTL). Cache keys include reasoning effort, probe suite version, the
+//! cheap/full plus vision suite knobs, and the advertised context cap.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -159,7 +159,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      persist probed_context_floor; CLI envelope cacheable/skipExpensive.
 /// v66: adapter strips <think> / thinking parts so CoT is not graded.
 /// v67: Length + no tool call is truncated (uncacheable), not 30-day Weak.
-pub const PROBE_SUITE_VERSION: u32 = 67;
+/// v68: recommendedContextTokens = min(advertised, measured); advertised in cache key.
+pub const PROBE_SUITE_VERSION: u32 = 68;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -194,7 +195,7 @@ fn default_suite_v1() -> u32 {
     1
 }
 
-/// File-based probe cache keyed by model|provider|effort|suite|cost|vision.
+/// File-based probe cache keyed by model|provider|effort|suite|cost|vision|ctx.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProbeCache {
     /// All cached entries.
@@ -238,16 +239,23 @@ impl ProbeCache {
 
     /// Get a cached profile for the current suite, default effort, and default knobs.
     pub fn get(&self, model_id: &str, provider: &str) -> Option<&CapabilityProfile> {
-        self.get_with_knobs(model_id, provider, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION)
+        self.get_with_knobs(
+            model_id,
+            provider,
+            DEFAULT_SKIP_EXPENSIVE,
+            DEFAULT_VISION,
+            None,
+        )
     }
 
-    /// Get a cached profile for the current suite and explicit cheap/vision knobs.
+    /// Get a cached profile for the current suite and explicit cheap/vision/context knobs.
     pub fn get_with_knobs(
         &self,
         model_id: &str,
         provider: &str,
         skip_expensive: bool,
         vision: bool,
+        advertised: Option<u32>,
     ) -> Option<&CapabilityProfile> {
         self.get_with_settings(
             model_id,
@@ -256,10 +264,12 @@ impl ProbeCache {
             PROBE_SUITE_VERSION,
             skip_expensive,
             vision,
+            advertised,
         )
     }
 
     /// Get a cached profile for explicit effort/suite/knob settings.
+    #[allow(clippy::too_many_arguments)]
     pub fn get_with_settings(
         &self,
         model_id: &str,
@@ -268,6 +278,7 @@ impl ProbeCache {
         suite_version: u32,
         skip_expensive: bool,
         vision: bool,
+        advertised: Option<u32>,
     ) -> Option<&CapabilityProfile> {
         let key = Self::cache_key_with_knobs(
             model_id,
@@ -276,6 +287,7 @@ impl ProbeCache {
             suite_version,
             skip_expensive,
             vision,
+            advertised,
         );
         self.profiles.get(&key).and_then(|entry| {
             if Self::is_valid(entry) {
@@ -288,16 +300,23 @@ impl ProbeCache {
 
     /// Look up the full cache entry (for doctor/probe display metadata).
     pub fn get_entry(&self, model_id: &str, provider: &str) -> Option<&CacheEntry> {
-        self.get_entry_with_knobs(model_id, provider, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION)
+        self.get_entry_with_knobs(
+            model_id,
+            provider,
+            DEFAULT_SKIP_EXPENSIVE,
+            DEFAULT_VISION,
+            None,
+        )
     }
 
-    /// Look up the full cache entry for explicit cheap/vision knobs.
+    /// Look up the full cache entry for explicit cheap/vision/context knobs.
     pub fn get_entry_with_knobs(
         &self,
         model_id: &str,
         provider: &str,
         skip_expensive: bool,
         vision: bool,
+        advertised: Option<u32>,
     ) -> Option<&CacheEntry> {
         let key = Self::cache_key_with_knobs(
             model_id,
@@ -306,21 +325,23 @@ impl ProbeCache {
             PROBE_SUITE_VERSION,
             skip_expensive,
             vision,
+            advertised,
         );
         self.profiles.get(&key).filter(|e| Self::is_valid(e))
     }
 
     /// Store a profile under the current suite, default effort, and default knobs.
     pub fn put(&mut self, profile: CapabilityProfile) {
-        self.put_with_knobs(profile, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION);
+        self.put_with_knobs(profile, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, None);
     }
 
-    /// Store a profile under the current suite with explicit cheap/vision knobs.
+    /// Store a profile under the current suite with explicit cheap/vision/context knobs.
     pub fn put_with_knobs(
         &mut self,
         profile: CapabilityProfile,
         skip_expensive: bool,
         vision: bool,
+        advertised: Option<u32>,
     ) {
         self.put_with_settings(
             profile,
@@ -328,6 +349,7 @@ impl ProbeCache {
             PROBE_SUITE_VERSION,
             skip_expensive,
             vision,
+            advertised,
         );
     }
 
@@ -339,6 +361,7 @@ impl ProbeCache {
         suite_version: u32,
         skip_expensive: bool,
         vision: bool,
+        advertised: Option<u32>,
     ) {
         let key = Self::cache_key_with_knobs(
             &profile.model_id,
@@ -347,6 +370,7 @@ impl ProbeCache {
             suite_version,
             skip_expensive,
             vision,
+            advertised,
         );
         let entry = CacheEntry {
             cached_at: unix_now(),
@@ -396,10 +420,12 @@ impl ProbeCache {
             suite_version,
             DEFAULT_SKIP_EXPENSIVE,
             DEFAULT_VISION,
+            None,
         )
     }
 
-    /// Cache key including cheap/full and vision suite knobs.
+    /// Cache key including cheap/full, vision, and advertised context knobs.
+    #[allow(clippy::too_many_arguments)]
     pub fn cache_key_with_knobs(
         model_id: &str,
         provider: &str,
@@ -407,10 +433,15 @@ impl ProbeCache {
         suite_version: u32,
         skip_expensive: bool,
         vision: bool,
+        advertised: Option<u32>,
     ) -> String {
         let cost = if skip_expensive { "cheap" } else { "full" };
         let vis = if vision { "vision" } else { "novision" };
-        format!("{model_id}|{provider}|{reasoning_effort}|v{suite_version}|{cost}|{vis}")
+        let ctx = match advertised {
+            Some(n) => format!("ctx{n}"),
+            None => "ctxnone".to_owned(),
+        };
+        format!("{model_id}|{provider}|{reasoning_effort}|v{suite_version}|{cost}|{vis}|{ctx}")
     }
 
     /// Check whether a cache entry is still valid (less than 30 days old).

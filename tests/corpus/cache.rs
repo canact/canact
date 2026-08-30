@@ -43,12 +43,12 @@ fn sample_profile() -> CapabilityProfile {
 #[test]
 fn cache_key_includes_effort_and_suite() {
     let k = ProbeCache::cache_key("gpt", "openai", "unset", 2);
-    assert_eq!(k, "gpt|openai|unset|v2|full|novision");
+    assert_eq!(k, "gpt|openai|unset|v2|full|novision|ctxnone");
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v67() {
-    assert_eq!(PROBE_SUITE_VERSION, 67);
+fn cache_key_format_is_model_provider_unset_v68() {
+    assert_eq!(PROBE_SUITE_VERSION, 68);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -56,19 +56,28 @@ fn cache_key_format_is_model_provider_unset_v67() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v67|full|novision");
+    assert_eq!(k, "model|provider|unset|v68|full|novision|ctxnone");
 }
 
 #[test]
 fn cache_key_includes_cheap_and_vision_knobs() {
-    let cheap = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, true, false);
-    let full = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, false);
-    let vision = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, true);
+    let cheap = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, true, false, None);
+    let full = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, false, None);
+    let vision = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, true, None);
     assert_ne!(cheap, full);
     assert_ne!(full, vision);
-    assert_eq!(cheap, "m|p|unset|v7|cheap|novision");
-    assert_eq!(full, "m|p|unset|v7|full|novision");
-    assert_eq!(vision, "m|p|unset|v7|full|vision");
+    assert_eq!(cheap, "m|p|unset|v7|cheap|novision|ctxnone");
+    assert_eq!(full, "m|p|unset|v7|full|novision|ctxnone");
+    assert_eq!(vision, "m|p|unset|v7|full|vision|ctxnone");
+}
+
+#[test]
+fn cache_key_includes_advertised_context() {
+    let none = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, false, None);
+    let cap = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, false, Some(2000));
+    assert_ne!(none, cap);
+    assert_eq!(none, "m|p|unset|v7|full|novision|ctxnone");
+    assert_eq!(cap, "m|p|unset|v7|full|novision|ctx2000");
 }
 
 #[test]
@@ -100,6 +109,7 @@ fn get_misses_when_effort_differs() {
         PROBE_SUITE_VERSION,
         DEFAULT_SKIP_EXPENSIVE,
         DEFAULT_VISION,
+        None,
     );
     assert!(
         cache
@@ -110,6 +120,7 @@ fn get_misses_when_effort_differs() {
                 PROBE_SUITE_VERSION,
                 DEFAULT_SKIP_EXPENSIVE,
                 DEFAULT_VISION,
+                None,
             )
             .is_none(),
         "xhigh must not hit unset cache entry"
@@ -123,6 +134,7 @@ fn get_misses_when_effort_differs() {
                 PROBE_SUITE_VERSION,
                 DEFAULT_SKIP_EXPENSIVE,
                 DEFAULT_VISION,
+                None,
             )
             .is_some()
     );
@@ -137,6 +149,7 @@ fn get_misses_when_suite_differs() {
         6,
         DEFAULT_SKIP_EXPENSIVE,
         DEFAULT_VISION,
+        None,
     );
     assert!(
         cache
@@ -147,26 +160,43 @@ fn get_misses_when_suite_differs() {
                 PROBE_SUITE_VERSION,
                 DEFAULT_SKIP_EXPENSIVE,
                 DEFAULT_VISION,
+                None,
             )
             .is_none(),
-        "suite v67 must not hit v6 cache entry"
+        "suite v68 must not hit v6 cache entry"
+    );
+}
+
+#[test]
+fn advertised_cache_misses_on_different_cap() {
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(sample_profile(), false, false, None);
+    assert!(
+        cache.get_with_knobs("m", "p", false, false, None).is_some(),
+        "uncapped put must hit uncapped get"
+    );
+    assert!(
+        cache
+            .get_with_knobs("m", "p", false, false, Some(2000))
+            .is_none(),
+        "advertised 2000 must not reuse an uncapped climb"
     );
 }
 
 #[test]
 fn cheap_cache_misses_on_full_and_vision() {
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(sample_profile(), true, false);
+    cache.put_with_knobs(sample_profile(), true, false, None);
     assert!(
-        cache.get_with_knobs("m", "p", true, false).is_some(),
+        cache.get_with_knobs("m", "p", true, false, None).is_some(),
         "cheap/novision must hit its own entry"
     );
     assert!(
-        cache.get_with_knobs("m", "p", false, false).is_none(),
+        cache.get_with_knobs("m", "p", false, false, None).is_none(),
         "full must not return a cheap-cached profile"
     );
     assert!(
-        cache.get_with_knobs("m", "p", true, true).is_none(),
+        cache.get_with_knobs("m", "p", true, true, None).is_none(),
         "vision must not return a no-vision cheap-cached profile"
     );
     assert!(

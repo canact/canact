@@ -374,6 +374,19 @@ impl CapabilityProfile {
         }
     }
 
+    /// Production context window: `min(advertised, measured)`.
+    ///
+    /// Measured is [`Self::effective_context_tokens`] or else
+    /// [`Self::probed_context_floor`]. Advertised alone is never returned.
+    pub fn recommended_context_tokens(&self, advertised: Option<u32>) -> Option<u32> {
+        let measured = self.effective_context_tokens.or(self.probed_context_floor);
+        match (advertised, measured) {
+            (Some(a), Some(m)) => Some(a.min(m)),
+            (None, Some(m)) => Some(m),
+            (Some(_), None) | (None, None) => None,
+        }
+    }
+
     /// Returns true when every named dimension is at least the required level.
     ///
     /// Unknown dimension names are skipped. Hosts zip their own pairs.
@@ -417,6 +430,7 @@ impl CapabilityProfile {
             "needsJsonRepair": self.needs_json_repair(),
             "effectiveContextTokens": self.effective_context_tokens,
             "probedContextFloor": self.probed_context_floor,
+            "recommendedContextTokens": self.recommended_context_tokens(meta.advertised_context_tokens),
             "cacheable": meta.cacheable,
             "skipExpensive": meta.skip_expensive,
             "advertisedContextTokens": meta.advertised_context_tokens,
@@ -519,5 +533,104 @@ pub fn classify(score: f32) -> CapabilityLevel {
         CapabilityLevel::Medium
     } else {
         CapabilityLevel::Weak
+    }
+}
+
+#[cfg(test)]
+mod recommended_context_tests {
+    use super::*;
+
+    fn probe(name: &str) -> ProbeResult {
+        ProbeResult {
+            name: name.to_string(),
+            score: 1.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Strong,
+            details: "test".to_string(),
+        }
+    }
+
+    fn profile() -> CapabilityProfile {
+        CapabilityProfile {
+            model_id: "m".to_string(),
+            provider: "p".to_string(),
+            tool_calling: probe("tool_calling"),
+            json_output: probe("json_output"),
+            instruction_following: probe("instruction_following"),
+            search_replace: probe("search_replace"),
+            unified_diff: probe("unified_diff"),
+            complex_tool_calling: probe("complex_tool_calling"),
+            nested_arguments: probe("nested_arguments"),
+            vision: probe("vision"),
+            tool_selection: probe("tool_selection"),
+            xml_tool_calling: probe("xml_tool_calling"),
+            streaming_tool_calls: probe("streaming_tool_calls"),
+            one_shot_tool_plan: probe("one_shot_tool_plan"),
+            multi_turn_task_sequencing: probe("multi_turn_task_sequencing"),
+            context_faithfulness: probe("context_faithfulness"),
+            code_syntax: probe("code_syntax"),
+            max_tokens_compliance: probe("max_tokens_compliance"),
+            multi_turn_memory: probe("multi_turn_memory"),
+            system_message_adherence: probe("system_message_adherence"),
+            token_efficiency: probe("token_efficiency"),
+            parallel_tool_scale: probe("parallel_tool_scale"),
+            probed_at: 1,
+            effective_context_tokens: None,
+            probed_context_floor: None,
+        }
+    }
+
+    #[test]
+    fn recommended_context_caps_catalog_lie() {
+        let mut p = profile();
+        p.probed_context_floor = Some(4096);
+        assert_eq!(p.recommended_context_tokens(Some(40960)), Some(4096));
+    }
+
+    #[test]
+    fn recommended_context_honors_smaller_advertised() {
+        let mut p = profile();
+        p.probed_context_floor = Some(4096);
+        assert_eq!(p.recommended_context_tokens(Some(2000)), Some(2000));
+    }
+
+    #[test]
+    fn recommended_context_never_advertised_alone() {
+        let p = profile();
+        assert!(p.effective_context_tokens.is_none());
+        assert!(p.probed_context_floor.is_none());
+        assert_eq!(p.recommended_context_tokens(Some(8192)), None);
+    }
+
+    #[test]
+    fn recommended_context_uses_floor_when_unadvertised() {
+        let mut p = profile();
+        p.probed_context_floor = Some(4096);
+        assert_eq!(p.recommended_context_tokens(None), Some(4096));
+    }
+
+    #[test]
+    fn recommended_context_tokens_in_host_policy_envelope() {
+        let mut p = profile();
+        p.probed_context_floor = Some(4096);
+        let value = p.host_policy_envelope_with(HostPolicyMeta {
+            cacheable: true,
+            skip_expensive: true,
+            advertised_context_tokens: Some(40960),
+        });
+        assert_eq!(value["recommendedContextTokens"], 4096, "{value}");
+        assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
+        assert_eq!(value["probedContextFloor"], 4096, "{value}");
+    }
+
+    #[test]
+    fn recommended_context_tokens_null_when_unmeasured() {
+        let p = profile();
+        let value = p.host_policy_envelope_with(HostPolicyMeta {
+            cacheable: true,
+            skip_expensive: false,
+            advertised_context_tokens: Some(8192),
+        });
+        assert!(value["recommendedContextTokens"].is_null(), "{value}");
     }
 }

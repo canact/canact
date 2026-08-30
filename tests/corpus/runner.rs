@@ -193,12 +193,38 @@ fn persist_cheap_run_is_not_returned_as_full() {
     let wrote = run.persist(&mut cache, &path).expect("persist");
     assert!(wrote);
     assert!(
-        cache.get_with_knobs("m", "p", true, false).is_some(),
+        cache.get_with_knobs("m", "p", true, false, None).is_some(),
         "cheap persist must be readable with cheap knobs"
     );
     assert!(
         cache.get("m", "p").is_none(),
         "full/default get must not return a cheap-persisted profile"
+    );
+}
+
+#[test]
+fn persist_advertised_is_not_returned_as_uncapped() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let run = ProbeRun {
+        profile: sample_profile(),
+        cacheable: true,
+        skip_expensive: false,
+        vision: false,
+        advertised_context_tokens: Some(2000),
+    };
+    let wrote = run.persist(&mut cache, &path).expect("persist");
+    assert!(wrote);
+    assert!(
+        cache
+            .get_with_knobs("m", "p", false, false, Some(2000))
+            .is_some(),
+        "advertised persist must hit the same advertised get"
+    );
+    assert!(
+        cache.get("m", "p").is_none(),
+        "uncapped get must not reuse an advertised-capped climb"
     );
 }
 
@@ -294,6 +320,7 @@ fn uncacheable_run_envelope_cacheable_false() {
     assert_eq!(envelope["cacheable"], false, "{envelope}");
     assert_eq!(envelope["skipExpensive"], true, "{envelope}");
     assert_eq!(envelope["advertisedContextTokens"], 40960, "{envelope}");
+    assert!(envelope["recommendedContextTokens"].is_null(), "{envelope}");
 }
 
 #[test]

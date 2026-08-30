@@ -10,6 +10,11 @@ const MISSING_MODEL_ID_PREVIEW: usize = 8;
 impl CapabilityProfile {
     /// Non-`--json` table printed by `canact probe`.
     pub fn format_human_table(&self, verbose: bool) -> String {
+        self.format_human_table_with(verbose, None)
+    }
+
+    /// Human table with an advertised context prior for the recommended window.
+    pub fn format_human_table_with(&self, verbose: bool, advertised: Option<u32>) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "=== Probe Results ===");
         let _ = writeln!(out, "Weak < 0.4   Medium >= 0.4   Strong >= 0.8");
@@ -66,6 +71,9 @@ impl CapabilityProfile {
             None => {
                 let _ = writeln!(out, "{:<28}unlimited", "Max tools:");
             }
+        }
+        if let Some(n) = self.recommended_context_tokens(advertised) {
+            let _ = writeln!(out, "{:<28}{n}", "Recommended context tokens:");
         }
         if let Some(n) = self.effective_context_tokens {
             let _ = writeln!(out, "{:<28}{n}", "Effective context tokens:");

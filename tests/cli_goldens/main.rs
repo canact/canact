@@ -148,6 +148,7 @@ fn probe_cheap_cache_is_not_returned_on_full() {
         cached_profile(CapabilityLevel::Weak, CapabilityLevel::Weak),
         true,
         false,
+        None,
     );
     cache.save(&cache_path).expect("save cheap cache");
     let cache_str = cache_path.to_str().expect("utf8 cache path");
@@ -216,7 +217,7 @@ fn probe_cheap_cache_is_not_returned_on_full() {
     );
 }
 
-fn probe_json_from_cache(args: &[&str], cheap: bool) -> serde_json::Value {
+fn probe_json_from_cache(args: &[&str], cheap: bool, advertised: Option<u32>) -> serde_json::Value {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
@@ -224,6 +225,7 @@ fn probe_json_from_cache(args: &[&str], cheap: bool) -> serde_json::Value {
         cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
         cheap,
         false,
+        advertised,
     );
     cache.save(&cache_path).expect("save cache");
     let cache_str = cache_path.to_str().expect("utf8 cache path");
@@ -253,19 +255,24 @@ fn probe_json_from_cache(args: &[&str], cheap: bool) -> serde_json::Value {
 
 #[test]
 fn probe_json_cache_hit_includes_flags() {
-    let cheap = probe_json_from_cache(&["--cheap"], true);
+    let cheap = probe_json_from_cache(&["--cheap"], true, None);
     assert_eq!(cheap["cacheable"], true, "{cheap}");
     assert_eq!(cheap["skipExpensive"], true, "{cheap}");
 
-    let full = probe_json_from_cache(&["--full"], false);
+    let full = probe_json_from_cache(&["--full"], false, None);
     assert_eq!(full["cacheable"], true, "{full}");
     assert_eq!(full["skipExpensive"], false, "{full}");
 }
 
 #[test]
 fn probe_json_cache_hit_includes_advertised_context() {
-    let value = probe_json_from_cache(&["--cheap", "--advertised-context", "40960"], true);
+    let value = probe_json_from_cache(
+        &["--cheap", "--advertised-context", "40960"],
+        true,
+        Some(40960),
+    );
     assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
+    assert_eq!(value["recommendedContextTokens"], 8192, "{value}");
     assert_eq!(value["cacheable"], true, "{value}");
     assert_eq!(value["skipExpensive"], true, "{value}");
 }
