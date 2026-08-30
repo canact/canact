@@ -257,7 +257,7 @@ fn strip_line_comments(text: &str) -> String {
 
 /// True when the reply is the system format example, not an edit of greet.rs.
 fn is_unified_diff_card_echo(text: &str) -> bool {
-    text.contains("path/to/file.rs") && text.contains("removed line") && text.contains("added line")
+    text.contains("removed line") && text.contains("added line")
 }
 
 struct SearchReplaceBlock<'a> {
@@ -538,6 +538,29 @@ Rename welcome Welcome
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_card_echo_with_greet_path_is_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -10,4 +10,5 @@
+ context line
+-removed line
++added line
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "card body with greet.rs path must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
