@@ -123,7 +123,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      is Weak (does not set supportsVision).
 /// v49: unified_diff format-card body (`remove line` / `add line`)
 ///      is Weak.
-pub const PROBE_SUITE_VERSION: u32 = 49;
+/// v50: XML multi-element `[{"param":"value"},{"param":"value"}]`
+///      is format-card echo (does not set canUseTools).
+pub const PROBE_SUITE_VERSION: u32 = 50;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
