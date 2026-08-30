@@ -147,7 +147,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (`"path\\u200b"` is echo, not canUseTools).
 /// v60: XML card `ｖａｌｕｅ` (fullwidth) is echo
 ///      (does not set canUseTools).
-pub const PROBE_SUITE_VERSION: u32 = 60;
+/// v61: unparseable `{p\\u200bath:'value'}` is format-card echo
+///      (does not set canUseTools).
+pub const PROBE_SUITE_VERSION: u32 = 61;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
