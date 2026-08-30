@@ -87,9 +87,9 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
 /// Asks for a single-word answer and scores based on response verbosity.
 ///
 /// Scoring:
-/// - `1.0` - exactly one word
-/// - `0.5` - short but multi-word (2-4 words)
-/// - `0.0` - verbose (5+ words)
+/// - `1.0` - exactly one word, the asked capital (Paris)
+/// - `0.5` - one wrong word, or short but multi-word (2-4 words)
+/// - `0.0` - empty or verbose (5+ words)
 pub async fn probe_instruction_following<C: ProbeClient>(
     llm: &C,
 ) -> Result<ProbeResult, ProbeError> {
@@ -110,8 +110,13 @@ pub async fn probe_instruction_following<C: ProbeClient>(
 
     let (score, details) = if word_count == 0 {
         (0.0, "Empty response".to_string())
-    } else if word_count == 1 {
+    } else if word_count == 1 && asked_capital(trimmed) {
         (1.0, format!("Single word response: \"{trimmed}\""))
+    } else if word_count == 1 {
+        (
+            0.5,
+            format!("Single word but not the asked answer: \"{trimmed}\""),
+        )
     } else if word_count < 5 {
         (
             0.5,
@@ -129,6 +134,12 @@ pub async fn probe_instruction_following<C: ProbeClient>(
         level: classify(score),
         details,
     })
+}
+
+fn asked_capital(word: &str) -> bool {
+    word.trim()
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+        .eq_ignore_ascii_case("paris")
 }
 
 #[cfg(test)]
@@ -268,6 +279,35 @@ mod tests {
         let result = probe_instruction_following(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn instruction_following_wrong_single_word_is_not_strong() {
+        for word in ["The", "Stop", "London", "Yes"] {
+            let llm = MockLlm {
+                response: text_response(word),
+            };
+            let result = probe_instruction_following(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "wrong one-word answer must not set overall Strong: {word} -> {result:?}"
+            );
+            assert_eq!(result.score, 0.5, "{word}");
+            assert_eq!(result.level, CapabilityLevel::Medium, "{word}");
+        }
+    }
+
+    #[tokio::test]
+    async fn instruction_following_paris_is_case_and_punct_insensitive() {
+        for word in ["paris", "PARIS", "Paris."] {
+            let llm = MockLlm {
+                response: text_response(word),
+            };
+            let result = probe_instruction_following(&llm).await.unwrap();
+            assert_eq!(result.score, 1.0, "{word}");
+            assert_eq!(result.level, CapabilityLevel::Strong, "{word}");
+        }
     }
 
     #[tokio::test]

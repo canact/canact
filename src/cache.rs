@@ -164,7 +164,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v70: stream Length is truncated (uncacheable), not 30-day Weak/Medium.
 /// v71: Length on JSON / edit / vision / instruction / context ladder
 ///      is truncated, not a 30-day host-policy card.
-pub const PROBE_SUITE_VERSION: u32 = 71;
+/// v72: instruction_following Strong requires the asked capital.
+pub const PROBE_SUITE_VERSION: u32 = 72;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
