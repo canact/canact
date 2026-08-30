@@ -98,7 +98,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      tokens the same way as `//` comments.
 /// v37: tool names that are only ZWSP/format marks are Weak
 ///      (same as empty names for can_use_tools).
-pub const PROBE_SUITE_VERSION: u32 = 37;
+/// v38: vision "text model" / "processes text" is Weak
+///      (does not set supportsVision).
+pub const PROBE_SUITE_VERSION: u32 = 38;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

@@ -79,6 +79,9 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("no character")
         || lower.contains("text-only")
         || lower.contains("text only")
+        || lower.contains("text model")
+        || lower.contains("processes text")
+        || lower.contains("process text")
         || lower.contains("black box");
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
@@ -199,6 +202,25 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_text_model_does_not_set_medium() {
+        for body in [
+            "I am a text model",
+            "This model processes text",
+            "This is a text-only model.",
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "text-model phrasing must not set supportsVision: {body} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
