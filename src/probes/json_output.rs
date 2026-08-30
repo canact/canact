@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{extract_json_from_text, user_text};
+use super::{extract_json_from_text, refuse_truncated_incomplete, user_text};
 
 /// Probe whether the model can produce structured JSON output.
 ///
@@ -72,6 +72,7 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
         Err(_) => (0.0, "Response was not valid JSON".to_string()),
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "json_output".to_string(),
         score,
@@ -120,6 +121,7 @@ pub async fn probe_instruction_following<C: ProbeClient>(
         (0.0, format!("Verbose response ({word_count} words)"))
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "instruction_following".to_string(),
         score,
@@ -288,5 +290,51 @@ mod tests {
         let result = probe_instruction_following(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn json_output_length_incomplete_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(r#"{"word": "hello", "length":"#),
+        };
+        let result = probe_json_output(&llm).await;
+        assert!(
+            matches!(result, Err(ProbeError::Transient(_))),
+            "Length plus truncated JSON must be Transient, not 30-day Weak; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_output_length_complete_stays_strong() {
+        let llm = MockLlm {
+            response: length_text_response(
+                r#"{"word": "hello", "length": 5, "reversed": "olleh"}"#,
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn instruction_following_length_empty_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(""),
+        };
+        let result = probe_instruction_following(&llm).await;
+        assert!(
+            matches!(result, Err(ProbeError::Transient(_))),
+            "Length plus empty instruction reply must be Transient; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn instruction_following_length_complete_word_stays_strong() {
+        let llm = MockLlm {
+            response: length_text_response("Paris"),
+        };
+        let result = probe_instruction_following(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 }

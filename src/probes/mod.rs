@@ -327,6 +327,15 @@ pub(crate) mod test_support {
         }
     }
 
+    pub(crate) fn length_text_response(text: &str) -> ProbeResponse {
+        ProbeResponse {
+            text: text.to_string(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Length,
+            usage: None,
+        }
+    }
+
     pub(crate) fn multi_tool_call_response(calls: Vec<ProbeToolCall>) -> ProbeResponse {
         ProbeResponse {
             text: String::new(),

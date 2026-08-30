@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{system_text, user_text};
+use super::{refuse_truncated_incomplete, system_text, user_text};
 
 /// Probe whether the model can produce valid SEARCH/REPLACE edit blocks.
 ///
@@ -103,6 +103,7 @@ Rename the function `greet` to `welcome` and change the greeting from \
         (0.0, "No SEARCH/REPLACE markers in response".to_string())
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "search_replace".to_string(),
         score,
@@ -199,6 +200,7 @@ Rename the function `greet` to `welcome` and change the greeting from \
         (0.0, "Not a recognizable unified diff".to_string())
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "unified_diff".to_string(),
         score,
@@ -943,5 +945,33 @@ Rename greet to welcome and Hello to Welcome in src/greet.rs
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn search_replace_length_partial_markers_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(
+                "<<<<<<< SEARCH\nsrc/greet.rs\n-------\nfn greet(name: &str) -> String {\n",
+            ),
+        };
+        let result = probe_search_replace(&llm).await;
+        assert!(
+            matches!(result, Err(ProbeError::Transient(_))),
+            "Length plus a cut SEARCH block must be Transient, not 30-day Medium; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unified_diff_length_partial_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(
+                "--- a/src/greet.rs\n+++ b/src/greet.rs\n@@\n-fn greet\n",
+            ),
+        };
+        let result = probe_unified_diff(&llm).await;
+        assert!(
+            matches!(result, Err(ProbeError::Transient(_))),
+            "Length plus a cut unified diff must be Transient; got {result:?}"
+        );
     }
 }

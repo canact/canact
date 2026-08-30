@@ -6,6 +6,8 @@ use crate::client::{
 };
 use crate::types::{ProbeResult, classify};
 
+use super::refuse_truncated_incomplete;
+
 /// Minimal 16x16 PNG with "BL" text pattern (white on black), base64-encoded.
 /// Used as the test image for the vision capability probe.
 const PROBE_IMAGE_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAIklEQVR4nGNgYGD4jwQYkAAaF7sELj\
@@ -111,6 +113,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         (0.0, "Did not use the image (generic reply)".to_string())
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "vision".to_string(),
         score,
@@ -566,5 +569,27 @@ mod tests {
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Did not use the image (generic reply)");
+    }
+
+    #[tokio::test]
+    async fn vision_length_empty_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(""),
+        };
+        let result = probe_vision(&llm).await;
+        assert!(
+            matches!(result, Err(ProbeError::Transient(_))),
+            "Length plus empty vision text must be Transient, not 30-day Weak; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vision_length_complete_bl_stays_strong() {
+        let llm = MockLlm {
+            response: length_text_response("BL"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 }
