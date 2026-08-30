@@ -117,7 +117,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      is format-card echo (does not set canUseTools).
 /// v46: vision "no visible characters" / "no discernible text" /
 ///      "white-space" is Weak (does not set supportsVision).
-pub const PROBE_SUITE_VERSION: u32 = 46;
+/// v47: XML array-wrapped `[{"param":"value"}]` and unclosed
+///      param/value cards are format-card echo (do not set canUseTools).
+pub const PROBE_SUITE_VERSION: u32 = 47;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
