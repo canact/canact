@@ -137,13 +137,7 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
 fn xml_args_have_real_path(args: &serde_json::Value) -> bool {
     match args {
         serde_json::Value::Object(o) => {
-            let own = xml_map_get_ci(o, "path").is_some_and(|v| match v.as_str() {
-                Some(s) => {
-                    let t = s.trim();
-                    !t.is_empty() && !t.eq_ignore_ascii_case("value")
-                }
-                None => !xml_value_is_card_value(v),
-            });
+            let own = xml_map_get_ci(o, "path").is_some_and(xml_path_value_is_real);
             own || o.values().any(xml_args_have_real_path)
         }
         serde_json::Value::Array(arr) => arr.iter().any(xml_args_have_real_path),
@@ -181,6 +175,17 @@ fn xml_object_is_card(o: &serde_json::Map<String, serde_json::Value>) -> bool {
             .and_then(|v| v.as_str())
             .is_some_and(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("value"));
     param_value_echo || path_value_echo || schema_echo
+}
+
+/// A string or array `path` that is not the card token `value`.
+/// Schema objects under `properties.path` are not a real call.
+fn xml_path_value_is_real(v: &serde_json::Value) -> bool {
+    if let Some(s) = v.as_str() {
+        let t = s.trim();
+        return !t.is_empty() && !t.eq_ignore_ascii_case("value");
+    }
+    v.as_array()
+        .is_some_and(|arr| !arr.is_empty() && !xml_value_is_card_value(v))
 }
 
 /// `{"param":"value"}` and `{"param":["value"]}`.
