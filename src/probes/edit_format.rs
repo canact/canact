@@ -281,11 +281,21 @@ fn strip_line_comments(text: &str) -> String {
         .join("\n")
 }
 
+/// Collapse ASCII whitespace and hyphens so `removed-line` and
+/// `removed  line` match the format-card tokens.
+fn normalize_unified_diff_card_text(text: &str) -> String {
+    text.to_ascii_lowercase()
+        .replace('-', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// True when the reply is the system format example, not an edit of greet.rs.
 fn is_unified_diff_card_echo(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    let removed_added = lower.contains("removed line") && lower.contains("added line");
-    let remove_add = lower.contains("remove line") && lower.contains("add line");
+    let normalized = normalize_unified_diff_card_text(text);
+    let removed_added = normalized.contains("removed line") && normalized.contains("added line");
+    let remove_add = normalized.contains("remove line") && normalized.contains("add line");
     removed_added || remove_add
 }
 
@@ -729,6 +739,52 @@ Rename welcome Welcome
             result.level,
             CapabilityLevel::Weak,
             "remove/add card body must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_hyphenated_card_echo_is_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -10,4 +10,5 @@
+ context line
+-removed-line
++added-line
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "hyphenated card body must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_double_space_card_echo_is_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -10,4 +10,5 @@
+ context line
+-removed  line
++added  line
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "double-space card body must not set UnifiedDiff: {result:?}"
         );
         assert_eq!(result.score, 0.0);
     }
