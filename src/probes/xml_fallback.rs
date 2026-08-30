@@ -205,6 +205,7 @@ fn xml_value_is_card_value(v: &serde_json::Value) -> bool {
 }
 
 /// Drop whitespace and ZWSP/format marks so `value` + U+200B is still the card.
+/// Fold fullwidth ASCII letters/digits so `ｖａｌｕｅ` matches `value`.
 fn xml_visible_card_token(s: &str) -> String {
     s.chars()
         .filter(|c| {
@@ -214,7 +215,17 @@ fn xml_visible_card_token(s: &str) -> String {
                     '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
                 )
         })
+        .map(fold_fullwidth_ascii)
         .collect()
+}
+
+fn fold_fullwidth_ascii(c: char) -> char {
+    match c {
+        '\u{FF10}'..='\u{FF19}' => char::from(b'0' + (c as u32 - 0xFF10) as u8),
+        '\u{FF21}'..='\u{FF3A}' => char::from(b'A' + (c as u32 - 0xFF21) as u8),
+        '\u{FF41}'..='\u{FF5A}' => char::from(b'a' + (c as u32 - 0xFF41) as u8),
+        _ => c,
+    }
 }
 
 fn xml_map_get_ci<'a>(
@@ -802,6 +813,29 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_fullwidth_value_is_echo() {
+        // Fullwidth ｖａｌｕｅ (U+FF56 U+FF41 U+FF4C U+FF55 U+FF45).
+        for args in [
+            "{\"path\":\"\u{FF56}\u{FF41}\u{FF4C}\u{FF55}\u{FF45}\"}",
+            "{\"param\":\"\u{FF56}\u{FF41}\u{FF4C}\u{FF55}\u{FF45}\"}",
+        ] {
+            let response_text = format!(
+                "<tool_call>\n<name>read_file</name>\n<arguments>{args}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "fullwidth card value must not set canUseTools: {args} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "args={args}");
+        }
     }
 
     #[tokio::test]
