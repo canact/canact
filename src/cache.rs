@@ -139,7 +139,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      echo (do not set canUseTools).
 /// v56: unparseable `{'path':'value'}` is format-card echo
 ///      (does not set canUseTools).
-pub const PROBE_SUITE_VERSION: u32 = 56;
+/// v57: XML card `value` ignores ZWSP/format marks
+///      (`"value\\u200b"` is echo, not canUseTools).
+pub const PROBE_SUITE_VERSION: u32 = 57;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
