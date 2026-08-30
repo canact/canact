@@ -257,7 +257,8 @@ fn strip_line_comments(text: &str) -> String {
 
 /// True when the reply is the system format example, not an edit of greet.rs.
 fn is_unified_diff_card_echo(text: &str) -> bool {
-    text.contains("removed line") && text.contains("added line")
+    let lower = text.to_ascii_lowercase();
+    lower.contains("removed line") && lower.contains("added line")
 }
 
 struct SearchReplaceBlock<'a> {
@@ -561,6 +562,29 @@ Rename welcome Welcome
             "card body with greet.rs path must not set UnifiedDiff: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_title_case_card_echo_is_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -10,4 +10,5 @@
+ context line
+-Removed line
++Added line
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "title-case card body must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

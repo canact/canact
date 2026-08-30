@@ -106,7 +106,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      is Weak even when the path is greet.rs.
 /// v41: vision "no visible letters" / "doesn't contain letters" is Weak
 ///      (does not set supportsVision).
-pub const PROBE_SUITE_VERSION: u32 = 41;
+/// v42: unified_diff title-case format-card body (`Removed line` /
+///      `Added line`) is Weak.
+pub const PROBE_SUITE_VERSION: u32 = 42;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
