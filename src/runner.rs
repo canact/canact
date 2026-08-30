@@ -11,7 +11,9 @@ use crate::cache::ProbeCache;
 use crate::client::ProbeClient;
 use crate::error::ProbeError;
 use crate::probes;
-use crate::types::{CapabilityLevel, CapabilityProfile, ProbeResult, TOOL_PROBE_NAMES};
+use crate::types::{
+    CapabilityLevel, CapabilityProfile, HostPolicyMeta, ProbeResult, TOOL_PROBE_NAMES,
+};
 
 /// Default concurrency for paid providers (effectively unlimited).
 pub const PAID_CONCURRENCY: usize = 64;
@@ -35,9 +37,20 @@ pub struct ProbeRun {
     pub skip_expensive: bool,
     /// Whether this run requested the vision probe (`--vision`).
     pub vision: bool,
+    /// Catalog advertised context prior for this run, if any.
+    pub advertised_context_tokens: Option<u32>,
 }
 
 impl ProbeRun {
+    /// Host-policy JSON using this run's cacheable / cheap / advertised knobs.
+    pub fn host_policy_envelope(&self) -> serde_json::Value {
+        self.profile.host_policy_envelope_with(HostPolicyMeta {
+            cacheable: self.cacheable,
+            skip_expensive: self.skip_expensive,
+            advertised_context_tokens: self.advertised_context_tokens,
+        })
+    }
+
     /// Persist the profile when [`Self::cacheable`] is true.
     ///
     /// Returns `Ok(true)` when the 30-day cache was written, `Ok(false)`
@@ -257,6 +270,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
         } else {
             ladder_tokens
         };
+        let probed_context_floor = ladder_tokens;
 
         let xml_tool_calling = if tool_calling.level == CapabilityLevel::Strong {
             ProbeResult {
@@ -300,10 +314,12 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 parallel_tool_scale,
                 probed_at: unix_now(),
                 effective_context_tokens,
+                probed_context_floor,
             },
             cacheable,
             skip_expensive: self.skip_expensive,
             vision: vision_enabled,
+            advertised_context_tokens: self.client.catalog().advertised_context_tokens,
         };
 
         {

@@ -36,6 +36,7 @@ fn sample_profile() -> CapabilityProfile {
         parallel_tool_scale: pr("parallel_tool_scale"),
         probed_at: 1,
         effective_context_tokens: None,
+        probed_context_floor: None,
     }
 }
 
@@ -46,8 +47,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v64() {
-    assert_eq!(PROBE_SUITE_VERSION, 64);
+fn cache_key_format_is_model_provider_unset_v65() {
+    assert_eq!(PROBE_SUITE_VERSION, 65);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -55,7 +56,7 @@ fn cache_key_format_is_model_provider_unset_v64() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v64|full|novision");
+    assert_eq!(k, "model|provider|unset|v65|full|novision");
 }
 
 #[test]
@@ -148,7 +149,7 @@ fn get_misses_when_suite_differs() {
                 DEFAULT_VISION,
             )
             .is_none(),
-        "suite v64 must not hit v6 cache entry"
+        "suite v65 must not hit v6 cache entry"
     );
 }
 
@@ -229,6 +230,22 @@ fn put_then_load_preserves_effective_context_tokens() {
     let loaded = ProbeCache::load(&path).expect("load");
     let got = loaded.get("m", "p").expect("hit after reload");
     assert_eq!(got.effective_context_tokens, Some(8192));
+}
+
+#[test]
+fn put_then_load_preserves_probed_context_floor() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.effective_context_tokens = None;
+    profile.probed_context_floor = Some(4096);
+    cache.put(profile);
+    cache.save(&path).expect("save");
+    let loaded = ProbeCache::load(&path).expect("load");
+    let got = loaded.get("m", "p").expect("hit after reload");
+    assert_eq!(got.effective_context_tokens, None);
+    assert_eq!(got.probed_context_floor, Some(4096));
 }
 
 #[test]

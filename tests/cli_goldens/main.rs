@@ -47,6 +47,7 @@ fn probe_help_lists_cheap_full_vision() {
     assert!(help.contains("--cheap"), "{help}");
     assert!(help.contains("--full"), "{help}");
     assert!(help.contains("--vision"), "{help}");
+    assert!(help.contains("--advertised-context"), "{help}");
 }
 
 #[test]
@@ -99,6 +100,7 @@ fn cached_profile(tool: CapabilityLevel, xml: CapabilityLevel) -> CapabilityProf
         parallel_tool_scale: pr("parallel_tool_scale", CapabilityLevel::Weak),
         probed_at: 1_700_000_000,
         effective_context_tokens: Some(8192),
+        probed_context_floor: Some(8192),
     }
 }
 
@@ -212,6 +214,60 @@ fn probe_cheap_cache_is_not_returned_on_full() {
         full_stderr.contains("authentication error:"),
         "stderr={full_stderr}"
     );
+}
+
+fn probe_json_from_cache(args: &[&str], cheap: bool) -> serde_json::Value {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(
+        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+        cheap,
+        false,
+    );
+    cache.save(&cache_path).expect("save cache");
+    let cache_str = cache_path.to_str().expect("utf8 cache path");
+    let mut cmd_args = vec![
+        "probe",
+        "--json",
+        "--model",
+        "weak-tools",
+        "--provider",
+        "test",
+        "--cache",
+        cache_str,
+    ];
+    cmd_args.extend_from_slice(args);
+    let out = canact()
+        .args(&cmd_args)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn canact probe --json");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("probe --json must be an object: {e}; stdout={stdout}"))
+}
+
+#[test]
+fn probe_json_cache_hit_includes_flags() {
+    let cheap = probe_json_from_cache(&["--cheap"], true);
+    assert_eq!(cheap["cacheable"], true, "{cheap}");
+    assert_eq!(cheap["skipExpensive"], true, "{cheap}");
+
+    let full = probe_json_from_cache(&["--full"], false);
+    assert_eq!(full["cacheable"], true, "{full}");
+    assert_eq!(full["skipExpensive"], false, "{full}");
+}
+
+#[test]
+fn probe_json_cache_hit_includes_advertised_context() {
+    let value = probe_json_from_cache(&["--cheap", "--advertised-context", "40960"], true);
+    assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
+    assert_eq!(value["cacheable"], true, "{value}");
+    assert_eq!(value["skipExpensive"], true, "{value}");
 }
 
 fn spawn_401(body: &[u8]) -> String {

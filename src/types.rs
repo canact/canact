@@ -45,6 +45,11 @@ impl ProbeResult {
         self.details
             .starts_with("Not probed (cached before this probe existed)")
     }
+
+    /// Cheap or vision skip (`Skipped:` prefix). XML inferred Strong is not skipped.
+    pub fn is_skipped(&self) -> bool {
+        self.details.starts_with("Skipped:")
+    }
 }
 
 /// Recommended edit format based on probe results.
@@ -74,6 +79,30 @@ pub enum CapabilityLevel {
     Medium,
     /// Score at or above 0.8.
     Strong,
+}
+
+/// Session knobs for [`CapabilityProfile::host_policy_envelope_with`].
+///
+/// [`CapabilityProfile::host_policy_envelope`] uses [`HostPolicyMeta::default`]:
+/// cacheable, full suite, no advertised prior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostPolicyMeta {
+    /// False when a required probe hit a transient error (timeout, 429, 5xx).
+    pub cacheable: bool,
+    /// Whether expensive dimensions were skipped (`--cheap` / free-tier).
+    pub skip_expensive: bool,
+    /// Catalog advertised context window. Not a measured ladder result.
+    pub advertised_context_tokens: Option<u32>,
+}
+
+impl Default for HostPolicyMeta {
+    fn default() -> Self {
+        Self {
+            cacheable: true,
+            skip_expensive: false,
+            advertised_context_tokens: None,
+        }
+    }
 }
 
 /// Default probe result for deserialization when the field is absent.
@@ -132,6 +161,9 @@ macro_rules! define_probe_dimensions {
             /// Measured usable context, in tokens. `None` until a suite writes it.
             #[serde(default, skip_serializing_if = "Option::is_none")]
             pub effective_context_tokens: Option<u32>,
+            /// Highest passing ladder rung when the climb is incomplete (cheap 4k).
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub probed_context_floor: Option<u32>,
         }
 
         /// All probed dimension names, in the order they appear on the struct.
@@ -144,16 +176,13 @@ macro_rules! define_probe_dimensions {
         ];
 
         impl CapabilityProfile {
-            /// Look up the capability level for a named probe dimension.
+            /// Look up the completed capability level for a named probe dimension.
             ///
             /// Accepts snake_case (`tool_calling`) and host-envelope camelCase
             /// (`toolCalling`). Returns `None` for unrecognised names.
+            /// Skipped, unprobed, and synthesized-error results are Weak.
             pub fn dimension_level(&self, dimension: &str) -> Option<CapabilityLevel> {
-                match normalize_dimension_name(dimension).as_ref() {
-                    $(stringify!($req_field) => Some(self.$req_field.level),)*
-                    $(stringify!($def_field) => Some(self.$def_field.level),)*
-                    _ => None,
-                }
+                self.dimension_result(dimension).map(completed_level)
             }
 
             /// Look up the full [`ProbeResult`] for a named dimension.
@@ -363,7 +392,13 @@ impl CapabilityProfile {
     /// canact CLI `--json` host-policy envelope.
     ///
     /// Not Bline `build_probe_json`. Does not emit `bestEditFormat`.
+    /// Default meta is cacheable, full suite, no advertised prior.
     pub fn host_policy_envelope(&self) -> serde_json::Value {
+        self.host_policy_envelope_with(HostPolicyMeta::default())
+    }
+
+    /// Host-policy envelope with session flags (`cacheable`, cheap, advertised).
+    pub fn host_policy_envelope_with(&self, meta: HostPolicyMeta) -> serde_json::Value {
         let mut probes = serde_json::Map::new();
         for &dim in DIMENSION_NAMES {
             if let Some(probe) = self.dimension_result(dim) {
@@ -381,6 +416,10 @@ impl CapabilityProfile {
             "needsXmlFallback": self.needs_xml_fallback(),
             "needsJsonRepair": self.needs_json_repair(),
             "effectiveContextTokens": self.effective_context_tokens,
+            "probedContextFloor": self.probed_context_floor,
+            "cacheable": meta.cacheable,
+            "skipExpensive": meta.skip_expensive,
+            "advertisedContextTokens": meta.advertised_context_tokens,
             "probedAt": self.probed_at,
             "scoreScale": {
                 "min": 0.0,
@@ -398,7 +437,7 @@ fn completed_usable_tools(pr: &ProbeResult) -> bool {
 }
 
 fn completed_level(pr: &ProbeResult) -> CapabilityLevel {
-    if pr.is_synthesized_error() || pr.is_unprobed_default() {
+    if pr.is_synthesized_error() || pr.is_unprobed_default() || pr.is_skipped() {
         CapabilityLevel::Weak
     } else {
         pr.level
@@ -448,12 +487,25 @@ fn snake_to_camel(s: &str) -> String {
     out
 }
 
+fn probe_envelope_status(probe: &ProbeResult) -> &'static str {
+    if probe.is_synthesized_error() {
+        "error"
+    } else if probe.is_unprobed_default() {
+        "unprobed"
+    } else if probe.is_skipped() {
+        "skipped"
+    } else {
+        "completed"
+    }
+}
+
 fn probe_envelope_json(probe: &ProbeResult) -> serde_json::Value {
     serde_json::json!({
         "level": probe.level,
         "score": probe.score,
         "maxScore": probe.max_score,
         "details": probe.details,
+        "status": probe_envelope_status(probe),
     })
 }
 
