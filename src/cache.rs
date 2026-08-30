@@ -153,7 +153,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (does not set UnifiedDiff).
 /// v63: vision `no\\u{200B} text` is a refusal
 ///      (does not set supportsVision).
-pub const PROBE_SUITE_VERSION: u32 = 63;
+/// v64: vision `don\\u{200B}'t` / `can\\u{200B}'t` is a refusal
+///      (does not set supportsVision).
+pub const PROBE_SUITE_VERSION: u32 = 64;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
