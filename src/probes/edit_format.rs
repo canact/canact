@@ -281,12 +281,19 @@ fn strip_line_comments(text: &str) -> String {
         .join("\n")
 }
 
-/// Collapse ASCII whitespace, hyphens, and underscores so
-/// `removed-line`, `removed_line`, and `removed  line` match
-/// the format-card tokens. CamelCase is left intact.
+/// Collapse ASCII whitespace, hyphens, underscores, and ZWSP/format
+/// marks so `removed-line`, `removed_line`, `removed  line`, and
+/// `removed\u{200B}line` match the format-card tokens. CamelCase is
+/// left intact.
 fn normalize_unified_diff_card_text(text: &str) -> String {
     text.to_ascii_lowercase()
         .replace(['-', '_'], " ")
+        .chars()
+        .map(|c| match c {
+            '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}' => ' ',
+            _ => c,
+        })
+        .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -836,6 +843,29 @@ Rename welcome Welcome
             result.level,
             CapabilityLevel::Weak,
             "double-space card body must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_zwsp_card_echo_is_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -10,4 +10,5 @@
+ context line
+-removed\u{200B}line
++added\u{200B}line
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "ZWSP card body must not set UnifiedDiff: {result:?}"
         );
         assert_eq!(result.score, 0.0);
     }
