@@ -239,6 +239,27 @@ fn strip_block_comments(text: &str) -> String {
     out
 }
 
+fn is_rust_attribute(text: &str) -> bool {
+    text.starts_with("#[") || text.starts_with("#!")
+}
+
+fn strip_inline_hash_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' {
+            let rest = &line[i..];
+            if is_rust_attribute(rest) {
+                i += 1;
+                continue;
+            }
+            return &line[..i];
+        }
+        i += 1;
+    }
+    line
+}
+
 fn strip_line_comments(text: &str) -> String {
     text.lines()
         .filter_map(|line| {
@@ -246,10 +267,15 @@ fn strip_line_comments(text: &str) -> String {
             if trimmed.starts_with("//") {
                 return None;
             }
-            Some(match line.split_once("//") {
+            // `#` comments (Python/shell). Rust attributes (`#[`, `#!`) stay.
+            if trimmed.starts_with('#') && !is_rust_attribute(trimmed) {
+                return None;
+            }
+            let without_slashes = match line.split_once("//") {
                 Some((code, _)) => code,
                 None => line,
-            })
+            };
+            Some(strip_inline_hash_comment(without_slashes))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -398,6 +424,55 @@ src/greet.rs
     }
 
     #[tokio::test]
+    async fn search_replace_hash_comment_tokens_are_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+# fn greet( ... Hello
+=======
+# fn welcome( ... Welcome
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "hash-comment tokens must not set SearchReplace: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_replace_hash_attribute_tokens_remain_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+#[derive(Debug)]
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+}
+=======
+#[derive(Debug)]
+fn welcome(name: &str) -> String {
+    format!(\"Welcome, {}\", name)
+}
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Strong,
+            "Rust attributes must not be stripped as comments: {result:?}"
+        );
+        assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
     async fn search_replace_fn_tokens_without_signature_are_not_strong() {
         let response_text = "\
 <<<<<<< SEARCH
@@ -524,6 +599,52 @@ Rename welcome Welcome
             "comment-only +/- must not set UnifiedDiff: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_hash_comment_tokens_are_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,1 +1,1 @@
+-# fn greet
++# fn welcome
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "hash-comment-only +/- must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_hash_attribute_tokens_remain_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,4 +1,4 @@
+ #[derive(Debug)]
+-fn greet(name: &str) -> String {
+-    format!(\"Hello, {}\", name)
++fn welcome(name: &str) -> String {
++    format!(\"Welcome, {}\", name)
+ }
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Strong,
+            "Rust attributes must not block UnifiedDiff Strong: {result:?}"
+        );
+        assert_eq!(result.score, 1.0);
     }
 
     #[tokio::test]
