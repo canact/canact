@@ -115,7 +115,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      Rust attributes (`#[derive]`) are not comments.
 /// v45: XML `{"param":"value"}` plus extra keys, or `{'param':'value'}`,
 ///      is format-card echo (does not set canUseTools).
-pub const PROBE_SUITE_VERSION: u32 = 45;
+/// v46: vision "no visible characters" / "no discernible text" /
+///      "white-space" is Weak (does not set supportsVision).
+pub const PROBE_SUITE_VERSION: u32 = 46;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

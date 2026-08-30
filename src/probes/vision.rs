@@ -90,6 +90,8 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("white box")
         || lower.contains("white-box")
         || lower.contains("white space")
+        || lower.contains("white-space")
+        || lower.contains("no discernible text")
         || lower.contains("text-processing")
         || lower.contains("text processing");
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
@@ -98,6 +100,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     let negated_glyphs = lower.contains("no letter")
         || lower.contains("no character")
         || lower.contains("no visible letter")
+        || lower.contains("no visible character")
         || lower.contains("no discernible letter")
         || lower.contains("don't see")
         || lower.contains("do not see")
@@ -407,6 +410,25 @@ mod tests {
             "whitespace must not set supportsVision: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_no_visible_characters_and_white_hyphen_do_not_set_medium() {
+        for body in [
+            "No visible characters",
+            "There is no discernible text",
+            "Looks like white-space only",
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "blank-image phrasing must not set supportsVision: {body} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
