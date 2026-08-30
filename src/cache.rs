@@ -108,7 +108,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (does not set supportsVision).
 /// v42: unified_diff title-case format-card body (`Removed line` /
 ///      `Added line`) is Weak.
-pub const PROBE_SUITE_VERSION: u32 = 42;
+/// v43: vision "white space" / "white-box" / "text-processing" is Weak
+///      (does not set supportsVision).
+pub const PROBE_SUITE_VERSION: u32 = 43;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
