@@ -162,7 +162,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v68: recommendedContextTokens = min(advertised, measured); advertised in cache key.
 /// v69: Length + incomplete tool/XML is truncated, not 30-day Medium.
 /// v70: stream Length is truncated (uncacheable), not 30-day Weak/Medium.
-pub const PROBE_SUITE_VERSION: u32 = 70;
+/// v71: Length on JSON / edit / vision / instruction / context ladder
+///      is truncated, not a 30-day host-policy card.
+pub const PROBE_SUITE_VERSION: u32 = 71;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

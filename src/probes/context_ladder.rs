@@ -7,7 +7,9 @@
 //! Mid-climb Transient/RateLimit keeps the last passing rung.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeContent, ProbeContentPart, ProbeMessage, ProbeRequest};
+use crate::client::{
+    ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage, ProbeRequest,
+};
 
 use super::{system_text, user_text};
 
@@ -82,9 +84,16 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
         match llm.chat(request).await {
             Ok(response) => {
                 if !recalls_all_facts(&response.text) {
+                    let error = if response.finish == ProbeFinish::Length {
+                        Err(ProbeError::Transient(
+                            "response truncated before context recall".into(),
+                        ))
+                    } else {
+                        Ok(())
+                    };
                     return ContextLadder {
                         tokens: best,
-                        error: Ok(()),
+                        error,
                     };
                 }
                 best = Some(rung);
@@ -180,6 +189,7 @@ mod tests {
         fail_at_or_above: Option<u32>,
         transient_at_or_above: Option<u32>,
         auth_at_or_above: Option<u32>,
+        length_on_fail: bool,
         calls: Mutex<Vec<u32>>,
     }
 
@@ -190,8 +200,14 @@ mod tests {
                 fail_at_or_above,
                 transient_at_or_above: None,
                 auth_at_or_above: None,
+                length_on_fail: false,
                 calls: Mutex::new(Vec::new()),
             }
+        }
+
+        fn length_on_fail(mut self) -> Self {
+            self.length_on_fail = true;
+            self
         }
 
         fn transient_at(mut self, tokens: u32) -> Self {
@@ -250,7 +266,11 @@ mod tests {
                 Ok(ProbeResponse {
                     text,
                     tool_calls: Vec::new(),
-                    finish: ProbeFinish::Stop,
+                    finish: if fail && self.length_on_fail {
+                        ProbeFinish::Length
+                    } else {
+                        ProbeFinish::Stop
+                    },
                     usage: None,
                 })
             };
@@ -384,6 +404,33 @@ mod tests {
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1);
         assert_is_4k(calls[0]);
+    }
+
+    #[tokio::test]
+    async fn length_fail_4k_is_transient() {
+        let llm = LadderMock::new(None, Some(4096)).length_on_fail();
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(
+            matches!(got.error, Err(ProbeError::Transient(_))),
+            "Length plus a missed 4k recall must be Transient, not a finished None floor; got {:?}",
+            got.error
+        );
+        assert_eq!(got.tokens, None);
+        let calls = llm.recorded();
+        assert_eq!(calls.len(), 1);
+        assert_is_4k(calls[0]);
+    }
+
+    #[tokio::test]
+    async fn pass_4k_length_fail_8k_keeps_4096_uncacheable() {
+        let llm = LadderMock::new(None, Some(8192)).length_on_fail();
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert!(matches!(got.error, Err(ProbeError::Transient(_))));
+        assert_eq!(got.tokens, Some(4096));
+        let calls = llm.recorded();
+        assert_eq!(calls.len(), 2);
+        assert_is_4k(calls[0]);
+        assert_is_8k(calls[1]);
     }
 
     #[tokio::test]
