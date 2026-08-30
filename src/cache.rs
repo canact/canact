@@ -133,7 +133,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      are format-card echo (do not set canUseTools).
 /// v53: XML card keys and `value` compare case-insensitively
 ///      (`Param`/`Value` / `path":"Value"` is echo, not canUseTools).
-pub const PROBE_SUITE_VERSION: u32 = 53;
+/// v54: unified_diff underscore format-card body
+///      (`removed_line` / `added_line`) is Weak.
+pub const PROBE_SUITE_VERSION: u32 = 54;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

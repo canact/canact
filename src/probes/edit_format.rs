@@ -281,11 +281,12 @@ fn strip_line_comments(text: &str) -> String {
         .join("\n")
 }
 
-/// Collapse ASCII whitespace and hyphens so `removed-line` and
-/// `removed  line` match the format-card tokens.
+/// Collapse ASCII whitespace, hyphens, and underscores so
+/// `removed-line`, `removed_line`, and `removed  line` match
+/// the format-card tokens. CamelCase is left intact.
 fn normalize_unified_diff_card_text(text: &str) -> String {
     text.to_ascii_lowercase()
-        .replace('-', " ")
+        .replace(['-', '_'], " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -764,6 +765,56 @@ Rename welcome Welcome
             "hyphenated card body must not set UnifiedDiff: {result:?}"
         );
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_underscore_card_echo_is_not_medium() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -10,4 +10,5 @@
+ context line
+-removed_line
++added_line
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "underscore card body must not set UnifiedDiff: {result:?}"
+        );
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_camel_case_removed_line_is_not_card_echo() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -10,4 +10,5 @@
+ context line
+-removedLine
++addedLine
+ context line
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.details, "Echoed the unified diff format card",
+            "camelCase removedLine must not be treated as a format card: {result:?}"
+        );
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Medium,
+            "camelCase body is a real-looking diff, not a card echo: {result:?}"
+        );
+        assert_eq!(result.score, 0.5);
     }
 
     #[tokio::test]
