@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{CapabilityLevel, ProbeResult, classify};
 
-use super::{nonempty_string_arg, tool, user_text};
+use super::{has_visible_arg_text, nonempty_string_arg, tool, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -51,7 +51,7 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
     } else {
         let tc = &response.tool_calls[0];
         let path_is_string = nonempty_string_arg(&tc.arguments, "path");
-        if tc.name.trim().is_empty() {
+        if !has_visible_arg_text(&tc.name) {
             (0.0, "Tool call has empty name".to_string())
         } else if tc.name == "read_file" && path_is_string {
             (
@@ -676,7 +676,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_calling_weak_for_empty_or_whitespace_name() {
-        for name in ["", "   "] {
+        for name in ["", "   ", "\u{200b}"] {
             let response = ProbeResponse {
                 text: String::new(),
                 tool_calls: vec![call(

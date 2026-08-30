@@ -165,7 +165,7 @@ pub(crate) fn utf8_prefix(s: &str, max: usize) -> &str {
 }
 
 /// True when `s` has a character that is not whitespace or a format/ZWSP mark.
-fn has_visible_arg_text(s: &str) -> bool {
+pub(crate) fn has_visible_arg_text(s: &str) -> bool {
     s.chars().any(|c| {
         !c.is_whitespace()
             && !matches!(

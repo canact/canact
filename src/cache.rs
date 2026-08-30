@@ -96,7 +96,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      code +/- lines; comment-only +/- is Weak (not UnifiedDiff).
 /// v36: SEARCH/REPLACE and unified_diff ignore `/* */` comment
 ///      tokens the same way as `//` comments.
-pub const PROBE_SUITE_VERSION: u32 = 36;
+/// v37: tool names that are only ZWSP/format marks are Weak
+///      (same as empty names for can_use_tools).
+pub const PROBE_SUITE_VERSION: u32 = 37;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
