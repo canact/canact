@@ -128,10 +128,13 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
         return true;
     }
     args.as_object().is_some_and(|o| {
-        let param_value_echo = o.len() == 1
-            && o.get("param")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| s == "value");
+        let has_real_path = nonempty_string_arg(o, "path")
+            && o.get("path").and_then(|v| v.as_str()) != Some("value");
+        let param_value_echo = o
+            .get("param")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s == "value")
+            && !has_real_path;
         let path_value_echo = o
             .get("path")
             .and_then(|v| v.as_str())
@@ -165,6 +168,21 @@ fn xml_closed_block_is_read_file_attempt(text: &str) -> bool {
     span.contains("<name>read_file</name>")
         && span.contains("<arguments>")
         && argument_span_starts_json_object(span)
+        && !extract_xml_element_simple(span, "arguments")
+            .is_some_and(xml_arguments_text_is_format_card)
+}
+
+/// Unparseable `{'param':'value'}` (and extra-key siblings) is the card.
+fn xml_arguments_text_is_format_card(args: &str) -> bool {
+    let t = args.trim();
+    if !(t.contains("param") && t.contains("value")) {
+        return false;
+    }
+    let normalized = t.replace('\'', "\"");
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&normalized) {
+        return is_xml_format_card_echo("read_file", &v);
+    }
+    !t.contains("/tmp/example.txt")
 }
 
 /// Closed Medium needs an arguments body that at least opened `{`.
@@ -337,6 +355,84 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert!(result.score < 0.4, "card echo score: {}", result.score);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_card_extra_keys_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"param\": \"value\", \"type\": \"object\"}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "param/value plus extra keys must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_single_quoted_card_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{'param': 'value'}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "single-quoted param/value card must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_single_quoted_real_path_is_still_attempt() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{'path': '/tmp/example.txt'}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Medium,
+            "single-quoted real path is still an attempt: {result:?}"
+        );
+        assert_eq!(result.score, 0.4);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_card_extra_keys_plus_real_path_is_strong() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"param\": \"value\", \"path\": \"/tmp/example.txt\"}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Strong,
+            "extra keys plus a real path is a call: {result:?}"
+        );
+        assert_eq!(result.score, 1.0);
     }
 
     #[tokio::test]
