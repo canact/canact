@@ -130,7 +130,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
 
     if !args.force {
         if let Some(profile) = cache
-            .get_with_knobs(&model, &provider, cheap, vision)
+            .get_with_knobs(&model, &provider, cheap, vision, args.advertised_context)
             .cloned()
         {
             return emit_profile(
@@ -185,7 +185,13 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
 }
 
 fn emit_run(run: &ProbeRun, json: bool, verbose: bool) -> Result<(), u8> {
-    emit_envelope(&run.profile, json, verbose, run.host_policy_envelope())
+    emit_envelope(
+        &run.profile,
+        json,
+        verbose,
+        run.host_policy_envelope(),
+        run.advertised_context_tokens,
+    )
 }
 
 fn emit_profile(
@@ -199,6 +205,7 @@ fn emit_profile(
         json,
         verbose,
         profile.host_policy_envelope_with(meta),
+        meta.advertised_context_tokens,
     )
 }
 
@@ -207,6 +214,7 @@ fn emit_envelope(
     json: bool,
     verbose: bool,
     envelope: serde_json::Value,
+    advertised: Option<u32>,
 ) -> Result<(), u8> {
     if json {
         match serde_json::to_string_pretty(&envelope) {
@@ -217,7 +225,7 @@ fn emit_envelope(
             }
         }
     } else {
-        print!("{}", profile.format_human_table(verbose));
+        print!("{}", profile.format_human_table_with(verbose, advertised));
     }
     if let Some(msg) = profile.tool_gate_error() {
         eprintln!("{msg}");

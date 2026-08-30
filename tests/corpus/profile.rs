@@ -670,6 +670,7 @@ fn human_table_includes_effective_context_tokens_when_some() {
     let table = profile.format_human_table(false);
     assert!(table.contains("8192"), "{table}");
     assert!(table.contains("Effective context tokens:"), "{table}");
+    assert!(table.contains("Recommended context tokens:"), "{table}");
 }
 
 #[test]
@@ -683,9 +684,27 @@ fn human_table_prints_probed_context_floor_when_effective_unset() {
     let table = profile.format_human_table(false);
     assert!(table.contains("4096"), "{table}");
     assert!(table.contains("Probed context floor:"), "{table}");
+    assert!(table.contains("Recommended context tokens:"), "{table}");
     assert!(
         !table.to_ascii_lowercase().contains("effective context"),
         "{table}"
+    );
+}
+
+#[test]
+fn human_table_prints_recommended_not_advertised_as_measured() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.probed_context_floor = Some(4096);
+    let table = profile.format_human_table_with(false, Some(40960));
+    assert!(table.contains("Recommended context tokens:"), "{table}");
+    assert!(table.contains("4096"), "{table}");
+    assert!(
+        !table.contains("40960"),
+        "advertised must not print as measured: {table}"
     );
 }
 
@@ -837,6 +856,7 @@ fn host_policy_envelope_with_emits_session_flags() {
     assert_eq!(value["skipExpensive"], true, "{value}");
     assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
     assert_eq!(value["probedContextFloor"], 4096, "{value}");
+    assert_eq!(value["recommendedContextTokens"], 4096, "{value}");
     assert!(value["effectiveContextTokens"].is_null(), "{value}");
 }
 
@@ -852,6 +872,7 @@ fn host_policy_envelope_default_meta_is_cacheable_full() {
     assert_eq!(value["skipExpensive"], false, "{value}");
     assert!(value["advertisedContextTokens"].is_null(), "{value}");
     assert!(value["probedContextFloor"].is_null(), "{value}");
+    assert!(value["recommendedContextTokens"].is_null(), "{value}");
 }
 
 #[test]

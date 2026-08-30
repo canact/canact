@@ -60,7 +60,12 @@ impl ProbeRun {
             warn!("skipping probe cache persist: transient probe error");
             return Ok(false);
         }
-        cache.put_with_knobs(self.profile.clone(), self.skip_expensive, self.vision);
+        cache.put_with_knobs(
+            self.profile.clone(),
+            self.skip_expensive,
+            self.vision,
+            self.advertised_context_tokens,
+        );
         cache.save(path)?;
         Ok(true)
     }
