@@ -79,9 +79,13 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("no character")
         || lower.contains("text-only")
         || lower.contains("text only")
+        || lower.contains("text-based")
         || lower.contains("text model")
         || lower.contains("processes text")
         || lower.contains("process text")
+        || lower.contains("work with text")
+        || lower.contains("isn't any text")
+        || lower.contains("is not any text")
         || lower.contains("black box");
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
@@ -210,6 +214,9 @@ mod tests {
             "I am a text model",
             "This model processes text",
             "This is a text-only model.",
+            "I'm a text-based model.",
+            "I only work with text.",
+            "There isn't any text.",
         ] {
             let llm = MockLlm {
                 response: text_response(body),
