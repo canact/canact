@@ -102,6 +102,11 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("no visible letter")
         || lower.contains("no visible character")
         || lower.contains("no discernible letter")
+        || lower.contains("no discernible character")
+        || lower.contains("doesn't contain character")
+        || lower.contains("does not contain character")
+        || lower.contains("aren't any character")
+        || lower.contains("are not any character")
         || lower.contains("don't see")
         || lower.contains("do not see")
         || lower.contains("can't see")
@@ -410,6 +415,25 @@ mod tests {
             "whitespace must not set supportsVision: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_no_discernible_characters_do_not_set_medium() {
+        for body in [
+            "No discernible characters",
+            "There aren't any characters",
+            "The image doesn't contain characters",
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "negated characters must not set supportsVision: {body} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
