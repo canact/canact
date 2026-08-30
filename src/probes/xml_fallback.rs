@@ -128,7 +128,7 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
         return true;
     }
     if let Some(arr) = args.as_array() {
-        return arr.len() == 1 && is_xml_format_card_echo(name, &arr[0]);
+        return !arr.is_empty() && arr.iter().all(|el| is_xml_format_card_echo(name, el));
     }
     args.as_object().is_some_and(|o| {
         let has_real_path = nonempty_string_arg(o, "path")
@@ -395,6 +395,45 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_multi_element_card_array_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>[{\"param\":\"value\"},{\"param\":\"value\"}]</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "multi-element param/value card must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_mixed_card_and_real_path_array_is_still_attempt() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>[{\"param\":\"value\"},{\"path\":\"/tmp/example.txt\"}]</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Medium,
+            "mixed card plus real path is still an attempt: {result:?}"
+        );
+        assert_eq!(result.score, 0.7);
     }
 
     #[tokio::test]
