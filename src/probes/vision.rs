@@ -52,7 +52,10 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
 
     let response = llm.chat(request).await?;
     let text = response.text;
-    let lower = fold_format_marks(&text.to_lowercase());
+    let raw = text.to_lowercase();
+    let folded = fold_format_marks(&raw);
+    let stripped = strip_format_marks(&raw);
+    let lower = folded.as_str();
 
     // Check if the model identified the text. Be careful not to match "black",
     // "blue", "blank", etc. - only match "BL" as a standalone word or "BLINE".
@@ -68,65 +71,23 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // User-facing details only. Ground-truth text in the probe image stays
     // internal (see PROBE_IMAGE_BASE64 / scoring above); do not echo it or
     // the raw model reply in default details.
-    let refused = lower.contains("cannot")
-        || lower.contains("can't")
-        || lower.contains("unable")
-        || lower.contains("don't")
-        || lower.contains("no image")
-        || lower.contains("no text")
-        || lower.contains("no visible")
-        || lower.contains("no letter")
-        || lower.contains("no character")
-        || lower.contains("text-only")
-        || lower.contains("text only")
-        || lower.contains("text-based")
-        || lower.contains("text model")
-        || lower.contains("processes text")
-        || lower.contains("process text")
-        || lower.contains("work with text")
-        || lower.contains("isn't any text")
-        || lower.contains("is not any text")
-        || lower.contains("black box")
-        || lower.contains("white box")
-        || lower.contains("white-box")
-        || lower.contains("white space")
-        || lower.contains("white-space")
-        || lower.contains("no discernible text")
-        || lower.contains("text-processing")
-        || lower.contains("text processing");
+    let refused = vision_refused(&folded) || vision_refused(&stripped);
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
     // is still Medium.
-    let negated_glyphs = lower.contains("no letter")
-        || lower.contains("no character")
-        || lower.contains("no visible letter")
-        || lower.contains("no visible character")
-        || lower.contains("no discernible letter")
-        || lower.contains("no discernible character")
-        || lower.contains("doesn't contain character")
-        || lower.contains("does not contain character")
-        || lower.contains("aren't any character")
-        || lower.contains("are not any character")
-        || lower.contains("don't see")
-        || lower.contains("do not see")
-        || lower.contains("can't see")
-        || lower.contains("cannot see")
-        || lower.contains("doesn't contain letter")
-        || lower.contains("does not contain letter")
-        || lower.contains("aren't any letter")
-        || lower.contains("are not any letter");
+    let negated_glyphs = vision_negated_glyphs(&folded) || vision_negated_glyphs(&stripped);
     let saw_glyphs = !negated_glyphs
-        && (has_surface_word(&lower, "letter")
-            || has_surface_word(&lower, "letters")
-            || has_surface_word(&lower, "character")
-            || has_surface_word(&lower, "characters"));
+        && (has_surface_word(lower, "letter")
+            || has_surface_word(lower, "letters")
+            || has_surface_word(lower, "character")
+            || has_surface_word(lower, "characters"));
     // Word tokens only. "whitespace" is not "white"; "context" is not "text".
-    let processed_surface = has_surface_word(&lower, "pattern")
-        || has_surface_word(&lower, "pixel")
-        || has_surface_word(&lower, "pixels")
-        || has_surface_word(&lower, "black")
-        || has_surface_word(&lower, "white")
-        || has_surface_word(&lower, "text");
+    let processed_surface = has_surface_word(lower, "pattern")
+        || has_surface_word(lower, "pixel")
+        || has_surface_word(lower, "pixels")
+        || has_surface_word(lower, "black")
+        || has_surface_word(lower, "white")
+        || has_surface_word(lower, "text");
 
     let echoed_question = lower.contains("what text or letters appear");
 
@@ -169,6 +130,67 @@ fn fold_format_marks(s: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn strip_format_marks(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !matches!(
+                c,
+                '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
+            )
+        })
+        .collect()
+}
+
+fn vision_refused(lower: &str) -> bool {
+    lower.contains("cannot")
+        || lower.contains("can't")
+        || lower.contains("unable")
+        || lower.contains("don't")
+        || lower.contains("no image")
+        || lower.contains("no text")
+        || lower.contains("no visible")
+        || lower.contains("no letter")
+        || lower.contains("no character")
+        || lower.contains("text-only")
+        || lower.contains("text only")
+        || lower.contains("text-based")
+        || lower.contains("text model")
+        || lower.contains("processes text")
+        || lower.contains("process text")
+        || lower.contains("work with text")
+        || lower.contains("isn't any text")
+        || lower.contains("is not any text")
+        || lower.contains("black box")
+        || lower.contains("white box")
+        || lower.contains("white-box")
+        || lower.contains("white space")
+        || lower.contains("white-space")
+        || lower.contains("no discernible text")
+        || lower.contains("text-processing")
+        || lower.contains("text processing")
+}
+
+fn vision_negated_glyphs(lower: &str) -> bool {
+    lower.contains("no letter")
+        || lower.contains("no character")
+        || lower.contains("no visible letter")
+        || lower.contains("no visible character")
+        || lower.contains("no discernible letter")
+        || lower.contains("no discernible character")
+        || lower.contains("doesn't contain character")
+        || lower.contains("does not contain character")
+        || lower.contains("aren't any character")
+        || lower.contains("are not any character")
+        || lower.contains("don't see")
+        || lower.contains("do not see")
+        || lower.contains("can't see")
+        || lower.contains("cannot see")
+        || lower.contains("doesn't contain letter")
+        || lower.contains("does not contain letter")
+        || lower.contains("aren't any letter")
+        || lower.contains("are not any letter")
 }
 
 fn has_surface_word(lower: &str, word: &str) -> bool {
@@ -321,6 +343,25 @@ mod tests {
             "question echo must not set supportsVision: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_zwsp_splits_dont_see() {
+        for body in [
+            "I don\u{200B}'t see letters",
+            "I can\u{200B}'t see any text",
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "ZWSP in don't/can't must not set supportsVision: {body} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "body={body}");
+        }
     }
 
     #[tokio::test]
