@@ -181,7 +181,7 @@ fn xml_object_is_card(o: &serde_json::Map<String, serde_json::Value>) -> bool {
 /// Schema objects under `properties.path` are not a real call.
 fn xml_path_value_is_real(v: &serde_json::Value) -> bool {
     if let Some(s) = v.as_str() {
-        let t = s.trim();
+        let t = xml_visible_card_token(s);
         return !t.is_empty() && !t.eq_ignore_ascii_case("value");
     }
     v.as_array()
@@ -191,7 +191,7 @@ fn xml_path_value_is_real(v: &serde_json::Value) -> bool {
 /// `{"param":"value"}` and `{"param":["value"]}`.
 fn xml_value_is_card_value(v: &serde_json::Value) -> bool {
     if v.as_str()
-        .is_some_and(|s| s.trim().eq_ignore_ascii_case("value"))
+        .is_some_and(|s| xml_visible_card_token(s).eq_ignore_ascii_case("value"))
     {
         return true;
     }
@@ -199,9 +199,22 @@ fn xml_value_is_card_value(v: &serde_json::Value) -> bool {
         !arr.is_empty()
             && arr.iter().all(|el| {
                 el.as_str()
-                    .is_some_and(|s| s.trim().eq_ignore_ascii_case("value"))
+                    .is_some_and(|s| xml_visible_card_token(s).eq_ignore_ascii_case("value"))
             })
     })
+}
+
+/// Drop whitespace and ZWSP/format marks so `value` + U+200B is still the card.
+fn xml_visible_card_token(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !c.is_whitespace()
+                && !matches!(
+                    c,
+                    '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
+                )
+        })
+        .collect()
 }
 
 fn xml_map_get_ci<'a>(
@@ -765,6 +778,29 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_zwsp_padded_value_is_echo() {
+        for args in [
+            "{\"path\":\"value\\u200b\"}",
+            "{\"path\":[\"value\\u200b\"]}",
+            "{\"param\":\"value\\u200b\"}",
+        ] {
+            let response_text = format!(
+                "<tool_call>\n<name>read_file</name>\n<arguments>{args}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "ZWSP-padded card value must not set canUseTools: {args} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "args={args}");
+        }
     }
 
     #[tokio::test]
