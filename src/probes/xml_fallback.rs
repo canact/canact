@@ -267,7 +267,7 @@ fn xml_closed_block_is_read_file_attempt(text: &str) -> bool {
 /// Unparseable `{'param':'value'}` (and extra-key siblings) is the card.
 fn xml_arguments_text_is_format_card(args: &str) -> bool {
     let t = args.trim();
-    if !(t.contains("param") && t.contains("value")) {
+    if !((t.contains("param") || t.contains("path")) && t.contains("value")) {
         return false;
     }
     let normalized = t.replace('\'', "\"");
@@ -604,6 +604,25 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_single_quoted_path_card_does_not_open_tools() {
+        for args in ["{'path': 'value'}", "{'path':['value']}"] {
+            let response_text = format!(
+                "<tool_call>\n<name>read_file</name>\n<arguments>{args}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "single-quoted path card must not set canUseTools: {args} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "args={args}");
+        }
     }
 
     #[tokio::test]

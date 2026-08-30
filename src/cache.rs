@@ -137,7 +137,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (`removed_line` / `added_line`) is Weak.
 /// v55: XML `{"path":["value"]}` and padded `"value "` are format-card
 ///      echo (do not set canUseTools).
-pub const PROBE_SUITE_VERSION: u32 = 55;
+/// v56: unparseable `{'path':'value'}` is format-card echo
+///      (does not set canUseTools).
+pub const PROBE_SUITE_VERSION: u32 = 56;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
