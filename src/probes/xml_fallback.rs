@@ -222,7 +222,7 @@ fn xml_map_get_ci<'a>(
     key: &str,
 ) -> Option<&'a serde_json::Value> {
     o.iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .find(|(k, _)| xml_visible_card_token(k).eq_ignore_ascii_case(key))
         .map(|(_, v)| v)
 }
 
@@ -802,6 +802,29 @@ mod tests {
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_zwsp_padded_key_is_echo() {
+        for args in [
+            "{\"path\\u200b\":\"value\"}",
+            "{\"\\u200bparam\":\"value\"}",
+            "{\"param\\u200b\":\"value\"}",
+        ] {
+            let response_text = format!(
+                "<tool_call>\n<name>read_file</name>\n<arguments>{args}</arguments>\n</tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "ZWSP-padded card key must not set canUseTools: {args} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "args={args}");
+        }
     }
 
     #[tokio::test]
