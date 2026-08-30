@@ -544,10 +544,7 @@ fn parse_chat_response(value: &Value) -> Result<ProbeResponse, ProbeError> {
         }
     }
     let finish = match choice.get("finish_reason").and_then(|v| v.as_str()) {
-        Some("stop") => ProbeFinish::Stop,
-        Some("tool_calls") | Some("function_call") => ProbeFinish::ToolCalls,
-        Some("length") => ProbeFinish::Length,
-        Some(_) => ProbeFinish::Other,
+        Some(reason) => finish_from_reason(reason),
         None if !tool_calls.is_empty() => ProbeFinish::ToolCalls,
         None => ProbeFinish::Stop,
     };
@@ -775,9 +772,20 @@ fn emit_delta(
         }
     }
 
-    let finish = choice.get("finish_reason").and_then(|v| v.as_str());
-    if matches!(finish, Some("tool_calls") | Some("stop")) {
+    if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
         end_open_tools(open_tools, tx);
+        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::Finished {
+            finish: finish_from_reason(reason),
+        }));
+    }
+}
+
+fn finish_from_reason(reason: &str) -> ProbeFinish {
+    match reason {
+        "stop" => ProbeFinish::Stop,
+        "tool_calls" | "function_call" => ProbeFinish::ToolCalls,
+        "length" => ProbeFinish::Length,
+        _ => ProbeFinish::Other,
     }
 }
 
@@ -1344,6 +1352,80 @@ mod tests {
             chunks
                 .iter()
                 .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
+            "{chunks:?}"
+        );
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::Finished {
+                    finish: ProbeFinish::ToolCalls
+                }
+            )),
+            "{chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_length_emits_finished_length() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"I will call read_file\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::Finished {
+                    finish: ProbeFinish::Length
+                }
+            )),
+            "SSE length must surface as Finished(Length): {chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_length_flushes_partial_tool_then_finished() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
+            )),
+            "{chunks:?}"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
+            "length must flush the open tool before Finished: {chunks:?}"
+        );
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::Finished {
+                    finish: ProbeFinish::Length
+                }
+            )),
             "{chunks:?}"
         );
     }
