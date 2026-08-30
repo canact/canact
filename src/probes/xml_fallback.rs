@@ -127,26 +127,71 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
     if name == "TOOL_NAME" {
         return true;
     }
-    if let Some(arr) = args.as_array() {
-        return !arr.is_empty() && arr.iter().all(|el| is_xml_format_card_echo(name, el));
+    if xml_args_have_real_path(args) {
+        return false;
     }
-    args.as_object().is_some_and(|o| {
-        let has_real_path = nonempty_string_arg(o, "path")
-            && o.get("path").and_then(|v| v.as_str()) != Some("value");
-        let param_value_echo = o
-            .get("param")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| s == "value")
-            && !has_real_path;
-        let path_value_echo = o
-            .get("path")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| s == "value");
-        let schema_echo = o.get("type").and_then(|v| v.as_str()) == Some("object")
-            && o.get("properties").is_some()
-            && !nonempty_string_arg(o, "path");
-        param_value_echo || path_value_echo || schema_echo
-    })
+    xml_args_are_card_tokens(args)
+}
+
+/// A nonempty `path` other than the card token `value` is a real call.
+fn xml_args_have_real_path(args: &serde_json::Value) -> bool {
+    match args {
+        serde_json::Value::Object(o) => {
+            let own = nonempty_string_arg(o, "path")
+                && o.get("path").and_then(|v| v.as_str()) != Some("value");
+            own || o.values().any(xml_args_have_real_path)
+        }
+        serde_json::Value::Array(arr) => arr.iter().any(xml_args_have_real_path),
+        serde_json::Value::String(s) => {
+            parse_json_wrapped_value(s).is_some_and(|v| xml_args_have_real_path(&v))
+        }
+        _ => false,
+    }
+}
+
+/// Walk objects, arrays, and JSON-encoded strings for card tokens.
+fn xml_args_are_card_tokens(args: &serde_json::Value) -> bool {
+    match args {
+        serde_json::Value::Array(arr) => {
+            !arr.is_empty() && arr.iter().all(xml_args_are_card_tokens)
+        }
+        serde_json::Value::Object(o) => {
+            xml_object_is_card(o) || o.values().any(xml_args_are_card_tokens)
+        }
+        serde_json::Value::String(s) => {
+            parse_json_wrapped_value(s).is_some_and(|v| xml_args_are_card_tokens(&v))
+        }
+        _ => false,
+    }
+}
+
+fn xml_object_is_card(o: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let param_value_echo = o.get("param").is_some_and(xml_value_is_card_value);
+    let path_value_echo = o
+        .get("path")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s == "value");
+    let schema_echo = o.get("type").and_then(|v| v.as_str()) == Some("object")
+        && o.get("properties").is_some()
+        && !nonempty_string_arg(o, "path");
+    param_value_echo || path_value_echo || schema_echo
+}
+
+/// `{"param":"value"}` and `{"param":["value"]}`.
+fn xml_value_is_card_value(v: &serde_json::Value) -> bool {
+    if v.as_str() == Some("value") {
+        return true;
+    }
+    v.as_array()
+        .is_some_and(|arr| !arr.is_empty() && arr.iter().all(|el| el.as_str() == Some("value")))
+}
+
+fn parse_json_wrapped_value(s: &str) -> Option<serde_json::Value> {
+    let t = s.trim();
+    if !(t.starts_with('{') || t.starts_with('[') || t.starts_with('"')) {
+        return None;
+    }
+    serde_json::from_str(t).ok()
 }
 
 /// Open-only Medium only when `read_file` is named after `<tool_call>`.
@@ -568,6 +613,85 @@ mod tests {
             result.level,
             CapabilityLevel::Strong,
             "extra keys plus a real path is a call: {result:?}"
+        );
+        assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_nested_payload_card_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"payload\":{\"param\":\"value\"}}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "nested param/value card must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_json_string_wrapped_card_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>\"{\\\"param\\\":\\\"value\\\"}\"</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "JSON-string-wrapped param/value card must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_param_array_value_card_does_not_open_tools() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"param\":[\"value\"]}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "param array-of-value card must not set canUseTools: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_nested_card_plus_real_path_is_strong() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"payload\":{\"param\":\"value\"},\"path\":\"/tmp/example.txt\"}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Strong,
+            "nested card plus a real path is a call: {result:?}"
         );
         assert_eq!(result.score, 1.0);
     }
