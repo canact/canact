@@ -9,7 +9,10 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
-use super::{assistant_tool_calls, nonempty_string_arg, tool, tool_result, user_text};
+use super::{
+    assistant_tool_calls, nonempty_string_arg, refuse_truncated_tool_call, tool, tool_result,
+    user_text,
+};
 
 fn tool_specs() -> Vec<crate::client::ProbeTool> {
     vec![
@@ -127,6 +130,7 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
             max_tokens: Some(512),
         };
         let response = llm.chat(request).await?;
+        refuse_truncated_tool_call(&response)?;
         let calls = response.tool_calls;
         if calls.is_empty() {
             break;

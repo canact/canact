@@ -13,7 +13,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
-use super::{nonempty_string_arg, tool, user_text};
+use super::{nonempty_string_arg, refuse_truncated_tool_call, tool, user_text};
 
 /// Probe one-shot ordered multi-tool planning (single LLM turn).
 ///
@@ -90,6 +90,7 @@ pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeRe
     };
 
     let response = llm.chat(request).await?;
+    refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
     let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
 
