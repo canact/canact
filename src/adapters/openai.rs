@@ -613,7 +613,7 @@ fn parse_legacy_function(message: &Value) -> Option<ProbeToolCall> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned();
-    if name.trim().is_empty() {
+    if !crate::probes::has_visible_arg_text(&name) {
         return None;
     }
     Some(ProbeToolCall {
@@ -640,7 +640,7 @@ fn parse_tool_calls(value: &Value) -> Vec<ProbeToolCall> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_owned();
-            if name.trim().is_empty() {
+            if !crate::probes::has_visible_arg_text(&name) {
                 return None;
             }
             Some(ProbeToolCall {
@@ -1091,7 +1091,7 @@ mod tests {
 
     #[test]
     fn parse_chat_response_empty_tool_name_is_not_a_call() {
-        for name in ["", "   "] {
+        for name in ["", "   ", "\u{200b}"] {
             let value = serde_json::json!({
                 "choices": [{
                     "message": {

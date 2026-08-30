@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{nonempty_string_arg, system_text, user_text};
+use super::{has_visible_arg_text, nonempty_string_arg, system_text, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/example.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -55,7 +55,7 @@ Available tools:
     let (score, details) = if has_tool_call_open && has_tool_call_close {
         match parse_xml_tool_block(&text) {
             Some((name, args)) => {
-                if name.is_empty() {
+                if !has_visible_arg_text(&name) {
                     (0.0, "XML tool call has empty name".to_string())
                 } else if is_xml_format_card_echo(&name, &args) {
                     (
@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn xml_tool_calling_weak_for_empty_or_whitespace_name() {
-        for name in ["", "   "] {
+        for name in ["", "   ", "\u{200b}"] {
             let response_text = format!(
                 "<tool_call>\n<name>{name}</name>\n<arguments>{{\"path\": \"/tmp/example.txt\"}}</arguments>\n</tool_call>"
             );
