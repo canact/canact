@@ -9,7 +9,9 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{nonempty_string_arg, refuse_truncated_tool_call, tool, user_text};
+use super::{
+    nonempty_string_arg, refuse_truncated_incomplete, refuse_truncated_tool_call, tool, user_text,
+};
 
 /// Probe whether the model can produce 5 parallel tool calls.
 ///
@@ -96,6 +98,7 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
         )
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "parallel_tool_scale".to_string(),
         score,
