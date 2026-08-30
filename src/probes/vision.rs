@@ -52,7 +52,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
 
     let response = llm.chat(request).await?;
     let text = response.text;
-    let lower = text.to_lowercase();
+    let lower = fold_format_marks(&text.to_lowercase());
 
     // Check if the model identified the text. Be careful not to match "black",
     // "blue", "blank", etc. - only match "BL" as a standalone word or "BLINE".
@@ -157,6 +157,18 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         level: classify(score),
         details,
     })
+}
+
+fn fold_format_marks(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}' => ' ',
+            _ => c,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn has_surface_word(lower: &str, word: &str) -> bool {
@@ -353,6 +365,20 @@ mod tests {
             "no visible text must not set supportsVision: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn vision_weak_when_zwsp_splits_no_text() {
+        let llm = MockLlm {
+            response: text_response("There is no\u{200B} text visible"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "ZWSP in no-text refusal must not set supportsVision: {result:?}"
+        );
         assert_eq!(result.score, 0.0);
     }
 

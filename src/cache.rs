@@ -151,7 +151,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (does not set canUseTools).
 /// v62: unified-diff card `removed\\u{200B}line` is echo
 ///      (does not set UnifiedDiff).
-pub const PROBE_SUITE_VERSION: u32 = 62;
+/// v63: vision `no\\u{200B} text` is a refusal
+///      (does not set supportsVision).
+pub const PROBE_SUITE_VERSION: u32 = 63;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
