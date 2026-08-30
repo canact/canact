@@ -100,7 +100,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (same as empty names for can_use_tools).
 /// v38: vision "text model" / "processes text" is Weak
 ///      (does not set supportsVision).
-pub const PROBE_SUITE_VERSION: u32 = 38;
+/// v39: vision "text-based" / "work with text" / "isn't any text"
+///      is Weak.
+pub const PROBE_SUITE_VERSION: u32 = 39;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
