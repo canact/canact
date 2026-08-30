@@ -39,7 +39,10 @@ pub use tool_calling::{
 pub use vision::probe_vision;
 pub use xml_fallback::probe_xml_tool_calling;
 
-use crate::client::{ProbeContent, ProbeMessage, ProbeRole, ProbeTool, ProbeToolCall};
+use crate::client::{
+    ProbeContent, ProbeFinish, ProbeMessage, ProbeResponse, ProbeRole, ProbeTool, ProbeToolCall,
+};
+use crate::error::ProbeError;
 
 pub(crate) fn user_text(text: impl Into<String>) -> ProbeMessage {
     ProbeMessage {
@@ -190,6 +193,17 @@ pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value)
         name: name.to_string(),
         description: description.to_string(),
         parameters,
+    }
+}
+
+/// Length with no tool call is a short budget, not a 30-day Weak card.
+pub fn refuse_truncated_tool_call(resp: &ProbeResponse) -> Result<(), ProbeError> {
+    if resp.finish == ProbeFinish::Length && resp.tool_calls.is_empty() {
+        Err(ProbeError::Transient(
+            "response truncated before a tool call".into(),
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -468,5 +482,41 @@ mod extract_json_tests {
             extract_json_from_text(input),
             r#"{"word": "hello", "length": 5, "reversed": "olleh"}"#
         );
+    }
+}
+
+#[cfg(test)]
+mod refuse_truncated_tests {
+    use super::refuse_truncated_tool_call;
+    use super::test_support::{text_response, tool_call_response};
+    use crate::client::{ProbeFinish, ProbeResponse};
+    use crate::error::ProbeError;
+
+    #[test]
+    fn refuse_truncated_tool_call_errors_on_length_without_tools() {
+        let resp = ProbeResponse {
+            text: "leftover reasoning".into(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Length,
+            usage: None,
+        };
+        let err = refuse_truncated_tool_call(&resp).expect_err("must refuse");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn refuse_truncated_tool_call_allows_stop_without_tools() {
+        let resp = text_response("I would read the file");
+        assert!(refuse_truncated_tool_call(&resp).is_ok());
+    }
+
+    #[test]
+    fn refuse_truncated_tool_call_allows_length_with_tools() {
+        let mut resp = tool_call_response();
+        resp.finish = ProbeFinish::Length;
+        assert!(refuse_truncated_tool_call(&resp).is_ok());
     }
 }

@@ -9,7 +9,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{nonempty_string_arg, tool, user_text};
+use super::{nonempty_string_arg, refuse_truncated_tool_call, tool, user_text};
 
 /// Probe whether the model can produce 5 parallel tool calls.
 ///
@@ -53,6 +53,7 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
     };
 
     let response = llm.chat(request).await?;
+    refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
 
     let valid_calls: Vec<&str> = calls

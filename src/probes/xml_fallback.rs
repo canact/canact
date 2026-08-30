@@ -4,7 +4,9 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{has_visible_arg_text, nonempty_string_arg, system_text, user_text};
+use super::{
+    has_visible_arg_text, nonempty_string_arg, refuse_truncated_tool_call, system_text, user_text,
+};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/example.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -47,6 +49,9 @@ Available tools:
     };
 
     let response = llm.chat(request).await?;
+    if !response.text.contains("<tool_call>") {
+        refuse_truncated_tool_call(&response)?;
+    }
     let text = response.text;
 
     let has_tool_call_open = text.contains("<tool_call>");
@@ -372,6 +377,23 @@ mod tests {
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_length_without_tags_is_transient() {
+        let response = crate::client::ProbeResponse {
+            text: "I will emit a tool_call after leftover reasoning.".into(),
+            tool_calls: Vec::new(),
+            finish: crate::client::ProbeFinish::Length,
+            usage: None,
+        };
+        let err = probe_xml_tool_calling(&MockLlm { response })
+            .await
+            .expect_err("truncated XML must not score Weak");
+        assert!(
+            matches!(&err, crate::ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

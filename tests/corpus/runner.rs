@@ -223,6 +223,64 @@ fn persist_does_not_write_when_cacheable_false() {
     assert!(cache.get("m", "p").is_none());
 }
 
+struct TruncatedToolLlm;
+
+impl ProbeClient for TruncatedToolLlm {
+    fn chat(
+        &self,
+        _req: ProbeRequest,
+    ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
+        std::future::ready(Ok(ProbeResponse {
+            text: "I will call read_file after this leftover reasoning.".into(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Length,
+            usage: None,
+        }))
+    }
+
+    fn stream_chat(
+        &self,
+        _req: ProbeRequest,
+    ) -> impl futures::Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+        futures::stream::empty()
+    }
+
+    fn model_id(&self) -> &str {
+        "m"
+    }
+
+    fn provider(&self) -> &str {
+        "p"
+    }
+}
+
+#[tokio::test]
+async fn truncated_tool_calling_is_not_written_to_cache() {
+    let runner = ProbeRunner::new(TruncatedToolLlm);
+    let run = runner.run_detailed().await.expect("run_detailed");
+    assert_eq!(run.profile.tool_calling.level, CapabilityLevel::Medium);
+    assert!(
+        run.profile.tool_calling.details.contains("truncated"),
+        "{}",
+        run.profile.tool_calling.details
+    );
+    assert!(
+        !run.cacheable,
+        "Length + no tool call must not be a 30-day Weak card"
+    );
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = run.persist(&mut cache, &path).expect("persist");
+    assert!(!wrote, "persist must skip truncated tool_calling");
+    assert!(
+        !path.exists(),
+        "cache file must not be written when tool_calling is truncated"
+    );
+    assert!(cache.get("m", "p").is_none());
+}
+
 #[test]
 fn uncacheable_run_envelope_cacheable_false() {
     let run = ProbeRun {

@@ -4,7 +4,9 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{CapabilityLevel, ProbeResult, classify};
 
-use super::{has_visible_arg_text, nonempty_string_arg, tool, user_text};
+use super::{
+    has_visible_arg_text, nonempty_string_arg, refuse_truncated_tool_call, tool, user_text,
+};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -45,6 +47,7 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
     };
 
     let response = llm.chat(request).await?;
+    refuse_truncated_tool_call(&response)?;
 
     let (score, details) = if response.tool_calls.is_empty() {
         (0.0, "No tool call in response, text only".to_string())
@@ -163,6 +166,7 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
     };
 
     let response = llm.chat(request).await?;
+    refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
 
     let path_is_string = |c: &ProbeToolCall| nonempty_string_arg(&c.arguments, "path");
@@ -291,6 +295,7 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     };
 
     let response = llm.chat(request).await?;
+    refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
     let edit_call = calls.iter().find(|c| c.name == "edit_file");
 
@@ -505,6 +510,7 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     };
 
     let response = llm.chat(request).await?;
+    refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
 
     let mut points = 0.0_f32;
@@ -672,6 +678,106 @@ mod tests {
         let result = probe_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn tool_calling_length_without_tools_is_transient() {
+        let response = ProbeResponse {
+            text: "I will call read_file with path /tmp/test.txt after thinking.".into(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Length,
+            usage: None,
+        };
+        let err = probe_tool_calling(&MockLlm { response })
+            .await
+            .expect_err("truncated tool call must not score Weak");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+        let (result, cacheable) =
+            crate::runner::resolve_probe(Err(err), "tool_calling").expect("synthesized Medium");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_ne!(result.score, 0.0, "must not persist Weak 0.0");
+        assert!(!cacheable, "truncation must not be a 30-day cache hit");
+        assert!(result.details.contains("truncated"), "{}", result.details);
+    }
+
+    #[tokio::test]
+    async fn tool_calling_stop_without_tools_is_weak_and_cacheable() {
+        let response = ProbeResponse {
+            text: "I would call the read_file tool for you.".into(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Stop,
+            usage: None,
+        };
+        let result = probe_tool_calling(&MockLlm { response })
+            .await
+            .expect("stop + no tools is a real Weak");
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+        let (result, cacheable) =
+            crate::runner::resolve_probe(Ok(result), "tool_calling").expect("cacheable Weak");
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+        assert!(
+            cacheable,
+            "Goose lie / talks-about-tool stays cacheable Weak"
+        );
+    }
+
+    #[tokio::test]
+    async fn complex_tool_calling_length_without_tools_is_transient() {
+        let err = probe_complex_tool_calling(&MockLlm {
+            response: ProbeResponse {
+                text: "I will call edit_file after thinking.".into(),
+                tool_calls: Vec::new(),
+                finish: ProbeFinish::Length,
+                usage: None,
+            },
+        })
+        .await
+        .expect_err("truncated complex call must not score Weak");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_length_without_tools_is_transient() {
+        let err = probe_nested_arguments(&MockLlm {
+            response: ProbeResponse {
+                text: "I will call edit_file after thinking.".into(),
+                tool_calls: Vec::new(),
+                finish: ProbeFinish::Length,
+                usage: None,
+            },
+        })
+        .await
+        .expect_err("truncated nested call must not score Weak");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_selection_length_without_tools_is_transient() {
+        let err = probe_tool_selection(&MockLlm {
+            response: ProbeResponse {
+                text: "I will pick a tool after thinking.".into(),
+                tool_calls: Vec::new(),
+                finish: ProbeFinish::Length,
+                usage: None,
+            },
+        })
+        .await
+        .expect_err("truncated selection must not score Weak");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
