@@ -57,10 +57,21 @@ pub enum ProbeFinish {
 /// Streamed token or tool-call fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeStreamChunk {
-    TextDelta { text: String },
-    ToolCallStart { id: String, name: String },
-    ToolCallArgDelta { delta: String },
+    TextDelta {
+        text: String,
+    },
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
+    ToolCallArgDelta {
+        delta: String,
+    },
     ToolCallEnd,
+    /// Terminal finish reason from the provider. Missing means Stop.
+    Finished {
+        finish: ProbeFinish,
+    },
 }
 
 /// Host catalog priors. Never persist a catalog boolean as Strong.

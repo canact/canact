@@ -5,11 +5,11 @@
 //! should use non-streaming for tool-call turns.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest, ProbeStreamChunk};
+use crate::client::{ProbeClient, ProbeFinish, ProbeRequest, ProbeStreamChunk};
 use crate::types::{ProbeResult, classify};
 use futures::StreamExt;
 
-use super::{nonempty_string_arg, tool, user_text};
+use super::{nonempty_string_arg, refuse_truncated_incomplete, tool, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -25,6 +25,8 @@ const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path 
 ///
 /// Stream setup, timeout, 429, or other `stream_chat` errors are returned as
 /// [`Err`], not Weak. A completed stream with no tool calls is still Weak.
+/// `Finished { Length }` plus a score below Strong is Transient (truncated),
+/// not a 30-day Weak/Medium card. Missing `Finished` is treated as Stop.
 pub async fn probe_streaming_tool_calls<C: ProbeClient>(
     llm: &C,
 ) -> Result<ProbeResult, ProbeError> {
@@ -59,12 +61,16 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
     let mut last_read_file_args = String::new();
     let mut got_other_tool = false;
     let mut got_any_chunk = false;
+    let mut finish = ProbeFinish::Stop;
 
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
             Ok(chunk) => {
                 got_any_chunk = true;
                 match &chunk {
+                    ProbeStreamChunk::Finished { finish: reason } => {
+                        finish = *reason;
+                    }
                     ProbeStreamChunk::ToolCallStart { name, .. } => {
                         flush_read_file_args(
                             &current_name,
@@ -143,6 +149,7 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
         )
     };
 
+    refuse_truncated_incomplete(finish, score)?;
     Ok(ProbeResult {
         name: "streaming_tool_calls".to_string(),
         score,
@@ -181,7 +188,7 @@ fn flush_read_file_args(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{ProbeResponse, ProbeStreamChunk};
+    use crate::client::{ProbeFinish, ProbeResponse, ProbeStreamChunk};
     use crate::probes::test_support::request_user_text;
     use crate::types::CapabilityLevel;
     use futures::Stream;
@@ -373,6 +380,80 @@ mod tests {
         })]);
         let result = probe_streaming_tool_calls(&llm).await.unwrap();
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn streaming_length_text_only_is_transient() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::TextDelta {
+                text: "I will call read_file...".to_string(),
+            }),
+            Ok(ProbeStreamChunk::Finished {
+                finish: ProbeFinish::Length,
+            }),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await;
+        assert!(
+            matches!(result, Err(ProbeError::Transient(_))),
+            "Length with no tool call must be Transient, not 30-day Weak; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_length_incomplete_args_is_transient() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"path\":".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+            Ok(ProbeStreamChunk::Finished {
+                finish: ProbeFinish::Length,
+            }),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await;
+        assert!(
+            matches!(result, Err(ProbeError::Transient(_))),
+            "Length plus incomplete args must be Transient, not 30-day Medium; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_length_complete_call_stays_strong() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+            Ok(ProbeStreamChunk::Finished {
+                finish: ProbeFinish::Length,
+            }),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn streaming_stop_text_only_stays_weak() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::TextDelta {
+                text: "I would read the file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::Finished {
+                finish: ProbeFinish::Stop,
+            }),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_eq!(result.score, 0.0);
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
