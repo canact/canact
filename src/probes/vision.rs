@@ -92,10 +92,16 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // is still Medium.
     let negated_glyphs = lower.contains("no letter")
         || lower.contains("no character")
+        || lower.contains("no visible letter")
+        || lower.contains("no discernible letter")
         || lower.contains("don't see")
         || lower.contains("do not see")
         || lower.contains("can't see")
-        || lower.contains("cannot see");
+        || lower.contains("cannot see")
+        || lower.contains("doesn't contain letter")
+        || lower.contains("does not contain letter")
+        || lower.contains("aren't any letter")
+        || lower.contains("are not any letter");
     let saw_glyphs = !negated_glyphs
         && (has_surface_word(&lower, "letter")
             || has_surface_word(&lower, "letters")
@@ -242,6 +248,26 @@ mod tests {
             "text-only must not set supportsVision: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_negated_letters_do_not_set_medium() {
+        for body in [
+            "No visible letters",
+            "There are no discernible letters",
+            "The image doesn't contain letters",
+            "There aren't any letters",
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "negated letters must not set supportsVision: {body} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
