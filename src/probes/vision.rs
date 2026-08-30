@@ -86,7 +86,12 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("work with text")
         || lower.contains("isn't any text")
         || lower.contains("is not any text")
-        || lower.contains("black box");
+        || lower.contains("black box")
+        || lower.contains("white box")
+        || lower.contains("white-box")
+        || lower.contains("white space")
+        || lower.contains("text-processing")
+        || lower.contains("text processing");
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
     // is still Medium.
@@ -402,6 +407,27 @@ mod tests {
             "whitespace must not set supportsVision: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_white_space_and_text_processing_do_not_set_medium() {
+        for body in [
+            "Looks like white space only",
+            "This is a white-box to me.",
+            "This is a white box to me.",
+            "I am a text-processing model",
+            "This model does text processing",
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "blank-image or text-processing phrasing must not set supportsVision: {body} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
