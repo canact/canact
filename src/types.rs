@@ -333,15 +333,8 @@ impl CapabilityProfile {
 
     /// Recommended maximum number of tools to send to the model.
     ///
-    /// Strong (`>= 0.8`): no limit. Medium (`>= 0.4`): 20. Weak: 10.
-    /// Scores in `[1.0 / 3.0, 0.4)` return `None` (issue #3315).
+    /// Strong: no limit. Medium: 20. Weak: 10.
     pub fn max_tools(&self) -> Option<usize> {
-        // Generic-edit scores ~0.33 are not 30-day Weak (#3315).
-        if !self.tool_selection.is_synthesized_error()
-            && (1.0 / 3.0..0.4).contains(&self.tool_selection.score)
-        {
-            return None;
-        }
         match completed_level(&self.tool_selection) {
             CapabilityLevel::Strong => None,
             CapabilityLevel::Medium => Some(20),

@@ -365,7 +365,7 @@ fn max_tools_10_for_weak() {
 }
 
 #[test]
-fn max_tools_not_10_for_033_tool_selection() {
+fn max_tools_20_for_033_medium_tool_selection() {
     let mut profile = make_profile(
         CapabilityLevel::Strong,
         CapabilityLevel::Strong,
@@ -375,13 +375,13 @@ fn max_tools_not_10_for_033_tool_selection() {
         name: "tool_selection".to_owned(),
         score: 1.0 / 3.0,
         max_score: 1.0,
-        level: CapabilityLevel::Weak,
+        level: CapabilityLevel::Medium,
         details: "1 tool call(s): task1=0.5, task2=0, task3=0.5".to_owned(),
     };
-    assert_ne!(
+    assert_eq!(
         profile.max_tools(),
-        Some(10),
-        "0.33 generic-edit path must not cap at 10 tools"
+        Some(20),
+        "generic-edit 0.33 Medium must cap at 20, not unlimited"
     );
 }
 
