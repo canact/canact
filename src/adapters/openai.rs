@@ -19,6 +19,7 @@ use crate::error::ProbeError;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
 /// OpenAI-compatible chat completions client (Ollama / vLLM / LM Studio / cloud).
 #[derive(Clone)]
@@ -256,8 +257,29 @@ async fn ensure_success(resp: reqwest::Response) -> Result<reqwest::Response, Pr
     }
     let retry_after = parse_retry_after(resp.headers());
     let code = status.as_u16();
-    let body = resp.text().await.unwrap_or_default();
+    let body = read_capped_text(resp, MAX_ERROR_BODY_BYTES).await;
     Err(map_status(code, retry_after, &body))
+}
+
+async fn read_capped_text(resp: reqwest::Response, max: usize) -> String {
+    use futures::StreamExt;
+    let mut buf = Vec::new();
+    let mut bytes = resp.bytes_stream();
+    while let Some(item) = bytes.next().await {
+        let Ok(chunk) = item else {
+            break;
+        };
+        let room = max.saturating_sub(buf.len());
+        if room == 0 {
+            break;
+        }
+        if chunk.len() > room {
+            buf.extend_from_slice(&chunk[..room]);
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
@@ -822,12 +844,8 @@ fn emit_delta(
         .or_else(|| choice.get("message"))
         .unwrap_or(&Value::Null);
 
-    if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
-        if !text.is_empty() {
-            let _ = tx.unbounded_send(Ok(ProbeStreamChunk::TextDelta {
-                text: text.to_owned(),
-            }));
-        }
+    if let Some(text) = content_text(delta.get("content")) {
+        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::TextDelta { text }));
     }
 
     let tool_calls = delta.get("tool_calls").and_then(|t| t.as_array());
@@ -843,19 +861,70 @@ fn emit_delta(
 
     if let Some(tcs) = tool_calls {
         for tc in tcs {
-            let id = tc.get("id").and_then(|v| v.as_str());
-            let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+            let id = json_id(tc.get("id"));
+            let index = json_u64(tc.get("index")).unwrap_or(0);
             let func = tc.get("function").unwrap_or(&Value::Null);
-            emit_function(func, id, index, open_tools, tx, false);
+            emit_function(func, id.as_deref(), index, open_tools, tx, false);
         }
     }
 
-    if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+    if let Some(reason) = choice
+        .get("finish_reason")
+        .and_then(|v| v.as_str())
+        .or_else(|| delta.get("finish_reason").and_then(|v| v.as_str()))
+    {
         end_open_tools(open_tools, tx);
         let _ = tx.unbounded_send(Ok(ProbeStreamChunk::Finished {
             finish: finish_from_reason(reason),
         }));
     }
+}
+
+fn json_u64(v: Option<&Value>) -> Option<u64> {
+    let v = v?;
+    v.as_u64()
+        .or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
+        .or_else(|| v.as_str()?.trim().parse().ok())
+}
+
+fn json_id(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    if let Some(s) = v.as_str() {
+        let t = s.trim();
+        if t.is_empty() {
+            return None;
+        }
+        return Some(t.to_owned());
+    }
+    if let Some(n) = v.as_u64() {
+        return Some(n.to_string());
+    }
+    if let Some(n) = v.as_i64() {
+        return Some(n.to_string());
+    }
+    None
+}
+
+fn content_text(content: Option<&Value>) -> Option<String> {
+    let content = content?;
+    if let Some(s) = content.as_str() {
+        if s.is_empty() {
+            return None;
+        }
+        return Some(s.to_owned());
+    }
+    let arr = content.as_array()?;
+    let mut out = String::new();
+    for part in arr {
+        if let Some(s) = part.as_str() {
+            out.push_str(s);
+            continue;
+        }
+        if let Some(s) = part.get("text").and_then(|t| t.as_str()) {
+            out.push_str(s);
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn finish_from_reason(reason: &str) -> ProbeFinish {
@@ -1822,6 +1891,128 @@ mod tests {
         assert_eq!(
             text, "café!",
             "UTF-8 split across HTTP chunks corrupted the text: {chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_string_index_keeps_parallel_tools() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":\"0\",\"id\":\"c0\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"p\\\":\\\"a\\\"}\"}},{\"index\":\"1\",\"id\":\"c1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"p\\\":\\\"b\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        let starts: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::ToolCallStart { id, name } => Some((id.as_str(), name.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            starts,
+            vec![("c0", "read_file"), ("c1", "write_file")],
+            "string tool_calls index must not collapse both tools onto 0: {chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_numeric_tool_id_is_kept() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":42,\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::ToolCallStart { id, name }
+                    if id == "42" && name == "read_file"
+            )),
+            "numeric tool id must surface as a string: {chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_array_content_emits_text() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        let text: String = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "hello", "{chunks:?}");
+    }
+
+    #[tokio::test]
+    async fn stream_finish_reason_on_delta_emits_finished() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"x\",\"finish_reason\":\"length\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::Finished {
+                    finish: ProbeFinish::Length
+                }
+            )),
+            "finish_reason on delta must emit Finished: {chunks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_body_is_capped() {
+        let huge = "x".repeat(200 * 1024);
+        let base = spawn_http(
+            500,
+            "Internal Server Error",
+            vec![("Content-Type".into(), "text/plain".into())],
+            huge.into_bytes(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("500");
+        let text = err.to_string();
+        assert!(
+            text.len() < 80 * 1024,
+            "error body must be capped, got {} bytes",
+            text.len()
         );
     }
 
