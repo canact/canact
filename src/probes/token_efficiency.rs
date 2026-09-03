@@ -32,6 +32,8 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
         max_tokens: Some(256),
     };
 
+    // Length on this probe is the measurement: 256 tokens for "What is 2+2?"
+    // is verbose. Do not call refuse_truncated_incomplete here.
     let response = llm.chat(request).await?;
     let empty_text = response.text.trim().is_empty();
 

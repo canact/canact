@@ -24,6 +24,7 @@ use super::{
 /// - `0.6` - 3 calls
 /// - `0.4` - 2 calls
 /// - `0.2` - 1 call
+/// - `0.1` - named `read_file` but no usable path
 /// - `0.0` - no tool calls
 pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let read_file = tool(
@@ -76,7 +77,7 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
         3 => 0.6,
         2 => 0.4,
         1 => 0.2,
-        _ if named_read_file => 0.5,
+        _ if named_read_file => 0.1,
         _ => 0.0,
     };
 
@@ -147,7 +148,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn medium_for_named_reads_with_numeric_paths() {
+    async fn weak_for_named_reads_with_numeric_paths() {
         let response = multi_tool_call_response(vec![
             ProbeToolCall {
                 id: "1".into(),
@@ -162,8 +163,8 @@ mod tests {
         ]);
         let llm = MockLlm { response };
         let result = probe_parallel_tool_scale(&llm).await.unwrap();
-        assert_eq!(result.level, CapabilityLevel::Medium);
-        assert_eq!(result.score, 0.5);
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.1);
     }
 
     #[tokio::test]
@@ -178,8 +179,8 @@ mod tests {
         let llm = MockLlm { response };
         let result = probe_parallel_tool_scale(&llm).await.unwrap();
         assert_ne!(result.level, CapabilityLevel::Strong);
-        assert_eq!(result.score, 0.5);
-        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.1);
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
@@ -192,6 +193,28 @@ mod tests {
         assert_eq!(result.score, 0.0);
         assert!(result.details.contains("no tool calls"));
         assert!(!result.details.contains('['));
+    }
+
+    #[tokio::test]
+    async fn one_good_call_outranks_blank_path() {
+        let good = MockLlm {
+            response: multi_tool_call_response(vec![read_file_call("1", "src/main.rs")]),
+        };
+        let blank = MockLlm {
+            response: multi_tool_call_response(vec![read_file_call("1", "")]),
+        };
+        let g = probe_parallel_tool_scale(&good).await.unwrap();
+        let b = probe_parallel_tool_scale(&blank).await.unwrap();
+        assert!(
+            g.score > b.score,
+            "valid path must outrank blank path: good={} blank={}",
+            g.score,
+            b.score
+        );
+        assert_eq!(g.score, 0.2);
+        assert_eq!(b.score, 0.1);
+        assert_eq!(g.level, CapabilityLevel::Weak);
+        assert_eq!(b.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]

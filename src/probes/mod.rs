@@ -559,3 +559,84 @@ mod refuse_truncated_tests {
         assert!(refuse_truncated_incomplete(ProbeFinish::Stop, 0.5).is_ok());
     }
 }
+
+#[cfg(test)]
+mod length_policy_tests {
+    use super::test_support::{MockLlm, length_text_response};
+    use super::*;
+    use crate::error::ProbeError;
+    use crate::types::ProbeResult;
+
+    async fn run(name: &str) -> Result<ProbeResult, ProbeError> {
+        let llm = MockLlm {
+            response: length_text_response("partial"),
+        };
+        match name {
+            "code_syntax" => probe_code_syntax(&llm).await,
+            "context_faithfulness" => probe_context_faithfulness(&llm).await,
+            "json_output" => probe_json_output(&llm).await,
+            "instruction_following" => probe_instruction_following(&llm).await,
+            "search_replace" => probe_search_replace(&llm).await,
+            "unified_diff" => probe_unified_diff(&llm).await,
+            "max_tokens_compliance" => probe_max_tokens_compliance(&llm).await,
+            "multi_turn_memory" => probe_multi_turn_memory(&llm).await,
+            "multi_turn_task_sequencing" => probe_multi_turn_task_sequencing(&llm).await,
+            "one_shot_tool_plan" => probe_one_shot_tool_plan(&llm).await,
+            "parallel_tool_scale" => probe_parallel_tool_scale(&llm).await,
+            "system_message_adherence" => probe_system_message_adherence(&llm).await,
+            "token_efficiency" => probe_token_efficiency(&llm).await,
+            "complex_tool_calling" => probe_complex_tool_calling(&llm).await,
+            "nested_arguments" => probe_nested_arguments(&llm).await,
+            "tool_calling" => probe_tool_calling(&llm).await,
+            "tool_selection" => probe_tool_selection(&llm).await,
+            "vision" => probe_vision(&llm).await,
+            "xml_tool_calling" => probe_xml_tool_calling(&llm).await,
+            other => panic!("unknown probe {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn length_partial_is_refused_or_allowlisted() {
+        const ALLOW: &[&str] = &["max_tokens_compliance", "token_efficiency"];
+        const PROBES: &[&str] = &[
+            "code_syntax",
+            "context_faithfulness",
+            "json_output",
+            "instruction_following",
+            "search_replace",
+            "unified_diff",
+            "max_tokens_compliance",
+            "multi_turn_memory",
+            "multi_turn_task_sequencing",
+            "one_shot_tool_plan",
+            "parallel_tool_scale",
+            "system_message_adherence",
+            "token_efficiency",
+            "complex_tool_calling",
+            "nested_arguments",
+            "tool_calling",
+            "tool_selection",
+            "vision",
+            "xml_tool_calling",
+        ];
+        for name in PROBES {
+            match run(name).await {
+                Ok(pr) => {
+                    assert!(
+                        ALLOW.contains(name),
+                        "{name} scored {} on Length partial; must refuse or be allow-listed",
+                        pr.score
+                    );
+                }
+                Err(ProbeError::Transient(msg)) => {
+                    assert!(msg.contains("truncated"), "{name}: {msg}");
+                    assert!(
+                        !ALLOW.contains(name),
+                        "{name} is allow-listed but refused: {msg}"
+                    );
+                }
+                Err(other) => panic!("{name}: unexpected error {other:?}"),
+            }
+        }
+    }
+}

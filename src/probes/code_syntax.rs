@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::user_text;
+use super::{refuse_truncated_incomplete, user_text};
 
 /// Probe whether the model produces syntactically valid code.
 ///
@@ -41,6 +41,7 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let trimmed = code.trim();
 
     if trimmed.is_empty() {
+        refuse_truncated_incomplete(response.finish, 0.0)?;
         return Ok(ProbeResult {
             name: "code_syntax".to_string(),
             score: 0.0,
@@ -90,6 +91,7 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
         )
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "code_syntax".to_string(),
         score,
@@ -115,6 +117,7 @@ fn count_char(s: &str, c: char) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ProbeError;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
 
@@ -164,6 +167,45 @@ def merge_sorted(a, b):
         let result = probe_code_syntax(&llm).await.unwrap();
         assert_eq!(result.score, 0.0);
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn length_empty_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(""),
+        };
+        let err = probe_code_syntax(&llm).await.expect_err("must refuse");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn length_incomplete_function_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response("def merge_sorted(a, b):\n    result = ["),
+        };
+        let err = probe_code_syntax(&llm).await.expect_err("must refuse");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn length_complete_function_stays_strong() {
+        let code = "\
+```python
+def merge_sorted(a, b):
+    return a + b
+```";
+        let llm = MockLlm {
+            response: length_text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
