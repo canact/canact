@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    CapabilityProfile, CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRun, ProbeRunner, list_model_ids, missing_model_message,
+    CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
+    ProbeError, ProbeRun, ProbeRunner, list_model_ids, missing_model_message, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -20,6 +20,10 @@ struct Cli {
 enum Command {
     /// Probe a model and print host-policy results
     Probe(ProbeArgs),
+    /// Write Aider or Cline overlay files from a cached probe
+    Export(ExportArgs),
+    /// Serve MCP stdio (`probe_model` returns host-policy JSON, not TTFT)
+    Mcp,
 }
 
 #[derive(clap::Args)]
@@ -77,18 +81,59 @@ struct ProbeArgs {
     advertised_context: Option<u32>,
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+#[derive(clap::Args)]
+struct ExportArgs {
+    /// Write `.aider.model.settings.yml` and `.aider.model.metadata.json`
+    #[arg(long, conflicts_with = "cline")]
+    aider: bool,
+
+    /// Write `cline.modelinfo.json`
+    #[arg(long)]
+    cline: bool,
+
+    /// Model id stored in the probe cache
+    #[arg(long)]
+    model: String,
+
+    /// Provider name stored in the probe cache
+    #[arg(long)]
+    provider: String,
+
+    /// Probe cache file [default: platform cache dir / canact / probes.json]
+    #[arg(long)]
+    cache: Option<PathBuf>,
+
+    /// Directory to write overlay files (also prints the primary file)
+    #[arg(long)]
+    dir: Option<PathBuf>,
+
+    /// Catalog advertised context used for min(advertised, measured)
+    #[arg(long, value_name = "N")]
+    advertised_context: Option<u32>,
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         None => {
             println!("Not ready.");
             ExitCode::SUCCESS
         }
-        Some(Command::Probe(args)) => match run_probe(args).await {
+        Some(Command::Probe(args)) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime");
+            match rt.block_on(run_probe(args)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(code) => ExitCode::from(code),
+            }
+        }
+        Some(Command::Export(args)) => match run_export(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
+        Some(Command::Mcp) => ExitCode::from(run_mcp_stdio()),
     }
 }
 
@@ -182,6 +227,51 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     }
 
     emit_run(&run, args.json, args.verbose)
+}
+
+fn run_export(args: ExportArgs) -> Result<(), u8> {
+    if !args.aider && !args.cline {
+        eprintln!("error: specify --aider or --cline");
+        return Err(1);
+    }
+    let cache_path = args.cache.clone().unwrap_or_else(default_cache_path);
+    let cache = ProbeCache::load(&cache_path).map_err(|e| {
+        eprintln!("error: failed to load cache {}: {e}", cache_path.display());
+        1u8
+    })?;
+    let profile = cache
+        .find_profile(&args.model, &args.provider)
+        .cloned()
+        .ok_or_else(|| {
+            eprintln!(
+                "error: no cached probe for {} / {} (run `canact probe` first)",
+                args.model, args.provider
+            );
+            1u8
+        })?;
+    let overlay = if args.aider {
+        HostOverlay::aider(&profile, args.advertised_context)
+    } else {
+        HostOverlay::cline(&profile, args.advertised_context)
+    };
+    let files = overlay.files();
+    if let Some(dir) = args.dir.as_deref() {
+        match overlay.write_to(dir) {
+            Ok(paths) => {
+                for path in paths {
+                    eprintln!("wrote {}", path.display());
+                }
+            }
+            Err(err) => {
+                eprintln!("error: failed to write overlays: {err}");
+                return Err(1);
+            }
+        }
+    }
+    if let Some(first) = files.first() {
+        print!("{}", first.body);
+    }
+    Ok(())
 }
 
 fn emit_run(run: &ProbeRun, json: bool, verbose: bool) -> Result<(), u8> {

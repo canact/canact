@@ -39,6 +39,25 @@ fn root_no_args_prints_not_ready() {
 fn root_help_mentions_probe() {
     let help = stdout_of(&["--help"]);
     assert!(help.contains("probe"), "{help}");
+    assert!(help.contains("export"), "{help}");
+    assert!(help.contains("mcp"), "{help}");
+}
+
+#[test]
+fn export_help_lists_aider_and_cline() {
+    let help = stdout_of(&["export", "--help"]);
+    assert!(help.contains("--aider"), "{help}");
+    assert!(help.contains("--cline"), "{help}");
+    assert!(help.contains("--dir"), "{help}");
+}
+
+#[test]
+fn mcp_help_mentions_probe_model() {
+    let help = stdout_of(&["mcp", "--help"]);
+    assert!(
+        help.contains("probe_model") || help.contains("host-policy"),
+        "{help}"
+    );
 }
 
 #[test]

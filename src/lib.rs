@@ -2,6 +2,7 @@
 
 mod cache;
 mod error;
+mod export;
 mod report;
 mod types;
 
@@ -10,6 +11,10 @@ pub use cache::{
     PROBE_SUITE_VERSION, ProbeCache,
 };
 pub use error::ProbeError;
+pub use export::{
+    AiderMetadataEntry, AiderOverlay, AiderSettingsRow, ClineModelInfo, HostOverlay, OverlayFiles,
+    aider_edit_format, overlay_context_tokens, overlay_model_name,
+};
 pub use report::missing_model_message;
 pub use types::{
     CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
@@ -36,6 +41,11 @@ pub use runner::{FREE_CONCURRENCY, PAID_CONCURRENCY, ProbeRun, ProbeRunner, reso
 mod adapters;
 #[cfg(all(feature = "runtime", feature = "openai"))]
 pub use adapters::openai::{OpenAiCompatClient, list_model_ids};
+
+#[cfg(feature = "cli")]
+mod mcp;
+#[cfg(feature = "cli")]
+pub use mcp::run_mcp_stdio;
 
 #[cfg(test)]
 mod tests {
