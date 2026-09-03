@@ -10,8 +10,8 @@ use crate::client::{ProbeClient, ProbeFinish, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    assistant_tool_calls, nonempty_string_arg, refuse_truncated_incomplete,
-    refuse_truncated_tool_call, tool, tool_result, user_text,
+    assistant_tool_calls, nonempty_string_arg, nonempty_string_arg_any,
+    refuse_truncated_incomplete, refuse_truncated_tool_call, tool, tool_result, user_text,
 };
 
 fn tool_specs() -> Vec<crate::client::ProbeTool> {
@@ -76,8 +76,8 @@ fn is_precise_read(c: &ProbeToolCall) -> bool {
 fn is_precise_edit(c: &ProbeToolCall) -> bool {
     c.name == "edit_file"
         && nonempty_string_arg(&c.arguments, "path")
-        && nonempty_string_arg(&c.arguments, "old_string")
-        && nonempty_string_arg(&c.arguments, "new_string")
+        && nonempty_string_arg_any(&c.arguments, &["old_string", "old_text"])
+        && nonempty_string_arg_any(&c.arguments, &["new_string", "new_text"])
 }
 
 fn is_precise_run(c: &ProbeToolCall) -> bool {

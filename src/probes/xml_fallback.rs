@@ -330,7 +330,7 @@ fn parse_xml_tool_block(text: &str) -> Option<(String, serde_json::Value)> {
             extract_xml_element_simple(block, "name"),
             extract_xml_element_simple(block, "arguments"),
         ) {
-            if let Ok(args) = serde_json::from_str::<serde_json::Value>(args_str.trim()) {
+            if let Some(args) = parse_xml_arguments(args_str) {
                 let parsed = (name.trim().to_string(), args);
                 if first.is_none() {
                     first = Some(parsed.clone());
@@ -350,6 +350,27 @@ fn parse_xml_tool_block(text: &str) -> Option<(String, serde_json::Value)> {
         search = start + end + "</tool_call>".len();
     }
     best_real.or(first)
+}
+
+fn parse_xml_arguments(args_str: &str) -> Option<serde_json::Value> {
+    let trimmed = args_str.trim();
+    if let Ok(args) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Some(args);
+    }
+    let mut obj = serde_json::Map::new();
+    for key in ["path", "file_path"] {
+        if let Some(val) = extract_xml_element_simple(trimmed, key) {
+            let t = val.trim();
+            if !t.is_empty() {
+                obj.insert(key.to_string(), serde_json::Value::String(t.to_string()));
+            }
+        }
+    }
+    if obj.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(obj))
+    }
 }
 
 /// Extract the text content of a simple XML element like `<tag>content</tag>`.
@@ -395,6 +416,26 @@ mod tests {
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn xml_nested_path_element_is_strong() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>
+<path>/tmp/example.txt</path>
+</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "XML path child must count as arguments: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

@@ -230,6 +230,18 @@ fn json_length_u64(v: &serde_json::Value) -> Option<u64> {
     if let Some(n) = v.as_u64() {
         return Some(n);
     }
+    if let Some(s) = v.as_str() {
+        let t = s.trim();
+        if let Ok(n) = t.parse::<u64>() {
+            return Some(n);
+        }
+        if let Ok(n) = t.parse::<f64>() {
+            if n.is_finite() && n >= 0.0 && n.fract() == 0.0 {
+                return Some(n as u64);
+            }
+        }
+        return None;
+    }
     let n = v.as_f64()?;
     if n.is_finite() && n >= 0.0 && n.fract() == 0.0 {
         Some(n as u64)
@@ -367,6 +379,19 @@ mod tests {
         let result = probe_json_output(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn json_output_strong_for_string_length() {
+        let llm = MockLlm {
+            response: text_response(r#"{"word":"hello","length":"5","reversed":"olleh"}"#),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "quoted length 5 must count as 5: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
