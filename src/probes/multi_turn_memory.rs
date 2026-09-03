@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{assistant_text, user_text};
+use super::{assistant_text, refuse_truncated_incomplete, user_text};
 
 /// Probe whether the model retains facts across a 3-turn conversation.
 ///
@@ -78,6 +78,7 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
         (0.0, "No recall of the secret code".to_string())
     };
 
+    refuse_truncated_incomplete(recall_resp.finish, score)?;
     Ok(ProbeResult {
         name: "multi_turn_memory".to_string(),
         score,
@@ -90,6 +91,7 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ProbeError;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
 
@@ -110,6 +112,32 @@ mod tests {
         let result = probe_multi_turn_memory(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn length_no_recall_is_transient() {
+        let llm = SequentialMock::new(vec![
+            text_response("Au"),
+            length_text_response("Let me recall what you told me earlier"),
+        ]);
+        let err = probe_multi_turn_memory(&llm)
+            .await
+            .expect_err("must refuse");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn length_full_recall_stays_strong() {
+        let llm = SequentialMock::new(vec![
+            text_response("Au"),
+            length_text_response("The secret code is ZEPHYR-4829."),
+        ]);
+        let result = probe_multi_turn_memory(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert_eq!(result.score, 1.0);
     }
 
     #[tokio::test]

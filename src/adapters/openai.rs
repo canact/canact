@@ -94,26 +94,20 @@ impl OpenAiCompatClient {
 
         use futures::StreamExt;
         let mut bytes = resp.bytes_stream();
-        let mut rest = String::new();
+        let mut buf: Vec<u8> = Vec::new();
         let mut open_tools: HashMap<u64, OpenTool> = HashMap::new();
         while let Some(item) = bytes.next().await {
-            let chunk = item.map_err(map_transport)?;
-            rest.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(idx) = rest.find('\n') {
-                let mut line = rest[..idx].to_string();
-                rest = rest[idx + 1..].to_string();
-                if line.ends_with('\r') {
-                    line.pop();
-                }
+            buf.extend_from_slice(&item.map_err(map_transport)?);
+            for line in drain_complete_sse_lines(&mut buf) {
                 if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
                     let _ = tx.unbounded_send(Err(err));
                     return Ok(());
                 }
             }
         }
-        if !rest.is_empty() {
-            let line = rest.trim_end_matches('\r');
-            if let Err(err) = emit_sse_line(line, &mut open_tools, tx) {
+        if !buf.is_empty() {
+            let line = take_sse_tail(&buf);
+            if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
                 let _ = tx.unbounded_send(Err(err));
                 return Ok(());
             }
@@ -706,6 +700,27 @@ struct OpenTool {
     pending_args: Vec<String>,
 }
 
+/// Split complete newline-terminated SSE lines out of `buf`.
+/// Incomplete UTF-8 at the end stays in `buf` for the next HTTP chunk.
+fn drain_complete_sse_lines(buf: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Some(idx) = buf.iter().position(|&b| b == b'\n') {
+        let mut line = String::from_utf8_lossy(&buf[..idx]).into_owned();
+        buf.drain(..=idx);
+        if line.ends_with('\r') {
+            line.pop();
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+fn take_sse_tail(buf: &[u8]) -> String {
+    String::from_utf8_lossy(buf)
+        .trim_end_matches('\r')
+        .to_owned()
+}
+
 fn emit_sse_line(
     line: &str,
     open_tools: &mut HashMap<u64, OpenTool>,
@@ -943,6 +958,43 @@ mod tests {
                 head.push_str("\r\n");
                 let _ = stream.write_all(head.as_bytes());
                 let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn spawn_http_chunked_split(
+        status: u16,
+        reason: &'static str,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        split_at: usize,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = read_http(&mut stream);
+                let split_at = split_at.min(body.len());
+                let first = &body[..split_at];
+                let second = &body[split_at..];
+                let mut head = format!(
+                    "HTTP/1.1 {status} {reason}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n"
+                );
+                for (k, v) in &headers {
+                    head.push_str(&format!("{k}: {v}\r\n"));
+                }
+                head.push_str("\r\n");
+                let _ = stream.write_all(head.as_bytes());
+                let _ = write!(stream, "{:X}\r\n", first.len());
+                let _ = stream.write_all(first);
+                let _ = stream.write_all(b"\r\n");
+                let _ = stream.flush();
+                thread::sleep(Duration::from_millis(150));
+                let _ = write!(stream, "{:X}\r\n", second.len());
+                let _ = stream.write_all(second);
+                let _ = stream.write_all(b"\r\n0\r\n\r\n");
                 let _ = stream.flush();
             }
         });
@@ -1653,6 +1705,46 @@ mod tests {
             .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
             .count();
         assert_eq!(ends, 2, "{chunks:?}");
+    }
+
+    #[test]
+    fn drain_complete_sse_lines_holds_split_utf8_until_newline() {
+        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"café!\"}}]}\n";
+        let split_at = payload.find('é').expect("é") + 1;
+        let bytes = payload.as_bytes();
+        let mut buf = bytes[..split_at].to_vec();
+        assert!(drain_complete_sse_lines(&mut buf).is_empty());
+        buf.extend_from_slice(&bytes[split_at..]);
+        let lines = drain_complete_sse_lines(&mut buf);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("café!"), "{lines:?}");
+        assert!(buf.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stream_utf8_split_across_http_chunks_preserves_text() {
+        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"café!\"}}]}\n\n";
+        let split_at = payload.find('é').expect("é") + 1;
+        let base = spawn_http_chunked_split(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            payload.as_bytes().to_vec(),
+            split_at,
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        let text: String = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            text, "café!",
+            "UTF-8 split across HTTP chunks corrupted the text: {chunks:?}"
+        );
     }
 
     #[tokio::test]

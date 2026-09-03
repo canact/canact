@@ -165,7 +165,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v71: Length on JSON / edit / vision / instruction / context ladder
 ///      is truncated, not a 30-day host-policy card.
 /// v72: instruction_following Strong requires the asked capital.
-pub const PROBE_SUITE_VERSION: u32 = 72;
+/// v73: blank-path parallel reads no longer outrank valid paths;
+///      Length on code/faithfulness/memory/system is uncacheable;
+///      SSE buffers bytes so split UTF-8 is not corrupted.
+pub const PROBE_SUITE_VERSION: u32 = 73;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

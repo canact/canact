@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{system_text, user_text};
+use super::{refuse_truncated_incomplete, system_text, user_text};
 
 /// Probe system-over-user priority with a format prefix.
 ///
@@ -100,6 +100,7 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
         )
     };
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "system_message_adherence".to_string(),
         score,
@@ -112,6 +113,7 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ProbeError;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
 
@@ -133,6 +135,30 @@ mod tests {
         let result = probe_system_message_adherence(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert!((result.score - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn length_cut_explanation_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response("First I add 2 and"),
+        };
+        let err = probe_system_message_adherence(&llm)
+            .await
+            .expect_err("must refuse");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn length_prefix_and_integer_stays_strong() {
+        let llm = MockLlm {
+            response: length_text_response("STATUS:ok 5"),
+        };
+        let result = probe_system_message_adherence(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert!((result.score - 1.0).abs() < f32::EPSILON);
     }
 
     #[tokio::test]

@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{system_text, user_text};
+use super::{refuse_truncated_incomplete, system_text, user_text};
 
 /// Filler text to pad the context. Each block is ~200 tokens.
 const FILLER_BLOCK: &str = "\
@@ -80,6 +80,7 @@ pub async fn probe_context_faithfulness<C: ProbeClient>(
         "{correct}/3 facts recalled: port={has_port}, version={has_version}, timeout={has_timeout}"
     );
 
+    refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
         name: "context_faithfulness".to_string(),
         score,
@@ -110,8 +111,33 @@ fn recalls_timeout(lower: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ProbeError;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn length_partial_facts_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response("9847\n"),
+        };
+        let err = probe_context_faithfulness(&llm)
+            .await
+            .expect_err("must refuse");
+        assert!(
+            matches!(&err, ProbeError::Transient(msg) if msg.contains("truncated")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn length_all_facts_stays_strong() {
+        let llm = MockLlm {
+            response: length_text_response("9847\nv3.7.42-rc1\n1750"),
+        };
+        let result = probe_context_faithfulness(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
 
     #[tokio::test]
     async fn context_strong_for_all_facts() {
