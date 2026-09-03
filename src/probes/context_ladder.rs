@@ -148,6 +148,9 @@ fn recalls_heartbeat(lower: &str) -> bool {
         .filter(|c| !c.is_whitespace() && *c != ',')
         .collect();
     compact.contains(FACT_HEARTBEAT)
+        || compact.contains("2.84s")
+        || compact.contains("2.84sec")
+        || (lower.contains("2.84") && (lower.contains("second") || lower.contains("heartbeat")))
 }
 
 fn estimate_tokens(chars: usize) -> u32 {
@@ -320,6 +323,8 @@ mod tests {
     fn recalls_heartbeat_accepts_comma_form() {
         let ok = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2,840 ms");
         assert!(recalls_all_facts(&ok));
+        let seconds = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2.84 seconds");
+        assert!(recalls_all_facts(&seconds));
         let miss = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2000");
         assert!(!recalls_all_facts(&miss));
     }

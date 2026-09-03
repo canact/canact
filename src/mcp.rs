@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError, ProbeRunner,
-    cloud_endpoint_requires_key, default_compat_base_url,
+    cloud_endpoint_requires_key, default_compat_base_url, looks_cheap,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -130,9 +130,10 @@ fn handle_tools_call(params: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     let envelope = rt.block_on(probe_model_args(&args))?;
     let text = serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())?;
+    let is_error = envelope.get("canUseTools").and_then(Value::as_bool) == Some(false);
     Ok(json!({
         "content": [{ "type": "text", "text": text }],
-        "isError": false
+        "isError": is_error
     }))
 }
 
@@ -149,21 +150,26 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or("openai-compat")
         .to_owned();
-    let advertised = args
-        .get("advertised_context")
-        .and_then(Value::as_u64)
-        .map(|n| n as u32);
-    let cheap = args.get("cheap").and_then(Value::as_bool).unwrap_or(false);
-    let full = args.get("full").and_then(Value::as_bool).unwrap_or(false);
-    let vision = args.get("vision").and_then(Value::as_bool).unwrap_or(false);
-    let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
-    let skip_expensive = if full { false } else { cheap };
+    let advertised = json_u32(args.get("advertised_context"));
+    let cheap = json_bool(args.get("cheap")).unwrap_or(false);
+    let full = json_bool(args.get("full")).unwrap_or(false);
+    let vision = json_bool(args.get("vision")).unwrap_or(false);
+    let force = json_bool(args.get("force")).unwrap_or(false);
+    let skip_expensive = if full {
+        false
+    } else if cheap {
+        true
+    } else {
+        looks_cheap(&provider, &model, "")
+    };
     let cache_path = args
         .get("cache")
         .and_then(Value::as_str)
         .map(PathBuf::from)
+        .map(expand_tilde)
         .unwrap_or_else(default_cache_path);
-    let mut cache = ProbeCache::load(&cache_path).unwrap_or_default();
+    let mut cache = ProbeCache::load(&cache_path)
+        .map_err(|e| format!("failed to load cache {}: {e}", cache_path.display()))?;
 
     if !force {
         if let Some(profile) = cache
@@ -245,6 +251,32 @@ fn default_cache_path() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
         .join("canact")
         .join("probes.json")
+}
+
+fn expand_tilde(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if raw == "~" {
+        return dirs::home_dir().unwrap_or(path);
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    path
+}
+
+fn json_bool(v: Option<&Value>) -> Option<bool> {
+    let v = v?;
+    v.as_bool()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+}
+
+fn json_u32(v: Option<&Value>) -> Option<u32> {
+    let v = v?;
+    v.as_u64()
+        .map(|n| n as u32)
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
 fn error_response(id: Value, message: String) -> Value {

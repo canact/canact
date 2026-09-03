@@ -61,7 +61,12 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
 
     let has_ellipsis = trimmed.lines().any(|l| {
         let t = l.trim().trim_start_matches('#').trim();
-        t == "..." || t == "...."
+        t == "..."
+            || t == "...."
+            || t == "return ..."
+            || t == "return..."
+            || t.starts_with("return ...")
+            || t.starts_with("return...")
     });
     let has_pass_only = trimmed.lines().any(|l| l.trim() == "pass")
         && !trimmed.contains("return")
@@ -105,12 +110,28 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
 }
 
 fn extract_code_block(text: &str) -> Option<&str> {
-    let start_marker = text.find("```")?;
-    let after_marker = &text[start_marker + 3..];
-    let code_start = after_marker.find('\n')? + 1;
-    let code_body = &after_marker[code_start..];
-    let end = code_body.find("```")?;
-    Some(&code_body[..end])
+    let mut search = 0;
+    let mut first = None;
+    while let Some(rel) = text.get(search..).and_then(|s| s.find("```")) {
+        let start_marker = search + rel;
+        let after_marker = start_marker + 3;
+        let Some(nl) = text.get(after_marker..).and_then(|s| s.find('\n')) else {
+            break;
+        };
+        let code_start = after_marker + nl + 1;
+        let Some(end_rel) = text.get(code_start..).and_then(|s| s.find("```")) else {
+            break;
+        };
+        let body = &text[code_start..code_start + end_rel];
+        if first.is_none() {
+            first = Some(body);
+        }
+        if body.contains("def merge_sorted") || body.contains("def merge") {
+            return Some(body);
+        }
+        search = code_start + end_rel + 3;
+    }
+    first
 }
 
 fn count_char(s: &str, c: char) -> usize {
@@ -162,6 +183,35 @@ def merge_sorted(a, b):
         };
         let result = probe_code_syntax(&llm).await.unwrap();
         assert_eq!(result.score, 1.0, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn code_syntax_prefers_merge_fence_after_note() {
+        let text = "\
+```
+two-pointer merge
+```
+
+```python
+def merge_sorted(a, b):
+    return a + b
+```
+";
+        let llm = MockLlm {
+            response: text_response(text),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn code_syntax_return_ellipsis_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    return ...\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong, "{result:?}");
     }
 
     #[tokio::test]

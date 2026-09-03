@@ -170,7 +170,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      SSE buffers bytes so split UTF-8 is not corrupted.
 /// v74: vision Strong requires no refusal; code_syntax ignores
 ///      docstring `...`; empty Length on max_tokens is Transient.
-pub const PROBE_SUITE_VERSION: u32 = 74;
+/// v75: memory refusals are Weak; code_syntax uses the merge fence;
+///      JSON length 5.0; XML/unified-diff pick a real edit over a card;
+///      fenced Paris; ladder 2.84s; Length-empty token_efficiency Transient.
+pub const PROBE_SUITE_VERSION: u32 = 75;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -220,6 +223,14 @@ impl ProbeCache {
         if !path.exists() {
             return Ok(Self::default());
         }
+        let len = std::fs::metadata(path)?.len();
+        if len > 8 * 1024 * 1024 {
+            return Err(ProbeError::Internal(format!(
+                "probe cache is too large ({} bytes): {}",
+                len,
+                path.display()
+            )));
+        }
         let contents = std::fs::read_to_string(path)?;
         let mut cache: Self = serde_json::from_str(&contents)?;
         if cache.migrate_stale_tool_scores() {
@@ -243,11 +254,22 @@ impl ProbeCache {
         let contents = serde_json::to_string_pretty(self)?;
         let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
         std::fs::write(&tmp, contents)?;
-        // Windows rename cannot replace an existing file.
+        // Windows rename cannot replace an existing file. Move the dest
+        // aside so a failed rename can restore it.
         #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)?;
+        {
+            let bak = path.with_extension("bak");
+            if path.exists() {
+                let _ = std::fs::remove_file(&bak);
+                std::fs::rename(path, &bak)?;
+            }
+            if let Err(err) = std::fs::rename(&tmp, path) {
+                let _ = std::fs::rename(&bak, path);
+                return Err(err.into());
+            }
+            let _ = std::fs::remove_file(&bak);
         }
+        #[cfg(not(windows))]
         std::fs::rename(&tmp, path)?;
         Ok(())
     }

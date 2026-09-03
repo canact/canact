@@ -66,8 +66,11 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
 
     let has_full = upper.contains("ZEPHYR-4829");
     let has_partial = upper.contains("ZEPHYR") || upper.contains("4829");
+    let refused = memory_refused(&recall_resp.text);
 
-    let (score, details) = if has_full {
+    let (score, details) = if refused {
+        (0.0, "Refused to recall the secret code".to_string())
+    } else if has_full {
         (1.0, "Full code recalled: ZEPHYR-4829".to_string())
     } else if has_partial {
         (
@@ -88,12 +91,39 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
     })
 }
 
+fn memory_refused(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("don't remember")
+        || lower.contains("do not remember")
+        || lower.contains("can't remember")
+        || lower.contains("cannot remember")
+        || lower.contains("don't recall")
+        || lower.contains("do not recall")
+        || lower.contains("can't recall")
+        || lower.contains("cannot recall")
+        || lower.contains("can't repeat")
+        || lower.contains("cannot repeat")
+        || lower.contains("won't repeat")
+        || lower.contains("will not repeat")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::ProbeError;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn refusal_that_quotes_code_is_weak() {
+        let llm = SequentialMock::new(vec![
+            text_response("Au"),
+            text_response("I don't remember a secret code ZEPHYR-4829"),
+        ]);
+        let result = probe_multi_turn_memory(&llm).await.unwrap();
+        assert_eq!(result.score, 0.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
 
     #[tokio::test]
     async fn strong_for_full_recall() {

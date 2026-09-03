@@ -423,7 +423,7 @@ pub fn is_unreachable_host(err: &ProbeError) -> bool {
     if msg.contains("timed out") || msg.contains("timeout") {
         return false;
     }
-    msg.contains("failed to connect")
+    msg.contains("failed to connect:")
         || msg.contains("connection refused")
         || msg.contains("connect error")
         || msg.contains("dns error")

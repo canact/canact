@@ -93,7 +93,9 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
 
     let echoed_question = lower.contains("what text or letters appear");
 
-    let (score, details) = if identified_text && !refused && !negated_glyphs {
+    // Strong is a read, not any "don't"/"cannot" hedge (font, typeface).
+    // See-denial still blocks Strong via negated_glyphs ("I don't see BL").
+    let (score, details) = if identified_text && !negated_glyphs {
         (1.0, "Can read text from images".to_string())
     } else if echoed_question {
         (0.0, "Did not use the image (generic reply)".to_string())
@@ -365,6 +367,16 @@ mod tests {
             );
             assert_eq!(result.score, 0.0, "body={body}");
         }
+    }
+
+    #[tokio::test]
+    async fn vision_hedged_bl_is_strong() {
+        let llm = MockLlm {
+            response: text_response("BL (I don't know the font)"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

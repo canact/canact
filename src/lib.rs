@@ -12,7 +12,7 @@ pub use cache::{
 };
 pub use endpoint::{
     LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, cloud_endpoint_requires_key,
-    default_compat_base_url, local_provider_base_url,
+    default_compat_base_url, local_provider_base_url, looks_cheap,
 };
 pub use error::ProbeError;
 pub use report::missing_model_message;
