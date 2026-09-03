@@ -300,16 +300,29 @@ impl ProbeCache {
         if let Some(profile) = self.get(model_id, provider) {
             return Some(profile);
         }
+        self.find_profile_with_cost(model_id, provider)
+            .map(|(profile, _)| profile)
+    }
+
+    /// Newest matching row and whether that row was stored as cheap.
+    pub fn find_profile_with_cost(
+        &self,
+        model_id: &str,
+        provider: &str,
+    ) -> Option<(&CapabilityProfile, bool)> {
+        if let Some(profile) = self.get(model_id, provider) {
+            return Some((profile, DEFAULT_SKIP_EXPENSIVE));
+        }
         self.profiles
-            .values()
-            .filter(|entry| {
+            .iter()
+            .filter(|(_, entry)| {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
                     && entry.profile.model_id == model_id
                     && entry.profile.provider == provider
             })
-            .max_by_key(|entry| entry.cached_at)
-            .map(|entry| &entry.profile)
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(key, entry)| (&entry.profile, key.split('|').nth(4) == Some("cheap")))
     }
 
     /// Get a cached profile for the current suite, default effort, and default knobs.

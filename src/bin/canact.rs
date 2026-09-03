@@ -166,24 +166,22 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             } else {
                 looks_cheap(&provider, model, &base_url)
             };
-            if let Some(profile) = cache
-                .get_with_knobs(model, &provider, cheap, vision, args.advertised_context)
-                .cloned()
-                .or_else(|| {
-                    if args.full {
-                        None
-                    } else {
-                        cache.find_profile(model, &provider).cloned()
-                    }
-                })
-            {
+            if let Some((profile, skip_expensive)) = cached_probe(
+                &cache,
+                model,
+                &provider,
+                cheap,
+                vision,
+                args.advertised_context,
+                args.full,
+            ) {
                 return emit_profile(
                     &profile,
                     args.json,
                     args.verbose,
                     HostPolicyMeta {
                         cacheable: true,
-                        skip_expensive: cheap,
+                        skip_expensive,
                         advertised_context_tokens: args.advertised_context,
                     },
                 );
@@ -206,24 +204,22 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         looks_cheap(&provider, &model, &base_url)
     };
     if !args.force {
-        if let Some(profile) = cache
-            .get_with_knobs(&model, &provider, cheap, vision, args.advertised_context)
-            .cloned()
-            .or_else(|| {
-                if args.full {
-                    None
-                } else {
-                    cache.find_profile(&model, &provider).cloned()
-                }
-            })
-        {
+        if let Some((profile, skip_expensive)) = cached_probe(
+            &cache,
+            &model,
+            &provider,
+            cheap,
+            vision,
+            args.advertised_context,
+            args.full,
+        ) {
             return emit_profile(
                 &profile,
                 args.json,
                 args.verbose,
                 HostPolicyMeta {
                     cacheable: true,
-                    skip_expensive: cheap,
+                    skip_expensive,
                     advertised_context_tokens: args.advertised_context,
                 },
             );
@@ -450,6 +446,27 @@ fn default_cache_path() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
         .join("canact")
         .join("probes.json")
+}
+
+fn cached_probe(
+    cache: &ProbeCache,
+    model: &str,
+    provider: &str,
+    skip_expensive: bool,
+    vision: bool,
+    advertised: Option<u32>,
+    full: bool,
+) -> Option<(CapabilityProfile, bool)> {
+    if let Some(profile) = cache.get_with_knobs(model, provider, skip_expensive, vision, advertised)
+    {
+        return Some((profile.clone(), skip_expensive));
+    }
+    if full {
+        return None;
+    }
+    cache
+        .find_profile_with_cost(model, provider)
+        .map(|(profile, cheap_row)| (profile.clone(), cheap_row))
 }
 
 fn expand_tilde(path: PathBuf) -> PathBuf {

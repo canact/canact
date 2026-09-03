@@ -55,8 +55,22 @@ impl HostOverlay {
         dir: &std::path::Path,
     ) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
         std::fs::create_dir_all(dir)?;
+        let files = self.files();
+        for file in &files {
+            let path = dir.join(file.name);
+            if path
+                .symlink_metadata()
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("refusing to write through symlink {}", path.display()),
+                ));
+            }
+        }
         let mut paths = Vec::new();
-        for file in self.files() {
+        for file in files {
             let path = dir.join(file.name);
             if path
                 .symlink_metadata()

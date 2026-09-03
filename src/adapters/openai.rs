@@ -18,6 +18,7 @@ use crate::error::ProbeError;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// OpenAI-compatible chat completions client (Ollama / vLLM / LM Studio / cloud).
 #[derive(Clone)]
@@ -97,7 +98,11 @@ impl OpenAiCompatClient {
         let mut buf: Vec<u8> = Vec::new();
         let mut open_tools: HashMap<u64, OpenTool> = HashMap::new();
         while let Some(item) = bytes.next().await {
-            buf.extend_from_slice(&item.map_err(map_transport)?);
+            let chunk = item.map_err(map_transport)?;
+            if buf.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(ProbeError::Transient("response too large".into()));
+            }
+            buf.extend_from_slice(&chunk);
             for line in drain_complete_sse_lines(&mut buf) {
                 if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
                     let _ = tx.unbounded_send(Err(err));
@@ -138,7 +143,11 @@ impl ProbeClient for OpenAiCompatClient {
                 .await
                 .map_err(map_transport)?;
             let resp = ensure_success(resp).await?;
-            let value: Value = resp.json().await.map_err(map_transport)?;
+            let raw = resp.bytes().await.map_err(map_transport)?;
+            if raw.len() > MAX_RESPONSE_BYTES {
+                return Err(ProbeError::Transient("response too large".into()));
+            }
+            let value: Value = serde_json::from_slice(&raw)?;
             if let Some(err) = value.get("error") {
                 return Err(ProbeError::Llm(error_message(err)));
             }
@@ -191,7 +200,11 @@ pub async fn list_model_ids(
         return Ok(Vec::new());
     }
     let resp = ensure_success(resp).await?;
-    let value: Value = resp.json().await.map_err(map_transport)?;
+    let raw = resp.bytes().await.map_err(map_transport)?;
+    if raw.len() > MAX_RESPONSE_BYTES {
+        return Err(ProbeError::Transient("response too large".into()));
+    }
+    let value: Value = serde_json::from_slice(&raw)?;
     if let Some(err) = value.get("error") {
         return Err(ProbeError::Llm(error_message(err)));
     }
@@ -325,6 +338,16 @@ fn redact_secrets(input: &str) -> String {
         if input[i..].starts_with("sk-") {
             out.push_str("sk-[REDACTED]");
             i = skip_secret_key(input, i + 3);
+            continue;
+        }
+        if input[i..].starts_with("gsk_") {
+            out.push_str("gsk_[REDACTED]");
+            i = skip_secret_key(input, i + 4);
+            continue;
+        }
+        if input[i..].starts_with("ghp_") {
+            out.push_str("ghp_[REDACTED]");
+            i = skip_secret_key(input, i + 4);
             continue;
         }
         let ch = input[i..].chars().next().expect("i is a char boundary");
@@ -1122,6 +1145,9 @@ mod tests {
         assert!(!redacted.contains("live-secret"), "{redacted}");
         assert!(redacted.contains("Authorization"), "{redacted}");
         assert!(redacted.contains("Bearer [REDACTED]"), "{redacted}");
+        let groq = redact_secrets("Invalid API key: gsk_live_secret");
+        assert!(!groq.contains("gsk_live_secret"), "{groq}");
+        assert!(groq.contains("gsk_[REDACTED]"), "{groq}");
         assert!(redacted.contains("sk-[REDACTED]"), "{redacted}");
     }
 
