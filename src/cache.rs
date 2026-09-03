@@ -245,6 +245,26 @@ impl ProbeCache {
         Ok(())
     }
 
+    /// First valid current-suite profile for `model_id` + `provider`.
+    ///
+    /// Tries the default knob key, then any matching row. Export and MCP
+    /// use this so a cheap-suite cache still produces an overlay.
+    pub fn find_profile(&self, model_id: &str, provider: &str) -> Option<&CapabilityProfile> {
+        if let Some(profile) = self.get(model_id, provider) {
+            return Some(profile);
+        }
+        self.profiles.values().find_map(|entry| {
+            if !Self::is_valid(entry) {
+                return None;
+            }
+            if entry.probe_suite_version != PROBE_SUITE_VERSION {
+                return None;
+            }
+            let p = &entry.profile;
+            (p.model_id == model_id && p.provider == provider).then_some(p)
+        })
+    }
+
     /// Get a cached profile for the current suite, default effort, and default knobs.
     pub fn get(&self, model_id: &str, provider: &str) -> Option<&CapabilityProfile> {
         self.get_with_knobs(

@@ -52,3 +52,13 @@ required-features = ["cli"]
 name = "cli_goldens"
 path = "tests/cli_goldens/main.rs"
 required-features = ["cli"]
+
+[[test]]
+name = "host_overlays"
+path = "tests/host_overlays/main.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "mcp_stdio"
+path = "tests/mcp_stdio.rs"
+required-features = ["cli"]
