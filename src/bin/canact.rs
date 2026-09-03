@@ -5,7 +5,8 @@ use std::process::ExitCode;
 
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
-    ProbeError, ProbeRun, ProbeRunner, list_model_ids, missing_model_message, run_mcp_stdio,
+    ProbeError, ProbeRun, ProbeRunner, cloud_endpoint_requires_key, default_compat_base_url,
+    list_model_ids, missing_model_message, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -103,7 +104,7 @@ struct ExportArgs {
     #[arg(long)]
     cache: Option<PathBuf>,
 
-    /// Directory to write overlay files (also prints the primary file)
+    /// Directory to write overlay files [default: current directory]
     #[arg(long)]
     dir: Option<PathBuf>,
 
@@ -139,18 +140,68 @@ fn main() -> ExitCode {
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let (api_key, from_openrouter) = resolve_api_key(args.api_key.clone());
-    let base_url = args.base_url.clone().unwrap_or_else(|| {
-        if from_openrouter {
-            "https://openrouter.ai/api/v1".to_owned()
-        } else {
-            "https://api.openai.com/v1".to_owned()
-        }
-    });
-    let model = resolve_model(&args, &base_url, api_key.as_deref()).await?;
-    let provider = args
-        .provider
+    let provider_hint = args.provider.clone().unwrap_or_default();
+    let base_url = args
+        .base_url
         .clone()
-        .unwrap_or_else(|| provider_from_url(&base_url));
+        .unwrap_or_else(|| default_compat_base_url(&provider_hint, from_openrouter));
+    let provider = if provider_hint.is_empty() {
+        provider_from_url(&base_url)
+    } else {
+        provider_hint
+    };
+    let cache_path = args.cache.clone().unwrap_or_else(default_cache_path);
+    let mut cache = ProbeCache::load(&cache_path).unwrap_or_default();
+    let vision = args.vision;
+
+    if !args.force {
+        if let Some(model) = args.model.as_deref().filter(|s| !s.is_empty()) {
+            let cheap = if args.full {
+                false
+            } else if args.cheap {
+                true
+            } else {
+                looks_cheap(&provider, model, &base_url)
+            };
+            if let Some(profile) = cache
+                .get_with_knobs(model, &provider, cheap, vision, args.advertised_context)
+                .cloned()
+                .or_else(|| {
+                    if args.full {
+                        None
+                    } else {
+                        cache.find_profile(model, &provider).cloned()
+                    }
+                })
+            {
+                return emit_profile(
+                    &profile,
+                    args.json,
+                    args.verbose,
+                    HostPolicyMeta {
+                        cacheable: true,
+                        skip_expensive: cheap,
+                        advertised_context_tokens: args.advertised_context,
+                    },
+                );
+            }
+        }
+    }
+
+    if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
+        eprintln!(
+            "error: set --api-key, OPENAI_API_KEY, or OPENROUTER_API_KEY (or pass --base-url for a local host)"
+        );
+        return Err(1);
+    }
+    let model = resolve_model(&args, &base_url, api_key.as_deref()).await?;
+    let cheap = if args.full {
+        false
+    } else if args.cheap {
+        true
+    } else {
+        looks_cheap(&provider, &model, &base_url)
+    };
     let catalog = CatalogPriors {
         advertised_context_tokens: args.advertised_context,
         supports_vision: if args.vision {
@@ -162,34 +213,6 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         },
         supports_tools: None,
     };
-    let cache_path = args.cache.clone().unwrap_or_else(default_cache_path);
-    let mut cache = ProbeCache::load(&cache_path).unwrap_or_default();
-    let cheap = if args.full {
-        false
-    } else if args.cheap {
-        true
-    } else {
-        looks_cheap(&provider, &model, &base_url)
-    };
-    let vision = args.vision;
-
-    if !args.force {
-        if let Some(profile) = cache
-            .get_with_knobs(&model, &provider, cheap, vision, args.advertised_context)
-            .cloned()
-        {
-            return emit_profile(
-                &profile,
-                args.json,
-                args.verbose,
-                HostPolicyMeta {
-                    cacheable: true,
-                    skip_expensive: cheap,
-                    advertised_context_tokens: args.advertised_context,
-                },
-            );
-        }
-    }
 
     let client = OpenAiCompatClient::new(
         base_url.clone(),
@@ -255,17 +278,16 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         HostOverlay::cline(&profile, args.advertised_context)
     };
     let files = overlay.files();
-    if let Some(dir) = args.dir.as_deref() {
-        match overlay.write_to(dir) {
-            Ok(paths) => {
-                for path in paths {
-                    eprintln!("wrote {}", path.display());
-                }
+    let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
+    match overlay.write_to(&dir) {
+        Ok(paths) => {
+            for path in paths {
+                eprintln!("wrote {}", path.display());
             }
-            Err(err) => {
-                eprintln!("error: failed to write overlays: {err}");
-                return Err(1);
-            }
+        }
+        Err(err) => {
+            eprintln!("error: failed to write overlays: {err}");
+            return Err(1);
         }
     }
     if let Some(first) = files.first() {

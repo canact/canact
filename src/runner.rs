@@ -417,12 +417,26 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// True when the host never answered (TCP/DNS/connect), not a scored reply.
+pub fn is_unreachable_host(err: &ProbeError) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    if msg.contains("timed out") || msg.contains("timeout") {
+        return false;
+    }
+    msg.contains("failed to connect")
+        || msg.contains("connection refused")
+        || msg.contains("connect error")
+        || msg.contains("dns error")
+        || msg.contains("error trying to connect")
+        || msg.contains("tcp connect error")
+}
+
 /// Resolve a probe result and whether it is safe to write into the 30-day cache.
 ///
-/// Auth aborts the suite (`Err`). Definitive "does not support tools" is Weak
-/// (tool-named) or Medium (other) and cacheable. Transient errors (timeout,
-/// 429, network, 5xx, other Err) stay Medium for this session and must not
-/// be persisted as a capability score.
+/// Auth and unreachable hosts abort the suite (`Err`). Definitive "does not
+/// support tools" is Weak (tool-named) or Medium (other) and cacheable.
+/// Transient errors (timeout, 429, 5xx, other Err) stay Medium for this
+/// session and must not be persisted as a capability score.
 pub fn resolve_probe(
     result: Result<ProbeResult, ProbeError>,
     name: &str,
@@ -430,6 +444,7 @@ pub fn resolve_probe(
     match result {
         Ok(pr) => Ok((pr, true)),
         Err(err @ ProbeError::Auth(_)) => Err(err),
+        Err(err) if is_unreachable_host(&err) => Err(err),
         Err(err) => {
             let err_msg = err.to_string();
             let is_tool_probe = TOOL_PROBE_NAMES.contains(&name);

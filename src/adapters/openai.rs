@@ -222,7 +222,14 @@ fn join_url(base: &str, suffix: &str) -> String {
 }
 
 fn map_transport(err: reqwest::Error) -> ProbeError {
-    ProbeError::Transient(redact_secrets(&err.to_string()))
+    let msg = redact_secrets(&err.to_string());
+    if err.is_timeout() {
+        ProbeError::Transient(msg)
+    } else if err.is_connect() {
+        ProbeError::Transient(format!("failed to connect: {msg}"))
+    } else {
+        ProbeError::Transient(msg)
+    }
 }
 
 async fn ensure_success(resp: reqwest::Response) -> Result<reqwest::Response, ProbeError> {

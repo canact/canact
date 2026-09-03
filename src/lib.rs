@@ -1,6 +1,7 @@
 //! Not ready.
 
 mod cache;
+mod endpoint;
 mod error;
 mod report;
 mod types;
@@ -8,6 +9,10 @@ mod types;
 pub use cache::{
     CACHE_TTL_SECS, CacheEntry, DEFAULT_PROBE_EFFORT, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION,
     PROBE_SUITE_VERSION, ProbeCache,
+};
+pub use endpoint::{
+    LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, cloud_endpoint_requires_key,
+    default_compat_base_url, local_provider_base_url,
 };
 pub use error::ProbeError;
 pub use report::missing_model_message;
@@ -30,7 +35,9 @@ pub use client::{
     ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall, ProbeUsage,
 };
 #[cfg(feature = "runtime")]
-pub use runner::{FREE_CONCURRENCY, PAID_CONCURRENCY, ProbeRun, ProbeRunner, resolve_probe};
+pub use runner::{
+    FREE_CONCURRENCY, PAID_CONCURRENCY, ProbeRun, ProbeRunner, is_unreachable_host, resolve_probe,
+};
 
 #[cfg(all(feature = "runtime", feature = "openai"))]
 mod adapters;

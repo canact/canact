@@ -152,6 +152,32 @@ fn resolve_probe_auth_aborts() {
     }
 }
 
+#[test]
+fn resolve_probe_unreachable_host_aborts() {
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient(
+        "failed to connect: error sending request for url (http://127.0.0.1:1/v1/chat/completions)"
+            .into(),
+    ));
+    let result = resolve_probe(err, "tool_calling");
+    match result {
+        Err(ProbeError::Transient(msg)) => {
+            assert!(msg.contains("failed to connect"), "{msg}");
+        }
+        other => panic!("expected Transient abort, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_probe_send_timeout_stays_medium() {
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient(
+        "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): operation timed out"
+            .into(),
+    ));
+    let (result, cacheable) = resolve_probe(err, "tool_calling").expect("synthesized");
+    assert_eq!(result.level, CapabilityLevel::Medium);
+    assert!(!cacheable, "timeout must not persist");
+}
+
 #[tokio::test]
 async fn mock_llm_chat_with_tools_returns_tool_call() {
     let llm = MockLlm::new("m", "p");

@@ -410,3 +410,115 @@ fn probe_auth_redacts_api_key_underscore() {
     assert!(stderr.contains("[REDACTED]"), "stderr={stderr}");
     assert!(stderr.contains("authentication error:"), "stderr={stderr}");
 }
+
+#[test]
+fn probe_without_key_does_not_call_openai() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = canact()
+        .args([
+            "probe",
+            "--model",
+            "gpt-4o",
+            "--provider",
+            "openai",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn probe");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stderr.contains("OPENAI_API_KEY") || stderr.contains("--api-key"),
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("platform.openai.com"),
+        "must fail locally, not after a cloud HTTP call: {stderr}"
+    );
+}
+
+#[test]
+fn probe_ollama_uses_full_cache_row_when_cheap() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "qwen2.5-coder".to_owned();
+    profile.provider = "ollama".to_owned();
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(profile, false, false, None);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--model",
+            "qwen2.5-coder",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn probe");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stdout.contains("qwen2.5-coder"), "{stdout}");
+    assert!(
+        !stderr.contains("authentication error"),
+        "must not fall through to a live host: {stderr}"
+    );
+}
+
+#[test]
+fn export_aider_writes_cwd_when_dir_omitted() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(cached_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+    ));
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .current_dir(dir.path())
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        dir.path().join(".aider.model.settings.yml").is_file(),
+        "settings missing; stderr={stderr}"
+    );
+    assert!(
+        dir.path().join(".aider.model.metadata.json").is_file(),
+        "metadata missing; stderr={stderr}"
+    );
+    assert!(stderr.contains("wrote"), "stderr={stderr}");
+}
