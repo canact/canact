@@ -180,7 +180,17 @@ Rename the function `greet` to `welcome` and change the greeting from \
             && !l.starts_with("+++")
             && strip_comments(&l[1..]).contains("fn welcome(")
     });
-    let real_edit = has_file_ref && minus_has_greet && plus_has_welcome;
+    let minus_has_hello = text.lines().any(|l| {
+        l.starts_with('-') && !l.starts_with("---") && strip_comments(&l[1..]).contains("Hello")
+    });
+    let plus_has_welcome_text = text.lines().any(|l| {
+        l.starts_with('+') && !l.starts_with("+++") && strip_comments(&l[1..]).contains("Welcome")
+    });
+    let real_edit = has_file_ref
+        && minus_has_greet
+        && plus_has_welcome
+        && minus_has_hello
+        && plus_has_welcome_text;
 
     let (score, details) = if is_unified_diff_card_echo(&text) && !real_edit {
         (0.0, "Echoed the unified diff format card".to_string())
@@ -315,28 +325,75 @@ struct SearchReplaceBlock<'a> {
     replace: &'a str,
 }
 
+fn looks_like_path(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.contains("fn ") {
+        return false;
+    }
+    t.contains('/')
+        || t.rsplit_once('.').is_some_and(|(_, ext)| {
+            !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        })
+}
+
+fn is_dash_separator(line: &str) -> bool {
+    let t = line.trim();
+    t.len() >= 3 && t.bytes().all(|b| b == b'-')
+}
+
+fn split_path_and_search(header: &str) -> (&str, &str) {
+    let Some((first, rest)) = header.split_once('\n') else {
+        if looks_like_path(header) {
+            return (header.trim(), "");
+        }
+        return ("", header);
+    };
+    if looks_like_path(first) {
+        if let Some((maybe_dash, after_dash)) = rest.split_once('\n') {
+            if is_dash_separator(maybe_dash) {
+                return (first.trim(), after_dash);
+            }
+        }
+        if is_dash_separator(rest) {
+            return (first.trim(), "");
+        }
+        return (first.trim(), rest);
+    }
+    if is_dash_separator(first) {
+        return ("", rest);
+    }
+    ("", header)
+}
+
+fn path_line_before(before: &str) -> &str {
+    before
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .filter(|l| looks_like_path(l))
+        .unwrap_or("")
+}
+
 fn parse_search_replace_blocks(text: &str) -> Vec<SearchReplaceBlock<'_>> {
     let mut blocks = Vec::new();
     let mut rest = text;
     const START: &str = "<<<<<<< SEARCH";
-    const DASH: &str = "\n-------\n";
     const SEP: &str = "\n=======\n";
     const END: &str = "\n>>>>>>> REPLACE";
     while let Some(start) = rest.find(START) {
+        let before = &rest[..start];
         let after_marker = &rest[start + START.len()..];
         let after_nl = after_marker.strip_prefix('\n').unwrap_or(after_marker);
-        let Some(dash) = after_nl.find(DASH) else {
+        let Some(sep) = after_nl.find(SEP) else {
             rest = after_marker;
             continue;
         };
-        let path = after_nl[..dash].trim();
-        let after_dash = &after_nl[dash + DASH.len()..];
-        let Some(sep) = after_dash.find(SEP) else {
-            rest = after_dash;
-            continue;
-        };
-        let search = &after_dash[..sep];
-        let after_sep = &after_dash[sep + SEP.len()..];
+        let (mut path, search) = split_path_and_search(&after_nl[..sep]);
+        if path.is_empty() {
+            path = path_line_before(before);
+        }
+        let after_sep = &after_nl[sep + SEP.len()..];
         let Some(end) = after_sep.find(END) else {
             rest = after_sep;
             continue;
@@ -557,6 +614,54 @@ Rename welcome Welcome
     }
 
     #[tokio::test]
+    async fn search_replace_without_dash_separator_is_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+}
+=======
+fn welcome(name: &str) -> String {
+    format!(\"Welcome, {}\", name)
+}
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "Aider-style block without ------- must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn search_replace_path_above_block_is_strong() {
+        let response_text = "\
+src/greet.rs
+<<<<<<< SEARCH
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+}
+=======
+fn welcome(name: &str) -> String {
+    format!(\"Welcome, {}\", name)
+}
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "filename above SEARCH must count as the path: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn unified_diff_strong_for_valid_diff() {
         let response_text = "\
 --- a/src/greet.rs
@@ -573,6 +678,28 @@ Rename welcome Welcome
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_rename_without_welcome_text_is_not_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,3 +1,3 @@
+-fn greet(name: &str) -> String {
++fn welcome(name: &str) -> String {
+     format!(\"Hello, {}\", name)
+ }";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "rename without Hello/Welcome body must not be Strong: {result:?}"
+        );
+        assert_eq!(result.score, 0.5, "{result:?}");
     }
 
     #[tokio::test]

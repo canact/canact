@@ -175,7 +175,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      fenced Paris; ladder 2.84s; Length-empty token_efficiency Transient.
 /// v76: tool_calling Strong if any call is read_file + path (not only first).
 /// v77: json_output scores the best object, not only the first fence.
-pub const PROBE_SUITE_VERSION: u32 = 77;
+/// v78: SEARCH/REPLACE parses without -------; unified-diff Strong
+///      requires Hello/Welcome in the +/- body.
+pub const PROBE_SUITE_VERSION: u32 = 78;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
