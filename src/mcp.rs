@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError, ProbeRunner,
-    cloud_endpoint_requires_key, default_compat_base_url, looks_cheap,
+    cloud_endpoint_requires_key, default_compat_base_url, looks_cheap, provider_from_base_url,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -144,24 +144,11 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "model is required".to_owned())?
         .to_owned();
-    let provider = args
-        .get("provider")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("openai-compat")
-        .to_owned();
     let advertised = json_u32(args.get("advertised_context"));
     let cheap = json_bool(args.get("cheap")).unwrap_or(false);
     let full = json_bool(args.get("full")).unwrap_or(false);
     let vision = json_bool(args.get("vision")).unwrap_or(false);
     let force = json_bool(args.get("force")).unwrap_or(false);
-    let skip_expensive = if full {
-        false
-    } else if cheap {
-        true
-    } else {
-        looks_cheap(&provider, &model, "")
-    };
     let cache_path = args
         .get("cache")
         .and_then(Value::as_str)
@@ -170,26 +157,6 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .unwrap_or_else(default_cache_path);
     let mut cache = ProbeCache::load(&cache_path)
         .map_err(|e| format!("failed to load cache {}: {e}", cache_path.display()))?;
-
-    if !force {
-        if let Some(profile) = cache
-            .get_with_knobs(&model, &provider, skip_expensive, vision, advertised)
-            .or_else(|| {
-                if full {
-                    None
-                } else {
-                    cache.find_profile(&model, &provider)
-                }
-            })
-            .cloned()
-        {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
-                cacheable: true,
-                skip_expensive,
-                advertised_context_tokens: advertised,
-            }));
-        }
-    }
 
     let (api_key, from_openrouter) = match args.get("api_key_env").and_then(Value::as_str) {
         Some(var) if !var.is_empty() => (
@@ -212,12 +179,47 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             }
         }
     };
+    let provider_given = args
+        .get("provider")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
     let base_url = args
         .get("base_url")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| default_compat_base_url(&provider, from_openrouter));
+        .unwrap_or_else(|| {
+            default_compat_base_url(provider_given.as_deref().unwrap_or(""), from_openrouter)
+        });
+    let provider = provider_given.unwrap_or_else(|| provider_from_base_url(&base_url));
+    let skip_expensive = if full {
+        false
+    } else if cheap {
+        true
+    } else {
+        looks_cheap(&provider, &model, &base_url)
+    };
+    if !force {
+        if let Some(profile) =
+            cache.get_with_knobs(&model, &provider, skip_expensive, vision, advertised)
+        {
+            return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
+                cacheable: true,
+                skip_expensive,
+                advertised_context_tokens: advertised,
+            }));
+        }
+        if !full {
+            if let Some((profile, cheap_row)) = cache.find_profile_with_cost(&model, &provider) {
+                return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
+                    cacheable: true,
+                    skip_expensive: cheap_row,
+                    advertised_context_tokens: advertised,
+                }));
+            }
+        }
+    }
     if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
         return Err(
             "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY), or pass base_url for a local host"

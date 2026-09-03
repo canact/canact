@@ -144,6 +144,14 @@ fn find_profile_prefers_newer_cached_at() {
 }
 
 #[test]
+fn find_profile_with_cost_reports_cheap_row() {
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(sample_profile(), true, false, None);
+    let (_, cheap) = cache.find_profile_with_cost("m", "p").expect("cheap row");
+    assert!(cheap, "fallback row must report cheap");
+}
+
+#[test]
 fn get_misses_when_effort_differs() {
     let mut cache = ProbeCache::default();
     cache.put_with_settings(

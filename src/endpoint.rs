@@ -42,6 +42,16 @@ pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
 }
 
 /// True when the host or model looks local/free so the cheap suite is enough.
+/// Host label used as `provider` when the user omitted `--provider`.
+pub fn provider_from_base_url(base_url: &str) -> String {
+    let host = url_host_hint(base_url);
+    if host.is_empty() {
+        "openai-compat".to_owned()
+    } else {
+        host
+    }
+}
+
 pub fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
     let provider = provider.to_ascii_lowercase();
     let url = base_url.to_ascii_lowercase();
@@ -102,5 +112,9 @@ mod tests {
         assert!(!cloud_endpoint_requires_key(
             "https://myopenrouter.ai.internal/v1"
         ));
+        assert_eq!(
+            provider_from_base_url("https://api.openai.com/v1"),
+            "api.openai.com"
+        );
     }
 }
