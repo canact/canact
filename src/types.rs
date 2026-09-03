@@ -50,6 +50,16 @@ impl ProbeResult {
     pub fn is_skipped(&self) -> bool {
         self.details.starts_with("Skipped:")
     }
+
+    /// Level host policy uses. Skips, unprobed defaults, and synthesized
+    /// errors are Weak even when the stored `level` is Medium.
+    pub fn completed_level(&self) -> CapabilityLevel {
+        if self.is_synthesized_error() || self.is_unprobed_default() || self.is_skipped() {
+            CapabilityLevel::Weak
+        } else {
+            self.level
+        }
+    }
 }
 
 /// Recommended edit format based on probe results.
@@ -444,11 +454,7 @@ fn completed_usable_tools(pr: &ProbeResult) -> bool {
 }
 
 fn completed_level(pr: &ProbeResult) -> CapabilityLevel {
-    if pr.is_synthesized_error() || pr.is_unprobed_default() || pr.is_skipped() {
-        CapabilityLevel::Weak
-    } else {
-        pr.level
-    }
+    pr.completed_level()
 }
 
 fn normalize_dimension_name(dimension: &str) -> Cow<'_, str> {

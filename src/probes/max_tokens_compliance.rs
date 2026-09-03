@@ -4,10 +4,10 @@
 //! the limit cause cost blowups and context overflow.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest};
+use crate::client::{ProbeClient, ProbeFinish, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::user_text;
+use super::{refuse_truncated_incomplete, user_text};
 
 /// Probe whether the model respects `max_tokens` output limits.
 ///
@@ -32,6 +32,9 @@ pub async fn probe_max_tokens_compliance<C: ProbeClient>(
     };
 
     let response = llm.chat(request).await?;
+    if response.finish == ProbeFinish::Length && response.text.trim().is_empty() {
+        refuse_truncated_incomplete(response.finish, 0.0)?;
+    }
     let char_count = response.text.len();
 
     let (score, details) = if response.text.trim().is_empty() {
@@ -70,6 +73,17 @@ mod tests {
     use super::*;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn length_empty_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(""),
+        };
+        let err = probe_max_tokens_compliance(&llm)
+            .await
+            .expect_err("Length plus empty is not a 30-day Weak card");
+        assert!(matches!(&err, ProbeError::Transient(_)), "{err:?}");
+    }
 
     #[tokio::test]
     async fn empty_response_is_weak() {

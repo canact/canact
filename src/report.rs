@@ -33,7 +33,7 @@ impl CapabilityProfile {
                     out,
                     "{:<28}{:?}  {:.1} / {:.1}",
                     format!("{}:", display_name(dim)),
-                    probe.level,
+                    probe.completed_level(),
                     probe.score,
                     probe.max_score
                 );

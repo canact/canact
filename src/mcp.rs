@@ -168,7 +168,13 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     if !force {
         if let Some(profile) = cache
             .get_with_knobs(&model, &provider, skip_expensive, vision, advertised)
-            .or_else(|| cache.find_profile(&model, &provider))
+            .or_else(|| {
+                if full {
+                    None
+                } else {
+                    cache.find_profile(&model, &provider)
+                }
+            })
             .cloned()
         {
             return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
@@ -179,18 +185,27 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         }
     }
 
-    let api_key = match args.get("api_key_env").and_then(Value::as_str) {
-        Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
-        _ => std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                std::env::var("OPENROUTER_API_KEY")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-            }),
+    let (api_key, from_openrouter) = match args.get("api_key_env").and_then(Value::as_str) {
+        Some(var) if !var.is_empty() => (
+            std::env::var(var).ok().filter(|s| !s.is_empty()),
+            var == "OPENROUTER_API_KEY",
+        ),
+        _ => {
+            if let Some(key) = std::env::var("OPENAI_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty())
+            {
+                (Some(key), false)
+            } else if let Some(key) = std::env::var("OPENROUTER_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty())
+            {
+                (Some(key), true)
+            } else {
+                (None, false)
+            }
+        }
     };
-    let from_openrouter = api_key.is_some() && std::env::var("OPENROUTER_API_KEY").is_ok();
     let base_url = args
         .get("base_url")
         .and_then(Value::as_str)

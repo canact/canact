@@ -164,6 +164,69 @@ fn mcp_probe_model_returns_host_policy_from_cache() {
     let _ = child.wait_timeout();
 }
 
+#[test]
+fn mcp_full_does_not_return_cheap_cache() {
+    let dir = tempfile::tempdir().expect("temp");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(sample(), true, false, None);
+    cache.save(&cache_path).expect("save");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+        .arg("mcp")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "canact-test", "version": "0" }
+            }
+        }),
+    );
+    let _ = read_rpc(&mut stdout);
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "probe_model",
+                "arguments": {
+                    "model": "qwen2.5-coder",
+                    "provider": "ollama",
+                    "cache": cache_path.to_str().expect("utf8"),
+                    "full": true
+                }
+            }
+        }),
+    );
+    let called = read_rpc(&mut stdout);
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    assert_eq!(called["result"]["isError"], true, "{called}");
+    assert!(
+        text.contains("failed to connect") || text.contains("api_key"),
+        "full must miss cheap cache and go live: {text}"
+    );
+    drop(stdin);
+    let _ = child.wait_timeout();
+}
+
 trait WaitTimeout {
     fn wait_timeout(&mut self) -> std::process::ExitStatus;
 }

@@ -93,7 +93,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
 
     let echoed_question = lower.contains("what text or letters appear");
 
-    let (score, details) = if identified_text {
+    let (score, details) = if identified_text && !refused && !negated_glyphs {
         (1.0, "Can read text from images".to_string())
     } else if echoed_question {
         (0.0, "Did not use the image (generic reply)".to_string())
@@ -365,6 +365,19 @@ mod tests {
             );
             assert_eq!(result.score, 0.0, "body={body}");
         }
+    }
+
+    #[tokio::test]
+    async fn vision_dont_see_bl_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response("I don't see BL"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "refusal that names BL must not be Strong"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]

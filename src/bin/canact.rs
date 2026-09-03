@@ -275,7 +275,16 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
     let overlay = if args.aider {
         HostOverlay::aider(&profile, args.advertised_context)
     } else {
-        HostOverlay::cline(&profile, args.advertised_context)
+        let overlay = HostOverlay::cline(&profile, args.advertised_context);
+        if let HostOverlay::Cline(info) = &overlay {
+            if info.context_window.is_none() {
+                eprintln!(
+                    "error: no measured context window; re-run `canact probe` without --cheap"
+                );
+                return Err(1);
+            }
+        }
+        overlay
     };
     let files = overlay.files();
     let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("."));

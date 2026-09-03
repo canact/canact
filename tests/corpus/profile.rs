@@ -736,6 +736,29 @@ fn cheap_skip_probe(name: &str) -> ProbeResult {
 }
 
 #[test]
+fn human_table_prints_completed_weak_for_skipped_medium() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.search_replace = cheap_skip_probe("search_replace");
+    let table = profile.format_human_table(true);
+    let search_line = table
+        .lines()
+        .find(|l| l.contains("Search Replace"))
+        .unwrap_or("");
+    assert!(
+        search_line.contains("Weak"),
+        "skipped Medium must display as Weak:\n{table}"
+    );
+    assert!(
+        !search_line.contains("Medium"),
+        "must not show stored Medium for a skip:\n{table}"
+    );
+}
+
+#[test]
 fn is_skipped_matches_skipped_prefix_only() {
     let skip = cheap_skip_probe("one_shot_tool_plan");
     assert!(skip.is_skipped());

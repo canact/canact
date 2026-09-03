@@ -47,8 +47,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v73() {
-    assert_eq!(PROBE_SUITE_VERSION, 73);
+fn cache_key_format_is_model_provider_unset_v74() {
+    assert_eq!(PROBE_SUITE_VERSION, 74);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -56,7 +56,7 @@ fn cache_key_format_is_model_provider_unset_v73() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v73|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v74|full|novision|ctxnone");
 }
 
 #[test]
@@ -107,6 +107,39 @@ fn find_profile_sees_cheap_row() {
     profile.effective_context_tokens = Some(8192);
     cache.put_with_knobs(profile, true, false, None);
     let found = cache.find_profile("m", "p").expect("cheap row");
+    assert_eq!(found.effective_context_tokens, Some(8192));
+}
+
+#[test]
+fn find_profile_prefers_newer_cached_at() {
+    let mut cache = ProbeCache::default();
+    let mut old = sample_profile();
+    old.effective_context_tokens = Some(1024);
+    let mut new = sample_profile();
+    new.effective_context_tokens = Some(8192);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    cache.profiles.insert(
+        "old".into(),
+        CacheEntry {
+            profile: old,
+            cached_at: now.saturating_sub(60),
+            reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
+            probe_suite_version: PROBE_SUITE_VERSION,
+        },
+    );
+    cache.profiles.insert(
+        "new".into(),
+        CacheEntry {
+            profile: new,
+            cached_at: now,
+            reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
+            probe_suite_version: PROBE_SUITE_VERSION,
+        },
+    );
+    let found = cache.find_profile("m", "p").expect("row");
     assert_eq!(found.effective_context_tokens, Some(8192));
 }
 
@@ -256,6 +289,9 @@ fn put_then_load_round_trip() {
     assert_eq!(profile.model_id, "m");
     assert_eq!(profile.provider, "p");
     assert_eq!(profile.effective_context_tokens, None);
+    cache.save(&path).expect("overwrite existing cache file");
+    let reloaded = ProbeCache::load(&path).expect("load after overwrite");
+    assert_eq!(reloaded.get("m", "p").expect("hit").model_id, "m");
 }
 
 #[test]
@@ -354,8 +390,9 @@ fn load_keeps_migrated_profile_when_save_fails() {
     cache.put(profile);
     cache.save(&path).expect("save stale");
 
-    // save() writes path.with_extension("tmp"); a directory there blocks rewrite.
-    std::fs::create_dir(path.with_extension("tmp")).expect("block save tmp");
+    // save() writes path.with_extension("tmp-<pid>"); a directory there blocks rewrite.
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::create_dir(tmp).expect("block save tmp");
 
     let loaded = ProbeCache::load(&path).expect("load still returns migrated rows");
     let got = loaded.get("m", "p").expect("session-correct migrated hit");
