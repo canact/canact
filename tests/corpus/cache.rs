@@ -101,6 +101,16 @@ fn put_get_round_trip() {
 }
 
 #[test]
+fn find_profile_sees_cheap_row() {
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.effective_context_tokens = Some(8192);
+    cache.put_with_knobs(profile, true, false, None);
+    let found = cache.find_profile("m", "p").expect("cheap row");
+    assert_eq!(found.effective_context_tokens, Some(8192));
+}
+
+#[test]
 fn get_misses_when_effort_differs() {
     let mut cache = ProbeCache::default();
     cache.put_with_settings(
