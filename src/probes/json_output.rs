@@ -30,47 +30,7 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     };
 
     let response = llm.chat(request).await?;
-    let json_str = extract_json_from_text(&response.text);
-
-    let (score, details) = match serde_json::from_str::<serde_json::Value>(json_str) {
-        Ok(val) if val.is_array() => (0.0, "Response JSON is an array, not an object".to_string()),
-        Ok(val) => {
-            let word = val
-                .get("word")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-            let length = val.get("length").and_then(json_length_u64);
-            let reversed = val
-                .get("reversed")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-            let has_word = word.is_some();
-            let has_length = length.is_some();
-            let has_reversed = reversed.is_some();
-            let field_count = u32::from(has_word) + u32::from(has_length) + u32::from(has_reversed);
-
-            if word == Some("hello") && length == Some(5) && reversed == Some("olleh") {
-                (
-                    1.0,
-                    "Valid JSON with all required fields and correct types".to_string(),
-                )
-            } else if field_count == 3 {
-                (
-                    0.5,
-                    "Valid JSON types but word/length/reversed do not match hello".to_string(),
-                )
-            } else {
-                let partial = field_count as f32 / 6.0 + 0.1;
-                (
-                    partial,
-                    format!("Valid JSON but only {field_count}/3 required fields present"),
-                )
-            }
-        }
-        Err(_) => (0.0, "Response was not valid JSON".to_string()),
-    };
+    let (score, details) = score_json_text(&response.text);
 
     refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
@@ -154,6 +114,118 @@ fn peel_one_fence(s: &str) -> &str {
     rest.strip_suffix("```").map(str::trim).unwrap_or(t)
 }
 
+fn score_json_text(text: &str) -> (f32, String) {
+    let primary = extract_json_from_text(text);
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(primary) {
+        if val.is_array() {
+            return (0.0, "Response JSON is an array, not an object".to_string());
+        }
+    }
+    let mut best: Option<(f32, String)> = None;
+    for val in json_objects_in(text) {
+        let scored = score_json_object(&val);
+        if best.as_ref().is_none_or(|(s, _)| scored.0 > *s) {
+            best = Some(scored);
+        }
+    }
+    best.unwrap_or((0.0, "Response was not valid JSON".to_string()))
+}
+
+fn score_json_object(val: &serde_json::Value) -> (f32, String) {
+    let word = val
+        .get("word")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let length = val.get("length").and_then(json_length_u64);
+    let reversed = val
+        .get("reversed")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let has_word = word.is_some();
+    let has_length = length.is_some();
+    let has_reversed = reversed.is_some();
+    let field_count = u32::from(has_word) + u32::from(has_length) + u32::from(has_reversed);
+
+    if word == Some("hello") && length == Some(5) && reversed == Some("olleh") {
+        (
+            1.0,
+            "Valid JSON with all required fields and correct types".to_string(),
+        )
+    } else if field_count == 3 {
+        (
+            0.5,
+            "Valid JSON types but word/length/reversed do not match hello".to_string(),
+        )
+    } else {
+        let partial = field_count as f32 / 6.0 + 0.1;
+        (
+            partial,
+            format!("Valid JSON but only {field_count}/3 required fields present"),
+        )
+    }
+}
+
+fn json_objects_in(text: &str) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if text[i..].starts_with('{') {
+            if let Some((val, end)) = next_json_object(text, i) {
+                out.push(val);
+                i = end;
+                continue;
+            }
+        }
+        i += text[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    out
+}
+
+fn next_json_object(text: &str, start: usize) -> Option<(serde_json::Value, usize)> {
+    let slice = &text[start..];
+    if !slice.starts_with('{') {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escape = false;
+    for (off, c) in slice.char_indices() {
+        if in_str {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if c == '\\' {
+                escape = true;
+                continue;
+            }
+            if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = off + 1;
+                    let val: serde_json::Value = serde_json::from_str(&slice[..end]).ok()?;
+                    if val.is_object() {
+                        return Some((val, start + end));
+                    }
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn json_length_u64(v: &serde_json::Value) -> Option<u64> {
     if let Some(n) = v.as_u64() {
         return Some(n);
@@ -201,6 +273,31 @@ mod tests {
         assert!(result.score > 0.0);
         assert!(result.score < 1.0);
         assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn json_output_card_then_hello_object_is_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                "```json\n{\"word\": \"cat\", \"length\": 3, \"reversed\": \"tac\"}\n```\n\n\
+                 {\"word\": \"hello\", \"length\": 5, \"reversed\": \"olleh\"}",
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn json_output_utf8_prose_then_hello_object_is_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                "Voici café 日本語\n{\"word\": \"hello\", \"length\": 5, \"reversed\": \"olleh\"}",
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
