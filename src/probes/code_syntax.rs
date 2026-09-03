@@ -51,8 +51,9 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
         });
     }
 
-    let has_def = trimmed.contains("def merge_sorted") || trimmed.contains("def merge");
-    let has_return = trimmed.contains("return ") || trimmed.contains("return(");
+    let code_body = strip_hash_comments(trimmed);
+    let has_def = code_body.contains("def merge_sorted");
+    let has_return = code_body.contains("return ") || code_body.contains("return(");
 
     let parens_balanced = count_char(trimmed, '(') == count_char(trimmed, ')');
     let brackets_balanced = count_char(trimmed, '[') == count_char(trimmed, ']');
@@ -68,9 +69,9 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
             || t.starts_with("return ...")
             || t.starts_with("return...")
     });
-    let has_pass_only = trimmed.lines().any(|l| l.trim() == "pass")
-        && !trimmed.contains("return")
-        && !trimmed.contains("append");
+    let has_pass_only = code_body.lines().any(|l| l.trim() == "pass")
+        && !code_body.contains("return")
+        && !code_body.contains("append");
 
     let (score, details) = if has_def && has_return && delimiters_ok && !has_ellipsis {
         (
@@ -107,6 +108,19 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
         level: classify(score),
         details,
     })
+}
+
+fn strip_hash_comments(text: &str) -> String {
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                return None;
+            }
+            Some(line.split_once('#').map(|(code, _)| code).unwrap_or(line))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn extract_code_block(text: &str) -> Option<&str> {
@@ -212,6 +226,34 @@ def merge_sorted(a, b):
         };
         let result = probe_code_syntax(&llm).await.unwrap();
         assert_ne!(result.level, CapabilityLevel::Strong, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn code_syntax_return_in_comment_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    # return a + b\n    pass\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "return only in a comment must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_def_merge_without_sorted_is_not_strong() {
+        let code = "def merge(a, b):\n    return a + b\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "def merge without merge_sorted must not be Strong: {result:?}"
+        );
     }
 
     #[tokio::test]

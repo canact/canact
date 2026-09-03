@@ -53,14 +53,9 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
     let response = llm.chat(request).await?;
     let trimmed = response.text.trim();
 
-    let has_prefix = trimmed.starts_with("STATUS:ok ") || trimmed.starts_with("STATUS:ok\n");
-    let after_prefix = if let Some(rest) = trimmed.strip_prefix("STATUS:ok ") {
-        rest.trim()
-    } else if let Some(rest) = trimmed.strip_prefix("STATUS:ok\n") {
-        rest.trim()
-    } else {
-        trimmed
-    };
+    let after_prefix = split_status_prefix(trimmed);
+    let has_prefix = after_prefix.is_some();
+    let after_prefix = after_prefix.unwrap_or(trimmed);
     let body = after_prefix.lines().next().unwrap_or("").trim();
     let is_single_int = !body.is_empty()
         && body.chars().all(|c| c.is_ascii_digit())
@@ -110,6 +105,37 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
     })
 }
 
+/// `STATUS:ok` with optional spaces around `:` and after `STATUS`.
+fn split_status_prefix(text: &str) -> Option<&str> {
+    let rest = text.trim_start();
+    let bytes = rest.as_bytes();
+    if rest.len() < 6 || !rest[..6].eq_ignore_ascii_case("status") {
+        return None;
+    }
+    let mut i = 6;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b':' {
+        return None;
+    }
+    i += 1;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i + 2 > rest.len() || !rest[i..i + 2].eq_ignore_ascii_case("ok") {
+        return None;
+    }
+    i += 2;
+    if i == rest.len() {
+        return Some("");
+    }
+    if !bytes[i].is_ascii_whitespace() {
+        return None;
+    }
+    Some(rest[i..].trim_start())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +149,19 @@ mod tests {
             response: text_response("STATUS:ok 5"),
         };
         let result = probe_system_message_adherence(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn status_space_after_colon_is_strong() {
+        let llm = MockLlm {
+            response: text_response("STATUS: ok 5"),
+        };
+        let result = probe_system_message_adherence(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "STATUS: ok with a space after the colon must be Strong: {result:?}"
+        );
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert!((result.score - 1.0).abs() < f32::EPSILON);
     }
