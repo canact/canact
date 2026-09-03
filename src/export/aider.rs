@@ -60,7 +60,7 @@ impl AiderOverlay {
             AiderMetadataEntry {
                 max_input_tokens: ctx,
                 max_output_tokens: ctx,
-                litellm_provider: profile.provider.clone(),
+                litellm_provider: super::normalize_overlay_provider(&profile.provider).to_owned(),
                 mode: "chat".to_owned(),
             },
         );
@@ -138,6 +138,21 @@ mod tests {
         let meta = overlay.metadata.get("ollama/qwen2.5-coder").expect("meta");
         assert_eq!(meta.max_input_tokens, Some(8192));
         assert_eq!(meta.litellm_provider, "ollama");
+    }
+
+    #[test]
+    fn openrouter_host_provider_normalizes_litellm_id() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.provider = "openrouter.ai".to_owned();
+        p.model_id = "anthropic/claude-3.5-sonnet".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let name = "openrouter/anthropic/claude-3.5-sonnet";
+        let meta = overlay.metadata.get(name).expect("meta");
+        assert_eq!(meta.litellm_provider, "openrouter");
     }
 
     #[test]

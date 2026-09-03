@@ -27,11 +27,11 @@ pub fn run_mcp_stdio() -> u8 {
                 return 1;
             }
         };
-        if msg.get("method").and_then(Value::as_str) == Some("notifications/initialized") {
+        let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+        if method.starts_with("notifications/") {
             continue;
         }
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
-        let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
         let result = match method {
             "initialize" => initialize_result(),
@@ -210,7 +210,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
                 advertised_context_tokens: advertised,
             }));
         }
-        if !full {
+        if !full && !vision {
             if let Some((profile, cheap_row)) = cache.find_profile_with_cost(&model, &provider) {
                 return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
                     cacheable: true,
@@ -313,6 +313,9 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
         }
     }
     let len = len.ok_or_else(|| "missing Content-Length".to_owned())?;
+    if len > 8 * 1024 * 1024 {
+        return Err("Content-Length too large".to_owned());
+    }
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf).map_err(|e| e.to_string())?;
     serde_json::from_slice(&buf)
@@ -349,5 +352,12 @@ mod tests {
         let mut cursor = Cursor::new(buf);
         let got = read_message(&mut cursor).expect("read").expect("eof");
         assert_eq!(got, original);
+    }
+
+    #[test]
+    fn content_length_too_large_is_error() {
+        let mut cursor = Cursor::new(b"Content-Length: 999999999\r\n\r\n");
+        let err = read_message(&mut cursor).expect_err("cap");
+        assert!(err.contains("too large"), "{err}");
     }
 }
