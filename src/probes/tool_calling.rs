@@ -50,25 +50,7 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
     let response = llm.chat(request).await?;
     refuse_truncated_tool_call(&response)?;
 
-    let (score, details) = if response.tool_calls.is_empty() {
-        (0.0, "No tool call in response, text only".to_string())
-    } else {
-        let tc = &response.tool_calls[0];
-        let path_is_string = nonempty_string_arg(&tc.arguments, "path");
-        if !has_visible_arg_text(&tc.name) {
-            (0.0, "Tool call has empty name".to_string())
-        } else if tc.name == "read_file" && path_is_string {
-            (
-                1.0,
-                "Valid tool call with correct name and arguments".to_string(),
-            )
-        } else {
-            (
-                0.5,
-                format!("Tool call present but imprecise: name={}", tc.name),
-            )
-        }
-    };
+    let (score, details) = score_read_file_calls(&response.tool_calls);
 
     refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
@@ -78,6 +60,32 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
         level: classify(score),
         details,
     })
+}
+
+fn score_read_file_calls(calls: &[ProbeToolCall]) -> (f32, String) {
+    if calls.is_empty() {
+        return (0.0, "No tool call in response, text only".to_string());
+    }
+    let mut named = None;
+    for tc in calls {
+        if !has_visible_arg_text(&tc.name) {
+            continue;
+        }
+        if tc.name == "read_file" && nonempty_string_arg(&tc.arguments, "path") {
+            return (
+                1.0,
+                "Valid tool call with correct name and arguments".to_string(),
+            );
+        }
+        if named.is_none() {
+            named = Some(tc.name.as_str());
+        }
+    }
+    if let Some(name) = named {
+        (0.5, format!("Tool call present but imprecise: name={name}"))
+    } else {
+        (0.0, "Tool call has empty name".to_string())
+    }
 }
 
 /// Probe whether the model can choose the right tool from multiple options
@@ -869,6 +877,26 @@ mod tests {
                 "empty tool name must not open can_use_tools: {name:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn tool_calling_empty_name_then_real_read_is_strong() {
+        let response = ProbeResponse {
+            text: String::new(),
+            tool_calls: vec![
+                call("call_0", "", serde_json::json!({"path": "/tmp/wrong.txt"})),
+                call(
+                    "call_1",
+                    "read_file",
+                    serde_json::json!({"path": "/tmp/test.txt"}),
+                ),
+            ],
+            finish: ProbeFinish::ToolCalls,
+            usage: None,
+        };
+        let result = probe_tool_calling(&MockLlm { response }).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

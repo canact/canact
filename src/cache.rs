@@ -173,7 +173,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v75: memory refusals are Weak; code_syntax uses the merge fence;
 ///      JSON length 5.0; XML/unified-diff pick a real edit over a card;
 ///      fenced Paris; ladder 2.84s; Length-empty token_efficiency Transient.
-pub const PROBE_SUITE_VERSION: u32 = 75;
+/// v76: tool_calling Strong if any call is read_file + path (not only first).
+pub const PROBE_SUITE_VERSION: u32 = 76;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
