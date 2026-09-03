@@ -177,7 +177,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v77: json_output scores the best object, not only the first fence.
 /// v78: SEARCH/REPLACE parses without -------; unified-diff Strong
 ///      requires Hello/Welcome in the +/- body.
-pub const PROBE_SUITE_VERSION: u32 = 78;
+/// v79: stream string indexes, numeric tool ids, array content,
+///      finish_reason on delta, capped error bodies.
+pub const PROBE_SUITE_VERSION: u32 = 79;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
