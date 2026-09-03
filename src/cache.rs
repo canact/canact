@@ -231,8 +231,7 @@ impl ProbeCache {
                 path.display()
             )));
         }
-        let contents = std::fs::read_to_string(path)?;
-        let mut cache: Self = serde_json::from_str(&contents)?;
+        let mut cache = Self::read_disk(path)?;
         if cache.migrate_stale_tool_scores() {
             // Keep the migrated rows in memory even when rewrite fails.
             // The next process retries migrate against the stale file.
@@ -246,12 +245,31 @@ impl ProbeCache {
         Ok(cache)
     }
 
+    fn read_disk(path: &Path) -> Result<Self, ProbeError> {
+        let contents = std::fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&contents)?)
+    }
+
     /// Save cache to disk, creating parent directories if necessary.
     pub fn save(&self, path: &Path) -> Result<(), ProbeError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let contents = serde_json::to_string_pretty(self)?;
+        let mut profiles = self.profiles.clone();
+        if path.exists() {
+            if let Ok(disk) = Self::read_disk(path) {
+                for (key, theirs) in disk.profiles {
+                    match profiles.get(&key) {
+                        Some(ours) if ours.cached_at >= theirs.cached_at => {}
+                        _ => {
+                            profiles.insert(key, theirs);
+                        }
+                    }
+                }
+            }
+        }
+        let outgoing = Self { profiles };
+        let contents = serde_json::to_string_pretty(&outgoing)?;
         let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
         std::fs::write(&tmp, contents)?;
         // Windows rename cannot replace an existing file. Move the dest

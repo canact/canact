@@ -367,6 +367,28 @@ fn load_migrates_stale_no_tools_v7_to_weak_and_persists() {
 }
 
 #[test]
+fn save_keeps_newer_other_model_row() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probes.json");
+    let mut a = ProbeCache::default();
+    let mut pa = sample_profile();
+    pa.model_id = "a".into();
+    a.put(pa);
+    a.save(&path).expect("save a");
+    let mut b = ProbeCache::default();
+    let mut pb = sample_profile();
+    pb.model_id = "b".into();
+    b.put(pb);
+    b.save(&path).expect("save b merges a");
+    let loaded = ProbeCache::load(&path).expect("load");
+    assert!(
+        loaded.find_profile("a", "p").is_some(),
+        "a must survive b save"
+    );
+    assert!(loaded.find_profile("b", "p").is_some(), "b must be stored");
+}
+
+#[test]
 fn load_rejects_oversized_file() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("huge.json");
