@@ -91,10 +91,21 @@ pub fn aider_edit_format(rec: EditFormatRecommendation) -> &'static str {
 
 /// Aider / LiteLLM style `provider/model` name.
 pub fn overlay_model_name(profile: &CapabilityProfile) -> String {
-    if profile.model_id.contains('/') {
+    let provider = normalize_overlay_provider(&profile.provider);
+    if provider == "openrouter" && !profile.model_id.starts_with("openrouter/") {
+        format!("openrouter/{}", profile.model_id)
+    } else if profile.model_id.contains('/') {
         profile.model_id.clone()
     } else {
-        format!("{}/{}", profile.provider, profile.model_id)
+        format!("{provider}/{}", profile.model_id)
+    }
+}
+
+fn normalize_overlay_provider(provider: &str) -> &str {
+    match provider {
+        "openrouter.ai" | "openrouter" => "openrouter",
+        "api.openai.com" | "openai" => "openai",
+        other => other,
     }
 }
 
@@ -225,6 +236,21 @@ mod tests {
             CapabilityLevel::Weak,
         );
         assert_eq!(overlay_model_name(&p), "ollama/qwen2.5-coder");
+    }
+
+    #[test]
+    fn overlay_name_prefixes_openrouter_for_slash_model() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.model_id = "anthropic/claude-3.5-sonnet".to_owned();
+        p.provider = "openrouter.ai".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "openrouter/anthropic/claude-3.5-sonnet"
+        );
     }
 
     #[test]

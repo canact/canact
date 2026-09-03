@@ -168,6 +168,21 @@ fn resolve_probe_unreachable_host_aborts() {
 }
 
 #[test]
+fn resolve_probe_connect_timeout_aborts() {
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient(
+        "failed to connect: error sending request for url (http://192.0.2.1:11434/v1/chat/completions): timed out"
+            .into(),
+    ));
+    let result = resolve_probe(err, "tool_calling");
+    match result {
+        Err(ProbeError::Transient(msg)) => {
+            assert!(msg.contains("failed to connect:"), "{msg}");
+        }
+        other => panic!("expected connect-timeout abort, got {other:?}"),
+    }
+}
+
+#[test]
 fn resolve_probe_send_timeout_stays_medium() {
     let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient(
         "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): operation timed out"

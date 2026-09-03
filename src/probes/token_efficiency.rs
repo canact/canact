@@ -4,10 +4,10 @@
 //! Verbose models burn through context windows faster and cost more.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest};
+use crate::client::{ProbeClient, ProbeFinish, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::user_text;
+use super::{refuse_truncated_incomplete, user_text};
 
 /// Probe how many output tokens the model uses for a trivial question.
 ///
@@ -36,6 +36,9 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     // is verbose. Do not call refuse_truncated_incomplete here.
     let response = llm.chat(request).await?;
     let empty_text = response.text.trim().is_empty();
+    if response.finish == ProbeFinish::Length && empty_text {
+        refuse_truncated_incomplete(response.finish, 0.0)?;
+    }
 
     let (completion_tokens, reasoning_tokens) = if empty_text {
         let reasoning = response
@@ -88,9 +91,21 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProbeError;
     use crate::client::{ProbeFinish, ProbeResponse, ProbeUsage};
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn length_empty_is_transient() {
+        let llm = MockLlm {
+            response: length_text_response(""),
+        };
+        let err = probe_token_efficiency(&llm)
+            .await
+            .expect_err("Length plus empty is not a 30-day Weak card");
+        assert!(matches!(&err, ProbeError::Transient(_)), "{err:?}");
+    }
 
     #[tokio::test]
     async fn concise_response_is_strong() {

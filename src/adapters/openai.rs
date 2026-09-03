@@ -107,6 +107,12 @@ impl OpenAiCompatClient {
         }
         if !buf.is_empty() {
             let line = take_sse_tail(&buf);
+            if sse_tail_is_truncated(&line) {
+                let _ = tx.unbounded_send(Err(ProbeError::Transient(
+                    "truncated stream: incomplete SSE tail".into(),
+                )));
+                return Ok(());
+            }
             if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
                 let _ = tx.unbounded_send(Err(err));
                 return Ok(());
@@ -223,9 +229,7 @@ fn join_url(base: &str, suffix: &str) -> String {
 
 fn map_transport(err: reqwest::Error) -> ProbeError {
     let msg = redact_secrets(&err.to_string());
-    if err.is_timeout() {
-        ProbeError::Transient(msg)
-    } else if err.is_connect() {
+    if err.is_connect() {
         ProbeError::Transient(format!("failed to connect: {msg}"))
     } else {
         ProbeError::Transient(msg)
@@ -252,11 +256,22 @@ fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
 
 fn map_status(code: u16, retry_after: Option<u64>, body: &str) -> ProbeError {
     match code {
-        401 | 403 => ProbeError::Auth(body_or_status(code, body)),
+        401 => ProbeError::Auth(body_or_status(code, body)),
+        403 if body_looks_like_auth(body) => ProbeError::Auth(body_or_status(code, body)),
+        403 => ProbeError::Llm(body_or_status(code, body)),
         429 => ProbeError::RateLimit { retry_after },
         408 | 500..=599 => ProbeError::Transient(body_or_status(code, body)),
         _ => ProbeError::Llm(body_or_status(code, body)),
     }
+}
+
+fn body_looks_like_auth(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("api key")
+        || b.contains("api_key")
+        || b.contains("unauthorized")
+        || b.contains("invalid key")
+        || b.contains("incorrect api")
 }
 
 fn body_or_status(code: u16, body: &str) -> String {
@@ -581,10 +596,17 @@ fn parse_usage(value: Option<&Value>) -> Option<ProbeUsage> {
 fn first_u32(value: &Value, keys: &[&str]) -> Option<u32> {
     keys.iter().find_map(|key| {
         value.get(*key).and_then(|v| {
-            v.as_u64().and_then(|n| u32::try_from(n).ok()).or_else(|| {
-                v.as_f64()
-                    .and_then(|n| u32::try_from(n.round() as i64).ok())
-            })
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .or_else(|| {
+                    v.as_f64()
+                        .and_then(|n| u32::try_from(n.round() as i64).ok())
+                })
+                .or_else(|| {
+                    v.as_str()
+                        .and_then(|s| s.trim().parse::<f64>().ok())
+                        .and_then(|n| u32::try_from(n.round() as i64).ok())
+                })
         })
     })
 }
@@ -728,6 +750,17 @@ fn take_sse_tail(buf: &[u8]) -> String {
         .to_owned()
 }
 
+fn sse_tail_is_truncated(line: &str) -> bool {
+    let data = if let Some(rest) = line.strip_prefix("data:") {
+        rest.trim()
+    } else if line.trim_start().starts_with('{') {
+        line.trim()
+    } else {
+        return false;
+    };
+    !data.is_empty() && data != "[DONE]" && serde_json::from_str::<Value>(data).is_err()
+}
+
 fn emit_sse_line(
     line: &str,
     open_tools: &mut HashMap<u64, OpenTool>,
@@ -781,7 +814,7 @@ fn emit_delta(
             .filter(|f| f.is_object())
             .or_else(|| delta.get("function_call").filter(|f| f.is_object()))
         {
-            emit_function(func, None, 0, open_tools, tx, true);
+            emit_function(func, None, 0, open_tools, tx, false);
         }
     }
 
@@ -1066,6 +1099,18 @@ mod tests {
         assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
         let text = err.to_string();
         assert!(!text.contains(SECRET), "{text}");
+    }
+
+    #[tokio::test]
+    async fn chat_403_model_forbidden_is_llm() {
+        let base = spawn_http(
+            403,
+            "Forbidden",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"model not allowed in this region"}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("403");
+        assert!(matches!(err, ProbeError::Llm(_)), "{err:?}");
     }
 
     #[test]

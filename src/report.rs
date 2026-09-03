@@ -34,7 +34,14 @@ impl CapabilityProfile {
                     "{:<28}{:?}  {:.1} / {:.1}",
                     format!("{}:", display_name(dim)),
                     probe.completed_level(),
-                    probe.score,
+                    if probe.is_skipped()
+                        || probe.is_synthesized_error()
+                        || probe.is_unprobed_default()
+                    {
+                        0.0
+                    } else {
+                        probe.score
+                    },
                     probe.max_score
                 );
                 let _ = writeln!(out, "{:<28}{}", "", probe.details);

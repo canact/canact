@@ -47,8 +47,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v74() {
-    assert_eq!(PROBE_SUITE_VERSION, 74);
+fn cache_key_format_is_model_provider_unset_v75() {
+    assert_eq!(PROBE_SUITE_VERSION, 75);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -56,7 +56,7 @@ fn cache_key_format_is_model_provider_unset_v74() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v74|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v75|full|novision|ctxnone");
 }
 
 #[test]
@@ -364,6 +364,38 @@ fn load_migrates_stale_no_tools_v7_to_weak_and_persists() {
     assert_eq!(stored["oneShotToolPlan"]["level"], "weak");
     assert_eq!(stored["multiTurnTaskSequencing"]["level"], "weak");
     assert_eq!(stored["jsonOutput"]["level"], "medium");
+}
+
+#[test]
+fn save_keeps_newer_other_model_row() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probes.json");
+    let mut a = ProbeCache::default();
+    let mut pa = sample_profile();
+    pa.model_id = "a".into();
+    a.put(pa);
+    a.save(&path).expect("save a");
+    let mut b = ProbeCache::default();
+    let mut pb = sample_profile();
+    pb.model_id = "b".into();
+    b.put(pb);
+    b.save(&path).expect("save b merges a");
+    let loaded = ProbeCache::load(&path).expect("load");
+    assert!(
+        loaded.find_profile("a", "p").is_some(),
+        "a must survive b save"
+    );
+    assert!(loaded.find_profile("b", "p").is_some(), "b must be stored");
+}
+
+#[test]
+fn load_rejects_oversized_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("huge.json");
+    let blob = vec![b'x'; 8 * 1024 * 1024 + 1];
+    std::fs::write(&path, blob).expect("write");
+    let err = ProbeCache::load(&path).expect_err("oversized");
+    assert!(err.to_string().contains("too large"), "{err}");
 }
 
 #[test]

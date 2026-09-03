@@ -170,7 +170,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      SSE buffers bytes so split UTF-8 is not corrupted.
 /// v74: vision Strong requires no refusal; code_syntax ignores
 ///      docstring `...`; empty Length on max_tokens is Transient.
-pub const PROBE_SUITE_VERSION: u32 = 74;
+/// v75: memory refusals are Weak; code_syntax uses the merge fence;
+///      JSON length 5.0; XML/unified-diff pick a real edit over a card;
+///      fenced Paris; ladder 2.84s; Length-empty token_efficiency Transient.
+pub const PROBE_SUITE_VERSION: u32 = 75;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -220,8 +223,15 @@ impl ProbeCache {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let contents = std::fs::read_to_string(path)?;
-        let mut cache: Self = serde_json::from_str(&contents)?;
+        let len = std::fs::metadata(path)?.len();
+        if len > 8 * 1024 * 1024 {
+            return Err(ProbeError::Internal(format!(
+                "probe cache is too large ({} bytes): {}",
+                len,
+                path.display()
+            )));
+        }
+        let mut cache = Self::read_disk(path)?;
         if cache.migrate_stale_tool_scores() {
             // Keep the migrated rows in memory even when rewrite fails.
             // The next process retries migrate against the stale file.
@@ -235,19 +245,49 @@ impl ProbeCache {
         Ok(cache)
     }
 
+    fn read_disk(path: &Path) -> Result<Self, ProbeError> {
+        let contents = std::fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&contents)?)
+    }
+
     /// Save cache to disk, creating parent directories if necessary.
     pub fn save(&self, path: &Path) -> Result<(), ProbeError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let contents = serde_json::to_string_pretty(self)?;
+        let mut profiles = self.profiles.clone();
+        if path.exists() {
+            if let Ok(disk) = Self::read_disk(path) {
+                for (key, theirs) in disk.profiles {
+                    match profiles.get(&key) {
+                        Some(ours) if ours.cached_at >= theirs.cached_at => {}
+                        _ => {
+                            profiles.insert(key, theirs);
+                        }
+                    }
+                }
+            }
+        }
+        let outgoing = Self { profiles };
+        let contents = serde_json::to_string_pretty(&outgoing)?;
         let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
         std::fs::write(&tmp, contents)?;
-        // Windows rename cannot replace an existing file.
+        // Windows rename cannot replace an existing file. Move the dest
+        // aside so a failed rename can restore it.
         #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)?;
+        {
+            let bak = path.with_extension("bak");
+            if path.exists() {
+                let _ = std::fs::remove_file(&bak);
+                std::fs::rename(path, &bak)?;
+            }
+            if let Err(err) = std::fs::rename(&tmp, path) {
+                let _ = std::fs::rename(&bak, path);
+                return Err(err.into());
+            }
+            let _ = std::fs::remove_file(&bak);
         }
+        #[cfg(not(windows))]
         std::fs::rename(&tmp, path)?;
         Ok(())
     }

@@ -22,7 +22,8 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
     if let Some(local) = local_provider_base_url(provider) {
         return local.to_owned();
     }
-    if from_openrouter {
+    let provider = provider.to_ascii_lowercase();
+    if from_openrouter || provider == "openrouter" || provider == "openrouter.ai" {
         "https://openrouter.ai/api/v1".to_owned()
     } else {
         "https://api.openai.com/v1".to_owned()
@@ -31,8 +32,41 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
 
 /// Cloud hosts that must not be called without an API key.
 pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
+    let host = url_host_hint(base_url);
+    host == "api.openai.com"
+        || host.ends_with(".openai.com")
+        || host == "openrouter.ai"
+        || host.ends_with(".openrouter.ai")
+        || host == "openai.azure.com"
+        || host.ends_with(".openai.azure.com")
+}
+
+/// True when the host or model looks local/free so the cheap suite is enough.
+pub fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
+    let provider = provider.to_ascii_lowercase();
     let url = base_url.to_ascii_lowercase();
-    url.contains("api.openai.com") || url.contains("openrouter.ai")
+    model.contains(":free")
+        || matches!(
+            provider.as_str(),
+            "ollama" | "lmstudio" | "vllm" | "localhost" | "127.0.0.1" | "::1" | "[::1]"
+        )
+        || url.contains("localhost")
+        || url.contains("127.0.0.1")
+        || url.contains("0.0.0.0")
+        || url.contains("[::1]")
+}
+
+fn url_host_hint(url: &str) -> String {
+    let url = url.to_ascii_lowercase();
+    let after_scheme = url.split("://").nth(1).unwrap_or(&url);
+    after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme)
+        .split(':')
+        .next()
+        .unwrap_or(after_scheme)
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -58,5 +92,15 @@ mod tests {
         );
         assert!(cloud_endpoint_requires_key("https://api.openai.com/v1"));
         assert!(cloud_endpoint_requires_key("https://openrouter.ai/api/v1"));
+        assert!(cloud_endpoint_requires_key(
+            "https://eastus.openai.azure.com/openai/v1"
+        ));
+        assert_eq!(
+            default_compat_base_url("openrouter", false),
+            "https://openrouter.ai/api/v1"
+        );
+        assert!(!cloud_endpoint_requires_key(
+            "https://myopenrouter.ai.internal/v1"
+        ));
     }
 }

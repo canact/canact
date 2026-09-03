@@ -420,11 +420,13 @@ fn unix_now() -> u64 {
 /// True when the host never answered (TCP/DNS/connect), not a scored reply.
 pub fn is_unreachable_host(err: &ProbeError) -> bool {
     let msg = err.to_string().to_ascii_lowercase();
+    if msg.contains("failed to connect:") {
+        return true;
+    }
     if msg.contains("timed out") || msg.contains("timeout") {
         return false;
     }
-    msg.contains("failed to connect")
-        || msg.contains("connection refused")
+    msg.contains("connection refused")
         || msg.contains("connect error")
         || msg.contains("dns error")
         || msg.contains("error trying to connect")

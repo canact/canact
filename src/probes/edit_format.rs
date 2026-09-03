@@ -169,23 +169,23 @@ Rename the function `greet` to `welcome` and change the greeting from \
     let has_minus_line = text.lines().any(|l| is_code_diff_line(l, '-'));
     let has_plus_line = text.lines().any(|l| is_code_diff_line(l, '+'));
 
-    let (score, details) = if is_unified_diff_card_echo(&text) {
+    let has_file_ref = text
+        .lines()
+        .any(|l| (l.starts_with("---") || l.starts_with("+++")) && l.contains("greet.rs"));
+    let minus_has_greet = text.lines().any(|l| {
+        l.starts_with('-') && !l.starts_with("---") && strip_comments(&l[1..]).contains("fn greet(")
+    });
+    let plus_has_welcome = text.lines().any(|l| {
+        l.starts_with('+')
+            && !l.starts_with("+++")
+            && strip_comments(&l[1..]).contains("fn welcome(")
+    });
+    let real_edit = has_file_ref && minus_has_greet && plus_has_welcome;
+
+    let (score, details) = if is_unified_diff_card_echo(&text) && !real_edit {
         (0.0, "Echoed the unified diff format card".to_string())
     } else if has_minus_header && has_plus_header && has_hunk && has_minus_line && has_plus_line {
-        let has_file_ref = text
-            .lines()
-            .any(|l| (l.starts_with("---") || l.starts_with("+++")) && l.contains("greet.rs"));
-        let minus_has_greet = text.lines().any(|l| {
-            l.starts_with('-')
-                && !l.starts_with("---")
-                && strip_comments(&l[1..]).contains("fn greet")
-        });
-        let plus_has_welcome = text.lines().any(|l| {
-            l.starts_with('+')
-                && !l.starts_with("+++")
-                && strip_comments(&l[1..]).contains("fn welcome")
-        });
-        if has_file_ref && minus_has_greet && plus_has_welcome {
+        if real_edit {
             (1.0, "Valid unified diff with correct +/- lines".to_string())
         } else {
             (0.5, "Valid diff structure but content unclear".to_string())
@@ -682,6 +682,43 @@ Rename welcome Welcome
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.score, 0.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_card_then_real_edit_is_strong() {
+        let response_text = "\
+The format uses -removed line and +added line.
+
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,3 +1,3 @@
+-fn greet(name: &str) -> String {
+-    format!(\"Hello, {}\", name)
++fn welcome(name: &str) -> String {
++    format!(\"Welcome, {}\", name)
+ }
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn unified_diff_name_only_is_not_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,1 +1,1 @@
+-fn greet
++fn welcome
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(result.level, CapabilityLevel::Strong, "{result:?}");
     }
 
     #[tokio::test]

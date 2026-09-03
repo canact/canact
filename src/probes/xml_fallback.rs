@@ -317,14 +317,39 @@ fn argument_span_starts_json_object(span: &str) -> bool {
 
 /// Try to extract the first `<tool_call>` block's name and parsed JSON arguments.
 fn parse_xml_tool_block(text: &str) -> Option<(String, serde_json::Value)> {
-    let start = text.find("<tool_call>")? + "<tool_call>".len();
-    let end = text[start..].find("</tool_call>")?;
-    let block = &text[start..start + end];
-
-    let name = extract_xml_element_simple(block, "name")?;
-    let args_str = extract_xml_element_simple(block, "arguments")?;
-    let args: serde_json::Value = serde_json::from_str(args_str.trim()).ok()?;
-    Some((name.trim().to_string(), args))
+    let mut search = 0;
+    let mut first = None;
+    let mut best_real = None;
+    while let Some(rel) = text.get(search..).and_then(|s| s.find("<tool_call>")) {
+        let start = search + rel + "<tool_call>".len();
+        let Some(end) = text.get(start..).and_then(|s| s.find("</tool_call>")) else {
+            break;
+        };
+        let block = &text[start..start + end];
+        if let (Some(name), Some(args_str)) = (
+            extract_xml_element_simple(block, "name"),
+            extract_xml_element_simple(block, "arguments"),
+        ) {
+            if let Ok(args) = serde_json::from_str::<serde_json::Value>(args_str.trim()) {
+                let parsed = (name.trim().to_string(), args);
+                if first.is_none() {
+                    first = Some(parsed.clone());
+                }
+                let real_read = parsed.0 == "read_file"
+                    && parsed
+                        .1
+                        .as_object()
+                        .is_some_and(|o| nonempty_string_arg(o, "path"))
+                    && !is_xml_format_card_echo(&parsed.0, &parsed.1);
+                if real_read {
+                    best_real = Some(parsed);
+                    break;
+                }
+            }
+        }
+        search = start + end + "</tool_call>".len();
+    }
+    best_real.or(first)
 }
 
 /// Extract the text content of a simple XML element like `<tag>content</tag>`.
@@ -763,6 +788,25 @@ mod tests {
             "single-quoted real path is still an attempt: {result:?}"
         );
         assert_eq!(result.score, 0.4);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_calling_card_then_real_block_is_strong() {
+        let response_text = "\
+<tool_call>
+<name>tool_name</name>
+<arguments>{\"param\": \"value\"}</arguments>
+</tool_call>
+<tool_call>
+<name>read_file</name>
+<arguments>{\"path\": \"/tmp/example.txt\"}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

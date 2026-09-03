@@ -40,7 +40,7 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty());
-            let length = val.get("length").and_then(|v| v.as_u64());
+            let length = val.get("length").and_then(json_length_u64);
             let reversed = val
                 .get("reversed")
                 .and_then(|v| v.as_str())
@@ -105,7 +105,7 @@ pub async fn probe_instruction_following<C: ProbeClient>(
     };
 
     let response = llm.chat(request).await?;
-    let trimmed = response.text.trim();
+    let trimmed = peel_one_fence(response.text.trim());
     let word_count = trimmed.split_whitespace().count();
 
     let (score, details) = if word_count == 0 {
@@ -140,6 +140,30 @@ fn asked_capital(word: &str) -> bool {
     word.trim()
         .trim_matches(|c: char| !c.is_ascii_alphanumeric())
         .eq_ignore_ascii_case("paris")
+}
+
+fn peel_one_fence(s: &str) -> &str {
+    let t = s.trim();
+    let Some(rest) = t.strip_prefix("```") else {
+        return t;
+    };
+    let rest = match rest.find('\n') {
+        Some(i) => &rest[i + 1..],
+        None => rest,
+    };
+    rest.strip_suffix("```").map(str::trim).unwrap_or(t)
+}
+
+fn json_length_u64(v: &serde_json::Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return Some(n);
+    }
+    let n = v.as_f64()?;
+    if n.is_finite() && n >= 0.0 && n.fract() == 0.0 {
+        Some(n as u64)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +273,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn json_output_strong_for_float_length() {
+        let llm = MockLlm {
+            response: text_response(r#"{"word":"hello","length":5.0,"reversed":"olleh"}"#),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+    }
+
+    #[tokio::test]
     async fn json_output_strong_for_markdown_wrapped_json() {
         let llm = MockLlm {
             response: text_response(
@@ -269,6 +302,16 @@ mod tests {
         assert_eq!(result.score, 0.0);
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert_eq!(result.details, "Empty response");
+    }
+
+    #[tokio::test]
+    async fn instruction_following_fenced_paris_is_strong() {
+        let llm = MockLlm {
+            response: text_response("```\nParis\n```"),
+        };
+        let result = probe_instruction_following(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

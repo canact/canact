@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
     ProbeError, ProbeRun, ProbeRunner, cloud_endpoint_requires_key, default_compat_base_url,
-    list_model_ids, missing_model_message, run_mcp_stdio,
+    list_model_ids, looks_cheap, missing_model_message, overlay_context_tokens, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -150,8 +150,11 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     } else {
         provider_hint
     };
-    let cache_path = args.cache.clone().unwrap_or_else(default_cache_path);
-    let mut cache = ProbeCache::load(&cache_path).unwrap_or_default();
+    let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
+    let mut cache = ProbeCache::load(&cache_path).map_err(|e| {
+        eprintln!("error: failed to load cache {}: {e}", cache_path.display());
+        1u8
+    })?;
     let vision = args.vision;
 
     if !args.force {
@@ -202,6 +205,30 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     } else {
         looks_cheap(&provider, &model, &base_url)
     };
+    if !args.force {
+        if let Some(profile) = cache
+            .get_with_knobs(&model, &provider, cheap, vision, args.advertised_context)
+            .cloned()
+            .or_else(|| {
+                if args.full {
+                    None
+                } else {
+                    cache.find_profile(&model, &provider).cloned()
+                }
+            })
+        {
+            return emit_profile(
+                &profile,
+                args.json,
+                args.verbose,
+                HostPolicyMeta {
+                    cacheable: true,
+                    skip_expensive: cheap,
+                    advertised_context_tokens: args.advertised_context,
+                },
+            );
+        }
+    }
     let catalog = CatalogPriors {
         advertised_context_tokens: args.advertised_context,
         supports_vision: if args.vision {
@@ -257,7 +284,7 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         eprintln!("error: specify --aider or --cline");
         return Err(1);
     }
-    let cache_path = args.cache.clone().unwrap_or_else(default_cache_path);
+    let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
     let cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
@@ -275,17 +302,18 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
     let overlay = if args.aider {
         HostOverlay::aider(&profile, args.advertised_context)
     } else {
-        let overlay = HostOverlay::cline(&profile, args.advertised_context);
-        if let HostOverlay::Cline(info) = &overlay {
-            if info.context_window.is_none() {
-                eprintln!(
-                    "error: no measured context window; re-run `canact probe` without --cheap"
-                );
-                return Err(1);
-            }
-        }
-        overlay
+        HostOverlay::cline(&profile, args.advertised_context)
     };
+    let missing_window = match &overlay {
+        HostOverlay::Cline(info) => info.context_window.is_none(),
+        HostOverlay::Aider(_) => {
+            overlay_context_tokens(&profile, args.advertised_context).is_none()
+        }
+    };
+    if missing_window {
+        eprintln!("error: no measured context window; re-run `canact probe` without --cheap");
+        return Err(1);
+    }
     let files = overlay.files();
     let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
     if dir.exists() && !dir.is_dir() {
@@ -417,39 +445,6 @@ fn provider_from_url(base_url: &str) -> String {
         .unwrap_or_else(|| "openai-compat".to_owned())
 }
 
-fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
-    let provider = provider.to_ascii_lowercase();
-    let url = base_url.to_ascii_lowercase();
-    model.contains(":free")
-        || provider == "ollama"
-        || provider == "lmstudio"
-        || provider == "vllm"
-        || provider == "localhost"
-        || provider == "127.0.0.1"
-        || is_ipv6_loopback_label(&provider)
-        || url.contains("localhost")
-        || url.contains("127.0.0.1")
-        || url.contains("0.0.0.0")
-        || url.contains("[::1]")
-        || ipv6_loopback_host(base_url)
-}
-
-fn is_ipv6_loopback_label(host: &str) -> bool {
-    let host = host.trim();
-    let host = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-    host == "::1"
-}
-
-fn ipv6_loopback_host(base_url: &str) -> bool {
-    reqwest::Url::parse(base_url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|h| is_ipv6_loopback_label(&h))
-}
-
 fn default_cache_path() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
@@ -457,9 +452,22 @@ fn default_cache_path() -> PathBuf {
         .join("probes.json")
 }
 
+fn expand_tilde(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if raw == "~" {
+        return dirs::home_dir().unwrap_or(path);
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    path
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ipv6_loopback_host, looks_cheap};
+    use canact::looks_cheap;
 
     #[test]
     fn looks_cheap_treats_ipv6_loopback_like_localhost() {
@@ -467,10 +475,6 @@ mod tests {
         assert!(looks_cheap("::1", "llama3", "http://example.invalid/v1"));
         assert!(looks_cheap("[::1]", "llama3", "http://example.invalid/v1"));
         assert!(looks_cheap("localhost", "llama3", "http://localhost:11434"));
-        assert!(
-            ipv6_loopback_host("http://[::1]:11434"),
-            "parsed [::1] host must be cheap"
-        );
         assert!(!looks_cheap(
             "openai",
             "gpt-4o",
@@ -480,6 +484,5 @@ mod tests {
             !looks_cheap("openai", "gpt-4o", "https://[2001:db8::1]/v1"),
             "non-loopback IPv6 must not match via a naive ::1 substring"
         );
-        assert!(!ipv6_loopback_host("https://[2001:db8::1]/v1"));
     }
 }
