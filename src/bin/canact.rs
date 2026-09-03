@@ -279,6 +279,13 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
     };
     let files = overlay.files();
     let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
+    if dir.exists() && !dir.is_dir() {
+        eprintln!(
+            "error: --dir must be a directory (got a file: {})",
+            dir.display()
+        );
+        return Err(1);
+    }
     match overlay.write_to(&dir) {
         Ok(paths) => {
             for path in paths {

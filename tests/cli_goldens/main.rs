@@ -522,3 +522,44 @@ fn export_aider_writes_cwd_when_dir_omitted() {
     );
     assert!(stderr.contains("wrote"), "stderr={stderr}");
 }
+
+#[test]
+fn export_dir_file_explains_not_os_error_17() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(cached_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+    ));
+    cache.save(&cache_path).expect("save");
+    let as_file = dir.path().join("notadir");
+    std::fs::write(&as_file, b"nope").expect("file");
+    let out = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            as_file.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("must be a directory"), "stderr={stderr}");
+    assert!(
+        !stderr.contains("os error 17"),
+        "raw OS error leaked: {stderr}"
+    );
+}
