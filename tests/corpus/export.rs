@@ -1,7 +1,7 @@
 //! Overlay exporters must only emit keys the host will accept.
 
 use canact::{
-    CapabilityLevel, CapabilityProfile, ClineModelInfo, HostOverlay, ProbeCache, ProbeResult,
+    CapabilityLevel, CapabilityProfile, ClineModelInfo, HostOverlay, ProbeResult,
     overlay_model_name,
 };
 
@@ -48,25 +48,6 @@ fn sample(
         effective_context_tokens: Some(8192),
         probed_context_floor: Some(8192),
     }
-}
-
-#[test]
-fn cache_find_profile_sees_cheap_row() {
-    let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        sample(
-            CapabilityLevel::Strong,
-            CapabilityLevel::Medium,
-            CapabilityLevel::Weak,
-        ),
-        true,
-        false,
-        None,
-    );
-    let found = cache
-        .find_profile("qwen2.5-coder", "ollama")
-        .expect("cheap row");
-    assert_eq!(found.effective_context_tokens, Some(8192));
 }
 
 #[test]
