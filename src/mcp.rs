@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError, ProbeRunner,
+    cloud_endpoint_requires_key, default_compat_base_url,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -189,12 +190,19 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
                     .filter(|s| !s.is_empty())
             }),
     };
+    let from_openrouter = api_key.is_some() && std::env::var("OPENROUTER_API_KEY").is_ok();
     let base_url = args
         .get("base_url")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_owned());
+        .unwrap_or_else(|| default_compat_base_url(&provider, from_openrouter));
+    if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
+        return Err(
+            "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY), or pass base_url for a local host"
+                .to_owned(),
+        );
+    }
     let catalog = CatalogPriors {
         advertised_context_tokens: advertised,
         supports_vision: if vision { Some(true) } else { None },
