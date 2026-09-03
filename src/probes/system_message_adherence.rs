@@ -109,7 +109,10 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
 fn split_status_prefix(text: &str) -> Option<&str> {
     let rest = text.trim_start();
     let bytes = rest.as_bytes();
-    if rest.len() < 6 || !rest[..6].eq_ignore_ascii_case("status") {
+    if !bytes
+        .get(..6)
+        .is_some_and(|b| b.eq_ignore_ascii_case(b"status"))
+    {
         return None;
     }
     let mut i = 6;
@@ -123,7 +126,10 @@ fn split_status_prefix(text: &str) -> Option<&str> {
     while i < bytes.len() && bytes[i].is_ascii_whitespace() {
         i += 1;
     }
-    if i + 2 > rest.len() || !rest[i..i + 2].eq_ignore_ascii_case("ok") {
+    if !bytes
+        .get(i..i + 2)
+        .is_some_and(|b| b.eq_ignore_ascii_case(b"ok"))
+    {
         return None;
     }
     i += 2;
@@ -219,6 +225,15 @@ mod tests {
         };
         let result = probe_system_message_adherence(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
+    }
+
+    #[tokio::test]
+    async fn utf8_prefix_without_status_does_not_panic() {
+        let llm = MockLlm {
+            response: text_response("stat你 add two and three"),
+        };
+        let result = probe_system_message_adherence(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak, "{result:?}");
     }
 
     #[tokio::test]
