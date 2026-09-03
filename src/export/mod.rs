@@ -115,7 +115,7 @@ pub fn overlay_model_name(profile: &CapabilityProfile) -> String {
     }
 }
 
-fn normalize_overlay_provider(provider: &str) -> &str {
+pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
     match provider {
         "openrouter.ai" | "openrouter" => "openrouter",
         "api.openai.com" | "openai" => "openai",

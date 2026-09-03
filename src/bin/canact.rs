@@ -461,7 +461,7 @@ fn cached_probe(
     {
         return Some((profile.clone(), skip_expensive));
     }
-    if full {
+    if full || vision {
         return None;
     }
     cache
