@@ -179,7 +179,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      requires Hello/Welcome in the +/- body.
 /// v79: stream string indexes, numeric tool ids, array content,
 ///      finish_reason on delta, capped error bodies.
-pub const PROBE_SUITE_VERSION: u32 = 79;
+/// v80: JSON length "5"; port 9,847; old_text aliases; XML path child.
+pub const PROBE_SUITE_VERSION: u32 = 80;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

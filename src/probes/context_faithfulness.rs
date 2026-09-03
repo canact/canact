@@ -69,7 +69,7 @@ pub async fn probe_context_faithfulness<C: ProbeClient>(
     let response = llm.chat(request).await?;
     let lower = response.text.to_lowercase();
 
-    let has_port = lower.contains("9847");
+    let has_port = lower.contains("9847") || lower.contains("9,847");
     let has_version = lower.contains("3.7.42") || lower.contains("v3.7.42-rc1");
     let has_timeout = recalls_timeout(&lower);
 
@@ -189,6 +189,18 @@ mod tests {
             result.details
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn context_port_comma_thousands_counts() {
+        let llm = MockLlm {
+            response: text_response("9,847\nv3.7.42-rc1\n1750"),
+        };
+        let result = probe_context_faithfulness(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "9,847 must count as port 9847: {result:?}"
+        );
     }
 
     #[tokio::test]

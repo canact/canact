@@ -14,7 +14,8 @@ use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    nonempty_string_arg, refuse_truncated_incomplete, refuse_truncated_tool_call, tool, user_text,
+    nonempty_string_arg, nonempty_string_arg_any, refuse_truncated_incomplete,
+    refuse_truncated_tool_call, tool, user_text,
 };
 
 /// Probe one-shot ordered multi-tool planning (single LLM turn).
@@ -101,8 +102,8 @@ pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeRe
     let is_precise_edit = |c: &ProbeToolCall| {
         c.name == "edit_file"
             && nonempty_string_arg(&c.arguments, "path")
-            && nonempty_string_arg(&c.arguments, "old_text")
-            && nonempty_string_arg(&c.arguments, "new_text")
+            && nonempty_string_arg_any(&c.arguments, &["old_text", "old_string"])
+            && nonempty_string_arg_any(&c.arguments, &["new_text", "new_string"])
     };
     let is_precise_run =
         |c: &ProbeToolCall| c.name == "run_command" && nonempty_string_arg(&c.arguments, "command");

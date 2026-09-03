@@ -5,8 +5,8 @@ use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{CapabilityLevel, ProbeResult, classify};
 
 use super::{
-    has_visible_arg_text, nonempty_string_arg, refuse_truncated_incomplete,
-    refuse_truncated_tool_call, tool, user_text,
+    has_visible_arg_text, nonempty_string_arg, nonempty_string_arg_any,
+    refuse_truncated_incomplete, refuse_truncated_tool_call, tool, user_text,
 };
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
@@ -325,8 +325,8 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
                             .iter()
                             .filter(|e| {
                                 e.as_object().is_some_and(|m| {
-                                    nonempty_string_arg(m, "old_text")
-                                        && nonempty_string_arg(m, "new_text")
+                                    nonempty_string_arg_any(m, &["old_text", "old_string"])
+                                        && nonempty_string_arg_any(m, &["new_text", "new_string"])
                                 })
                             })
                             .count();
@@ -1065,6 +1065,28 @@ mod tests {
         let result = probe_nested_arguments(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_old_string_alias_is_strong() {
+        let response = multi_tool_call_response(vec![call(
+            "call_1",
+            "edit_file",
+            serde_json::json!({
+                "file_path": "/tmp/app.py",
+                "edits": [
+                    {"old_string": "Hello", "new_string": "Hi"},
+                    {"old_string": "World", "new_string": "Earth"}
+                ]
+            }),
+        )]);
+        let llm = MockLlm { response };
+        let result = probe_nested_arguments(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "old_string/new_string aliases must score Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

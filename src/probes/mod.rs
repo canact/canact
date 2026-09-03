@@ -188,6 +188,14 @@ pub(crate) fn nonempty_string_arg(
         .is_some_and(has_visible_arg_text)
 }
 
+/// True when any of `keys` is a nonempty string (old_text / old_string aliases).
+pub(crate) fn nonempty_string_arg_any(
+    args: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> bool {
+    keys.iter().any(|key| nonempty_string_arg(args, key))
+}
+
 pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value) -> ProbeTool {
     ProbeTool {
         name: name.to_string(),
