@@ -168,7 +168,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v73: blank-path parallel reads no longer outrank valid paths;
 ///      Length on code/faithfulness/memory/system is uncacheable;
 ///      SSE buffers bytes so split UTF-8 is not corrupted.
-pub const PROBE_SUITE_VERSION: u32 = 73;
+/// v74: vision Strong requires no refusal; code_syntax ignores
+///      docstring `...`; empty Length on max_tokens is Transient.
+pub const PROBE_SUITE_VERSION: u32 = 74;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -239,30 +241,35 @@ impl ProbeCache {
             std::fs::create_dir_all(parent)?;
         }
         let contents = serde_json::to_string_pretty(self)?;
-        let tmp = path.with_extension("tmp");
+        let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
         std::fs::write(&tmp, contents)?;
+        // Windows rename cannot replace an existing file.
+        #[cfg(windows)]
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
         std::fs::rename(&tmp, path)?;
         Ok(())
     }
 
-    /// First valid current-suite profile for `model_id` + `provider`.
+    /// Newest valid current-suite profile for `model_id` + `provider`.
     ///
-    /// Tries the default knob key, then any matching row. Export and MCP
+    /// Tries the default knob key, then the newest matching row. Export and MCP
     /// use this so a cheap-suite cache still produces an overlay.
     pub fn find_profile(&self, model_id: &str, provider: &str) -> Option<&CapabilityProfile> {
         if let Some(profile) = self.get(model_id, provider) {
             return Some(profile);
         }
-        self.profiles.values().find_map(|entry| {
-            if !Self::is_valid(entry) {
-                return None;
-            }
-            if entry.probe_suite_version != PROBE_SUITE_VERSION {
-                return None;
-            }
-            let p = &entry.profile;
-            (p.model_id == model_id && p.provider == provider).then_some(p)
-        })
+        self.profiles
+            .values()
+            .filter(|entry| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == PROBE_SUITE_VERSION
+                    && entry.profile.model_id == model_id
+                    && entry.profile.provider == provider
+            })
+            .max_by_key(|entry| entry.cached_at)
+            .map(|entry| &entry.profile)
     }
 
     /// Get a cached profile for the current suite, default effort, and default knobs.

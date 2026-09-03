@@ -524,6 +524,36 @@ fn export_aider_writes_cwd_when_dir_omitted() {
 }
 
 #[test]
+fn export_cline_without_measured_window_exits_1() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.effective_context_tokens = None;
+    profile.probed_context_floor = None;
+    let mut cache = ProbeCache::default();
+    cache.put(profile);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "export",
+            "--cline",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            dir.path().to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(stderr.contains("measured context"), "stderr={stderr}");
+}
+
+#[test]
 fn export_dir_file_explains_not_os_error_17() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");

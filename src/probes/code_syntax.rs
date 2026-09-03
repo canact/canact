@@ -52,14 +52,17 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     }
 
     let has_def = trimmed.contains("def merge_sorted") || trimmed.contains("def merge");
-    let has_return = trimmed.contains("return ");
+    let has_return = trimmed.contains("return ") || trimmed.contains("return(");
 
     let parens_balanced = count_char(trimmed, '(') == count_char(trimmed, ')');
     let brackets_balanced = count_char(trimmed, '[') == count_char(trimmed, ']');
     let braces_balanced = count_char(trimmed, '{') == count_char(trimmed, '}');
     let delimiters_ok = parens_balanced && brackets_balanced && braces_balanced;
 
-    let has_ellipsis = trimmed.contains("...");
+    let has_ellipsis = trimmed.lines().any(|l| {
+        let t = l.trim().trim_start_matches('#').trim();
+        t == "..." || t == "...."
+    });
     let has_pass_only = trimmed.lines().any(|l| l.trim() == "pass")
         && !trimmed.contains("return")
         && !trimmed.contains("append");
@@ -145,6 +148,30 @@ def merge_sorted(a, b):
         let result = probe_code_syntax(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_strong_with_docstring_ellipsis() {
+        let code = "\
+def merge_sorted(a, b):
+    \"\"\"Merge two lists...\"\"\"
+    return a + b
+";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn code_syntax_strong_for_return_paren() {
+        let code = "def merge_sorted(a, b):\n    return(sorted(a + b))";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
     }
 
     #[tokio::test]

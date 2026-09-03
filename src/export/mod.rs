@@ -58,7 +58,21 @@ impl HostOverlay {
         let mut paths = Vec::new();
         for file in self.files() {
             let path = dir.join(file.name);
-            std::fs::write(&path, file.body.as_bytes())?;
+            if path
+                .symlink_metadata()
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("refusing to write through symlink {}", path.display()),
+                ));
+            }
+            let body = match self {
+                Self::Aider(_) if path.exists() => merge_overlay_file(&path, &file)?,
+                _ => file.body,
+            };
+            std::fs::write(&path, body.as_bytes())?;
             paths.push(path);
         }
         Ok(paths)
@@ -87,6 +101,70 @@ pub fn overlay_model_name(profile: &CapabilityProfile) -> String {
 /// Context tokens the host should compact against.
 pub fn overlay_context_tokens(profile: &CapabilityProfile, advertised: Option<u32>) -> Option<u32> {
     profile.recommended_context_tokens(advertised)
+}
+
+fn merge_overlay_file(path: &std::path::Path, file: &OverlayFiles) -> std::io::Result<String> {
+    let existing = std::fs::read_to_string(path)?;
+    match file.name {
+        ".aider.model.settings.yml" => Ok(merge_aider_settings_yaml(&existing, &file.body)),
+        ".aider.model.metadata.json" => merge_aider_metadata_json(&existing, &file.body),
+        _ => Ok(file.body.clone()),
+    }
+}
+
+fn merge_aider_settings_yaml(existing: &str, incoming: &str) -> String {
+    let Some(name_line) = incoming.lines().find(|l| l.starts_with("- name: ")) else {
+        return incoming.to_owned();
+    };
+    let mut out = String::new();
+    let mut skipping = false;
+    let mut replaced = false;
+    for line in existing.lines() {
+        if line.starts_with("- name: ") {
+            if line == name_line {
+                skipping = true;
+                if !replaced {
+                    out.push_str(incoming);
+                    if !incoming.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    replaced = true;
+                }
+                continue;
+            }
+            skipping = false;
+        }
+        if skipping {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !replaced {
+        if !out.ends_with('\n') && !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(incoming);
+        if !incoming.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn merge_aider_metadata_json(existing: &str, incoming: &str) -> std::io::Result<String> {
+    let mut dest: serde_json::Map<String, serde_json::Value> = serde_json::from_str(existing)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let src: serde_json::Map<String, serde_json::Value> = serde_json::from_str(incoming)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    for (k, v) in src {
+        dest.insert(k, v);
+    }
+    Ok(format!(
+        "{}\n",
+        serde_json::to_string_pretty(&dest)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+    ))
 }
 
 #[cfg(test)]
@@ -178,5 +256,49 @@ mod tests {
             aider_edit_format(EditFormatRecommendation::DiffFenced),
             "diff-fenced"
         );
+    }
+
+    #[test]
+    fn merge_aider_settings_appends_other_model() {
+        let existing = "- name: other/m\n  edit_format: whole\n  use_repo_map: false\n";
+        let incoming = "- name: ollama/qwen2.5-coder\n  edit_format: diff\n  use_repo_map: true\n";
+        let merged = merge_aider_settings_yaml(existing, incoming);
+        assert!(merged.contains("other/m"), "{merged}");
+        assert!(merged.contains("ollama/qwen2.5-coder"), "{merged}");
+    }
+
+    #[test]
+    fn merge_aider_settings_replaces_same_model() {
+        let existing =
+            "- name: ollama/qwen2.5-coder\n  edit_format: whole\n  use_repo_map: false\n";
+        let incoming = "- name: ollama/qwen2.5-coder\n  edit_format: diff\n  use_repo_map: true\n";
+        let merged = merge_aider_settings_yaml(existing, incoming);
+        assert_eq!(merged.matches("- name:").count(), 1);
+        assert!(merged.contains("edit_format: diff"), "{merged}");
+        assert!(!merged.contains("whole"), "{merged}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_to_refuses_symlink_dest() {
+        let dir = tempfile::tempdir().expect("temp");
+        let target = dir.path().join("real.yml");
+        std::fs::write(&target, b"keep\n").expect("target");
+        let dest = dir.path().join(".aider.model.settings.yml");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, &dest).expect("symlink");
+            let overlay = HostOverlay::aider(
+                &sample_profile(
+                    CapabilityLevel::Strong,
+                    CapabilityLevel::Medium,
+                    CapabilityLevel::Weak,
+                ),
+                None,
+            );
+            let err = overlay.write_to(dir.path()).expect_err("symlink");
+            assert!(err.to_string().contains("symlink"), "{err}");
+            assert_eq!(std::fs::read_to_string(&target).expect("read"), "keep\n");
+        }
     }
 }
