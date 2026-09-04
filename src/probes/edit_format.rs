@@ -242,7 +242,8 @@ Rename the function `greet` to `welcome` and change the greeting from \
 }
 
 /// `fn greet(` / `fn welcome(` must start a line (after indent), not sit mid-sentence.
-/// The rest of the line must look like a Rust signature, not English (`should say`).
+/// The rest of the line must look like a Rust signature, not English
+/// (`should say`, `says`, `must print`).
 fn has_code_fn_token(text: &str, token: &str) -> bool {
     text.lines().any(|line| {
         let t = line.trim_start();
@@ -327,6 +328,16 @@ fn is_rust_type_tokens(s: &str) -> bool {
                 word,
                 "should"
                     | "say"
+                    | "says"
+                    | "said"
+                    | "saying"
+                    | "will"
+                    | "must"
+                    | "print"
+                    | "prints"
+                    | "does"
+                    | "doesn"
+                    | "doesnt"
                     | "the"
                     | "a"
                     | "an"
@@ -757,6 +768,55 @@ fn welcome(name: &str) -> String should say Welcome
     }
 
     #[tokio::test]
+    async fn search_replace_lecture_says_is_not_strong() {
+        for (old_line, new_line) in [
+            (
+                "fn greet(name: &str) -> String says Hello",
+                "fn welcome(name: &str) -> String says Welcome",
+            ),
+            (
+                "fn greet(name: &str) -> String said Hello",
+                "fn welcome(name: &str) -> String said Welcome",
+            ),
+            (
+                "fn greet(name: &str) -> String saying Hello",
+                "fn welcome(name: &str) -> String saying Welcome",
+            ),
+            (
+                "fn greet(name: &str) -> String will print Hello",
+                "fn welcome(name: &str) -> String will print Welcome",
+            ),
+            (
+                "fn greet(name: &str) -> String prints Hello",
+                "fn welcome(name: &str) -> String prints Welcome",
+            ),
+            (
+                "fn greet(name: &str) -> String doesn't print Hello",
+                "fn welcome(name: &str) -> String doesn't print Welcome",
+            ),
+        ] {
+            let response_text = format!(
+                "\
+<<<<<<< SEARCH
+src/greet.rs
+{old_line}
+=======
+{new_line}
+>>>>>>> REPLACE"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_search_replace(&llm).await.unwrap();
+            assert_ne!(
+                result.score, 1.0,
+                "lecture verbs after -> Type must not be SearchReplace Strong: {old_line:?} {result:?}"
+            );
+            assert_ne!(result.level, CapabilityLevel::Strong, "{old_line:?}");
+        }
+    }
+
+    #[tokio::test]
     async fn search_replace_lecture_fn_greet_paren_is_not_strong() {
         let response_text = "\
 <<<<<<< SEARCH
@@ -1098,6 +1158,26 @@ The format uses -removed line and +added line.
         assert_ne!(
             result.score, 1.0,
             "start-of-line lecture signatures must not be UnifiedDiff Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_lecture_must_print_is_not_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,1 +1,1 @@
+-fn greet(name: &str) -> String must print Hello
++fn welcome(name: &str) -> String must print Welcome
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "must print after -> Type must not be UnifiedDiff Strong: {result:?}"
         );
         assert_ne!(result.level, CapabilityLevel::Strong);
     }

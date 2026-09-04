@@ -228,7 +228,12 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      didn't-recall / I'd-forgotten; hyphenless warehouse and proto;
 ///      hours and 1750 minutes are not the planted ms fact; trailing-
 ///      comma or commented array wrap stays Weak.
-pub const PROBE_SUITE_VERSION: u32 = 92;
+/// v93: leftover lecture verbs after `-> Type`; letters plus cannot-read
+///      is Medium; identify-the-font and a/any typeface stay Strong;
+///      cannot-quite-read and not-readable are not Strong; memory
+///      say/give/wouldn't/permitted/retrieve/no-longer; 1750/2840
+///      seconds are not the planted ms fact.
+pub const PROBE_SUITE_VERSION: u32 = 93;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
