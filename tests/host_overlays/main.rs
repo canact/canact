@@ -195,6 +195,98 @@ fn cli_export_aider_and_cline_from_cache() {
 }
 
 #[test]
+fn cli_export_keeps_openrouter_openai_model() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut profile = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "openai/gpt-4o".into();
+    profile.provider = "openrouter".into();
+    cache.put(profile);
+    cache.save(&cache_path).expect("save");
+    let out_dir = dir.path().join("overlays");
+
+    let aider = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "openai/gpt-4o",
+            "--provider",
+            "openrouter",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            out_dir.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("export aider");
+    assert!(
+        aider.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&aider.stderr)
+    );
+    let settings = std::fs::read_to_string(out_dir.join(".aider.model.settings.yml")).expect("yml");
+    assert!(
+        settings.contains("name: openrouter/openai/gpt-4o"),
+        "Aider/LiteLLM expect openrouter/openai/gpt-4o, got {settings}"
+    );
+    let metadata =
+        std::fs::read_to_string(out_dir.join(".aider.model.metadata.json")).expect("metadata");
+    let value: serde_json::Value = serde_json::from_str(&metadata).expect("json");
+    assert!(
+        value.get("openrouter/openai/gpt-4o").is_some(),
+        "metadata key must stay openrouter/openai/gpt-4o: {value}"
+    );
+}
+
+#[test]
+fn cli_export_normalizes_mixed_case_litellm_provider() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut profile = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "gpt-4o".into();
+    profile.provider = "OpenAI".into();
+    cache.put(profile);
+    cache.save(&cache_path).expect("save");
+    let out_dir = dir.path().join("overlays");
+
+    let aider = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "gpt-4o",
+            "--provider",
+            "OpenAI",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            out_dir.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("export aider");
+    assert!(
+        aider.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&aider.stderr)
+    );
+    let settings = std::fs::read_to_string(out_dir.join(".aider.model.settings.yml")).expect("yml");
+    assert!(
+        settings.contains("name: openai/gpt-4o"),
+        "mixed-case OpenAI must export as openai/gpt-4o, got {settings}"
+    );
+    let metadata =
+        std::fs::read_to_string(out_dir.join(".aider.model.metadata.json")).expect("metadata");
+    let value: serde_json::Value = serde_json::from_str(&metadata).expect("json");
+    assert_eq!(
+        value["openai/gpt-4o"]["litellm_provider"], "openai",
+        "litellm_provider must match overlay_model_name family, got {value}"
+    );
+}
+
+#[test]
 fn cli_export_advertised_context_selects_matching_row() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");

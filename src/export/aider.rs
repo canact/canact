@@ -60,7 +60,10 @@ impl AiderOverlay {
             AiderMetadataEntry {
                 max_input_tokens: ctx,
                 max_output_tokens: ctx,
-                litellm_provider: super::normalize_overlay_provider(&profile.provider).to_owned(),
+                litellm_provider: super::normalize_overlay_provider(
+                    &profile.provider.to_ascii_lowercase(),
+                )
+                .to_owned(),
                 mode: "chat".to_owned(),
             },
         );
@@ -153,6 +156,45 @@ mod tests {
         let name = "openrouter/anthropic/claude-3.5-sonnet";
         let meta = overlay.metadata.get(name).expect("meta");
         assert_eq!(meta.litellm_provider, "openrouter");
+    }
+
+    #[test]
+    fn mixed_case_provider_normalizes_litellm_provider() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+
+        p.provider = "OpenAI".to_owned();
+        p.model_id = "gpt-4o".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay.metadata.get("openai/gpt-4o").expect("openai meta");
+        assert_eq!(
+            meta.litellm_provider, "openai",
+            "mixed-case OpenAI must match overlay_model_name family openai"
+        );
+
+        p.provider = "OpenRouter".to_owned();
+        p.model_id = "anthropic/claude-3.5-sonnet".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("openrouter/anthropic/claude-3.5-sonnet")
+            .expect("openrouter meta");
+        assert_eq!(
+            meta.litellm_provider, "openrouter",
+            "mixed-case OpenRouter must match overlay_model_name family openrouter"
+        );
+
+        p.provider = "Localhost".to_owned();
+        p.model_id = "qwen".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay.metadata.get("ollama/qwen").expect("ollama meta");
+        assert_eq!(
+            meta.litellm_provider, "ollama",
+            "mixed-case Localhost must match overlay_model_name family ollama"
+        );
     }
 
     #[test]

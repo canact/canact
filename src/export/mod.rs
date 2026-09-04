@@ -120,7 +120,9 @@ fn strip_overlay_model_prefix<'a>(
     raw_lower: &str,
 ) -> Option<&'a str> {
     let model_lower = model_id.to_ascii_lowercase();
-    for prefix in [normalized, raw_lower, "openai", "openrouter"] {
+    // Only strip this overlay's own provider (normalized family or raw host).
+    // Do not strip openai/ from OpenRouter models such as openai/gpt-4o.
+    for prefix in [normalized, raw_lower] {
         if prefix.is_empty() {
             continue;
         }
@@ -136,11 +138,11 @@ fn strip_overlay_model_prefix<'a>(
 }
 
 pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
-    match provider {
+    match provider.to_ascii_lowercase().as_str() {
         "openrouter.ai" | "openrouter" => "openrouter",
         "api.openai.com" | "openai" => "openai",
         "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => "ollama",
-        other => other,
+        _ => provider,
     }
 }
 
@@ -315,6 +317,28 @@ mod tests {
         p.provider = "openai".to_owned();
         p.model_id = "openai/gpt-4o".to_owned();
         assert_eq!(overlay_model_name(&p), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn overlay_name_keeps_openrouter_openai_model() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.model_id = "openai/gpt-4o".to_owned();
+        p.provider = "openrouter".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "openrouter/openai/gpt-4o",
+            "Aider/LiteLLM expect openrouter/openai/gpt-4o, not openrouter/gpt-4o"
+        );
+        p.provider = "openrouter.ai".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "openrouter/openai/gpt-4o",
+            "openrouter.ai must not strip the openai/ vendor prefix"
+        );
     }
 
     #[test]
