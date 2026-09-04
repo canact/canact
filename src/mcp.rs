@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::{
     ANTHROPIC_BASE_URL, CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, XAI_BASE_URL, cloud_endpoint_requires_key, default_compat_base_url, looks_cheap,
-    provider_from_base_url, resolve_advertised_context,
+    provider_from_base_url, resolve_host_catalog,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -103,7 +103,10 @@ fn tools_list() -> Value {
                     "cache": { "type": "string", "description": "Probe cache path" },
                     "cheap": { "type": "boolean" },
                     "full": { "type": "boolean" },
-                    "vision": { "type": "boolean" },
+                    "vision": {
+                        "type": "boolean",
+                        "description": "true runs vision; false skips it. Omit to use the host catalog."
+                    },
                     "force": { "type": "boolean" },
                     "advertised_context": { "type": "integer", "minimum": 1 }
                 },
@@ -147,7 +150,8 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     let advertised = json_u32(args.get("advertised_context"));
     let cheap = json_bool(args.get("cheap")).unwrap_or(false);
     let full = json_bool(args.get("full")).unwrap_or(false);
-    let vision = json_bool(args.get("vision")).unwrap_or(false);
+    let vision_flag = json_bool(args.get("vision"));
+    let vision = vision_flag.unwrap_or(false);
     let force = json_bool(args.get("force")).unwrap_or(false);
     let cache_path = args
         .get("cache")
@@ -236,8 +240,16 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             }
         }
     }
-    let advertised =
-        resolve_advertised_context(advertised, &base_url, api_key.as_deref(), &model).await;
+    let hints = resolve_host_catalog(
+        advertised,
+        vision_flag,
+        &base_url,
+        api_key.as_deref(),
+        &model,
+    )
+    .await;
+    let advertised = hints.advertised_context_tokens;
+    let vision = hints.supports_vision == Some(true);
     if !force {
         if let Some(profile) =
             cache.get_with_knobs(&model, &provider, skip_expensive, vision, advertised)
@@ -268,7 +280,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     }
     let catalog = CatalogPriors {
         advertised_context_tokens: advertised,
-        supports_vision: if vision { Some(true) } else { None },
+        supports_vision: hints.supports_vision,
         supports_tools: None,
     };
     let client = OpenAiCompatClient::new(base_url, api_key, model, provider, catalog)

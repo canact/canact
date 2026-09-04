@@ -13,8 +13,8 @@ pub use cache::{
 pub use endpoint::{
     ANTHROPIC_BASE_URL, LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, XAI_BASE_URL,
     cloud_endpoint_requires_key, default_compat_base_url, is_anthropic_cloud_host,
-    is_anthropic_provider_label, is_xai_provider_label, local_provider_base_url, looks_cheap,
-    provider_from_base_url,
+    is_anthropic_provider_label, is_ollama_compat_base, is_xai_provider_label,
+    local_provider_base_url, looks_cheap, provider_from_base_url,
 };
 pub use error::ProbeError;
 pub use report::missing_model_message;
@@ -45,9 +45,11 @@ pub use runner::{
 mod adapters;
 #[cfg(all(feature = "runtime", feature = "openai"))]
 pub use adapters::openai::{
-    ListedModel, OpenAiCompatClient, advertised_context_for_model,
-    advertised_context_from_model_object, list_model_ids, list_models, lookup_advertised_context,
-    merge_advertised_context, resolve_advertised_context,
+    HostCatalogHints, ListedModel, OpenAiCompatClient, advertised_context_for_model,
+    advertised_context_from_model_object, advertised_context_from_ollama_show, list_model_ids,
+    list_models, lookup_advertised_context, lookup_host_catalog, merge_advertised_context,
+    merge_vision_catalog, resolve_advertised_context, resolve_host_catalog,
+    vision_from_model_object, vision_from_ollama_show,
 };
 
 // Aider/Cline overlays and MCP stay off the Bline pin
