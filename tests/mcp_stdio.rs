@@ -146,6 +146,7 @@ fn mcp_probe_model_returns_host_policy_from_cache() {
         "{envelope}"
     );
     assert_eq!(envelope["recommendedContextTokens"], 8192, "{envelope}");
+    assert_eq!(envelope["fromCache"], true, "{envelope}");
     assert!(
         envelope.get("ttft").is_none(),
         "must not emit Jwrede TTFT fields: {envelope}"

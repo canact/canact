@@ -936,10 +936,12 @@ fn host_policy_envelope_with_emits_session_flags() {
     profile.probed_context_floor = Some(4096);
     let value = profile.host_policy_envelope_with(HostPolicyMeta {
         cacheable: false,
+        from_cache: false,
         skip_expensive: true,
         advertised_context_tokens: Some(40960),
     });
     assert_eq!(value["cacheable"], false, "{value}");
+    assert_eq!(value["fromCache"], false, "{value}");
     assert_eq!(value["skipExpensive"], true, "{value}");
     assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
     assert_eq!(value["probedContextFloor"], 4096, "{value}");
@@ -956,6 +958,7 @@ fn host_policy_envelope_default_meta_is_cacheable_full() {
     );
     let value = profile.host_policy_envelope();
     assert_eq!(value["cacheable"], true, "{value}");
+    assert_eq!(value["fromCache"], false, "{value}");
     assert_eq!(value["skipExpensive"], false, "{value}");
     assert!(value["advertisedContextTokens"].is_null(), "{value}");
     assert!(value["probedContextFloor"].is_null(), "{value}");

@@ -103,7 +103,11 @@ pub enum CapabilityLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostPolicyMeta {
     /// False when a required probe hit a transient error (timeout, 429, 5xx).
+    /// This is persist permission, not "this JSON came from disk."
     pub cacheable: bool,
+    /// True only when this envelope was served from the on-disk cache.
+    /// Independent of [`Self::cacheable`]. Default is live (`false`).
+    pub from_cache: bool,
     /// Whether expensive dimensions were skipped (`--cheap` / free-tier).
     pub skip_expensive: bool,
     /// Catalog advertised context window. Not a measured ladder result.
@@ -114,6 +118,7 @@ impl Default for HostPolicyMeta {
     fn default() -> Self {
         Self {
             cacheable: true,
+            from_cache: false,
             skip_expensive: false,
             advertised_context_tokens: None,
         }
@@ -454,6 +459,7 @@ impl CapabilityProfile {
             "probedContextFloor": self.probed_context_floor,
             "recommendedContextTokens": self.recommended_context_tokens(meta.advertised_context_tokens),
             "cacheable": meta.cacheable,
+            "fromCache": meta.from_cache,
             "skipExpensive": meta.skip_expensive,
             "advertisedContextTokens": meta.advertised_context_tokens,
             "probedAt": self.probed_at,
@@ -633,9 +639,11 @@ mod recommended_context_tests {
         p.probed_context_floor = Some(4096);
         let value = p.host_policy_envelope_with(HostPolicyMeta {
             cacheable: true,
+            from_cache: false,
             skip_expensive: true,
             advertised_context_tokens: Some(40960),
         });
+        assert_eq!(value["fromCache"], false, "{value}");
         assert_eq!(value["recommendedContextTokens"], 4096, "{value}");
         assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
         assert_eq!(value["probedContextFloor"], 4096, "{value}");
@@ -646,6 +654,7 @@ mod recommended_context_tests {
         let p = profile();
         let value = p.host_policy_envelope_with(HostPolicyMeta {
             cacheable: true,
+            from_cache: false,
             skip_expensive: false,
             advertised_context_tokens: Some(8192),
         });

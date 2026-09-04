@@ -224,6 +224,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         {
             return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
                 cacheable: true,
+                from_cache: true,
                 skip_expensive,
                 advertised_context_tokens: advertised,
             }));
@@ -234,6 +235,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             {
                 return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
                     cacheable: true,
+                    from_cache: true,
                     skip_expensive: cheap_row,
                     advertised_context_tokens: advertised,
                 }));
@@ -256,6 +258,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         {
             return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
                 cacheable: true,
+                from_cache: true,
                 skip_expensive,
                 advertised_context_tokens: advertised,
             }));
@@ -266,6 +269,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             {
                 return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
                     cacheable: true,
+                    from_cache: true,
                     skip_expensive: cheap_row,
                     advertised_context_tokens: advertised,
                 }));

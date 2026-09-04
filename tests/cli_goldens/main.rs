@@ -153,6 +153,7 @@ fn probe_cached_weak_tools_exits_2_and_explains() {
         "stdout={stdout}\nstderr={stderr}"
     );
     assert!(stderr.contains("cannot use tools"), "stderr={stderr}");
+    assert!(stdout.contains("Cached (probedAt=1700000000)"), "{stdout}");
     assert!(stdout.contains("=== Probe Results ==="), "{stdout}");
     assert!(stdout.contains("8192"), "{stdout}");
     assert!(stdout.contains("Effective context tokens:"), "{stdout}");
@@ -193,6 +194,10 @@ fn probe_cheap_cache_is_not_returned_on_full() {
         cheap_hit.status.code(),
         Some(2),
         "cheap must hit cache; stdout={cheap_stdout}\nstderr={cheap_stderr}"
+    );
+    assert!(
+        cheap_stdout.contains("Cached (probedAt=1700000000)"),
+        "{cheap_stdout}"
     );
     assert!(
         cheap_stdout.contains("=== Probe Results ==="),
@@ -276,10 +281,12 @@ fn probe_json_from_cache(args: &[&str], cheap: bool, advertised: Option<u32>) ->
 fn probe_json_cache_hit_includes_flags() {
     let cheap = probe_json_from_cache(&["--cheap"], true, None);
     assert_eq!(cheap["cacheable"], true, "{cheap}");
+    assert_eq!(cheap["fromCache"], true, "{cheap}");
     assert_eq!(cheap["skipExpensive"], true, "{cheap}");
 
     let full = probe_json_from_cache(&["--full"], false, None);
     assert_eq!(full["cacheable"], true, "{full}");
+    assert_eq!(full["fromCache"], true, "{full}");
     assert_eq!(full["skipExpensive"], false, "{full}");
 }
 
@@ -293,6 +300,7 @@ fn probe_json_cache_hit_includes_advertised_context() {
     assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
     assert_eq!(value["recommendedContextTokens"], 8192, "{value}");
     assert_eq!(value["cacheable"], true, "{value}");
+    assert_eq!(value["fromCache"], true, "{value}");
     assert_eq!(value["skipExpensive"], true, "{value}");
 }
 

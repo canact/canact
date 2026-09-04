@@ -190,6 +190,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                     args.verbose,
                     HostPolicyMeta {
                         cacheable: true,
+                        from_cache: true,
                         skip_expensive,
                         advertised_context_tokens: args.advertised_context,
                     },
@@ -232,6 +233,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                 args.verbose,
                 HostPolicyMeta {
                     cacheable: true,
+                    from_cache: true,
                     skip_expensive,
                     advertised_context_tokens: advertised,
                 },
@@ -389,6 +391,9 @@ fn emit_envelope(
             }
         }
     } else {
+        if envelope.get("fromCache").and_then(|v| v.as_bool()) == Some(true) {
+            println!("Cached (probedAt={})", profile.probed_at);
+        }
         print!("{}", profile.format_human_table_with(verbose, advertised));
     }
     if let Some(msg) = profile.tool_gate_error() {
