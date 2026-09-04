@@ -276,6 +276,8 @@ fn recognize_negates_glyphs(lower: &str) -> bool {
         "did not recognise",
         "couldn't recognise",
         "could not recognise",
+        "wasn't able to recognize",
+        "wasn't able to recognise",
     ];
     for stem in STEMS {
         let mut search = 0;
@@ -864,6 +866,8 @@ mod tests {
             "I did not identify BL",
             "I couldn't decipher BL",
             "I wasn't able to read BL",
+            "I wasn't able to recognize BL",
+            "I wasn't able to recognise BL",
         ] {
             let llm = MockLlm {
                 response: text_response(text),

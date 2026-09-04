@@ -190,6 +190,10 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("wasn't able to remember")
         || lower.contains("wasn't able to share")
         || lower.contains("wasn't able to tell")
+        || lower.contains("wasn't able to provide")
+        || lower.contains("wasn't able to disclose")
+        || lower.contains("wasn't able to reveal")
+        || lower.contains("wasn't able to repeat")
         || lower.contains("not able to share")
         || lower.contains("not able to disclose")
         || lower.contains("not able to reveal")
@@ -271,6 +275,7 @@ mod tests {
             "I couldn't tell you ZEPHYR-4829",
             "I could not share ZEPHYR-4829",
             "I wasn't able to recall ZEPHYR-4829",
+            "I wasn't able to provide ZEPHYR-4829",
             "I'd forgotten ZEPHYR-4829",
         ] {
             let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
