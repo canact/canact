@@ -47,6 +47,7 @@ impl ProbeRun {
     pub fn host_policy_envelope(&self) -> serde_json::Value {
         self.profile.host_policy_envelope_with(HostPolicyMeta {
             cacheable: self.cacheable,
+            from_cache: false,
             skip_expensive: self.skip_expensive,
             advertised_context_tokens: self.advertised_context_tokens,
         })

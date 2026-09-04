@@ -370,6 +370,7 @@ fn uncacheable_run_envelope_cacheable_false() {
     };
     let envelope = run.host_policy_envelope();
     assert_eq!(envelope["cacheable"], false, "{envelope}");
+    assert_eq!(envelope["fromCache"], false, "{envelope}");
     assert_eq!(envelope["skipExpensive"], true, "{envelope}");
     assert_eq!(envelope["advertisedContextTokens"], 40960, "{envelope}");
     assert!(envelope["recommendedContextTokens"].is_null(), "{envelope}");
