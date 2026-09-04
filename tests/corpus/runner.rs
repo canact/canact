@@ -375,7 +375,8 @@ fn runner_persist_without_run_does_not_write() {
     assert!(!path.exists());
 }
 
-const VISION_SKIP: &str = "Skipped: provider does not advertise vision support";
+const VISION_SKIP_NOT_REQUESTED: &str = "Skipped: vision not requested";
+const VISION_SKIP_FLAG: &str = "Skipped: --no-vision";
 const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
 
 struct RecordingLlm {
@@ -456,7 +457,8 @@ async fn vision_runs_only_when_catalog_some_true() {
     };
     let (llm, requests) = RecordingLlm::wrap(MockLlm::new("m", "p").with_catalog(catalog));
     let profile = ProbeRunner::new(llm).run().await.expect("run");
-    assert_ne!(profile.vision.details, VISION_SKIP);
+    assert_ne!(profile.vision.details, VISION_SKIP_NOT_REQUESTED);
+    assert_ne!(profile.vision.details, VISION_SKIP_FLAG);
     let rec = requests.lock().expect("lock");
     assert!(
         rec.iter().any(request_has_image),
@@ -470,7 +472,7 @@ async fn vision_skipped_when_catalog_none() {
     let profile = ProbeRunner::new(llm).run().await.expect("run");
     assert_eq!(profile.vision.level, CapabilityLevel::Weak);
     assert_eq!(profile.vision.score, 0.0);
-    assert_eq!(profile.vision.details, VISION_SKIP);
+    assert_eq!(profile.vision.details, VISION_SKIP_NOT_REQUESTED);
     let rec = requests.lock().expect("lock");
     assert!(
         !rec.iter().any(request_has_image),
@@ -488,7 +490,7 @@ async fn vision_skipped_when_catalog_some_false() {
     let profile = ProbeRunner::new(llm).run().await.expect("run");
     assert_eq!(profile.vision.level, CapabilityLevel::Weak);
     assert_eq!(profile.vision.score, 0.0);
-    assert_eq!(profile.vision.details, VISION_SKIP);
+    assert_eq!(profile.vision.details, VISION_SKIP_FLAG);
     let rec = requests.lock().expect("lock");
     assert!(
         !rec.iter().any(request_has_image),
@@ -514,7 +516,7 @@ async fn supports_tools_false_does_not_skip_tool_probes() {
         "Valid tool call with correct name and arguments"
     );
     assert_ne!(
-        profile.tool_calling.details, VISION_SKIP,
+        profile.tool_calling.details, VISION_SKIP_NOT_REQUESTED,
         "catalog supports_tools must not be persisted as a skip/Strong flag"
     );
 }

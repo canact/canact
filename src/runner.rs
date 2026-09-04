@@ -21,7 +21,8 @@ pub const PAID_CONCURRENCY: usize = 64;
 /// Concurrency limit for free-tier models to avoid rate limit exhaustion.
 pub const FREE_CONCURRENCY: usize = 3;
 
-const VISION_SKIP: &str = "Skipped: provider does not advertise vision support";
+const VISION_SKIP_NOT_REQUESTED: &str = "Skipped: vision not requested";
+const VISION_SKIP_FLAG: &str = "Skipped: --no-vision";
 const XML_SKIP: &str = "Not tested (native tool calling is Strong; XML fallback unused)";
 const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
 
@@ -160,12 +161,13 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let sys_msg_fut = Self::gated(&sem, probes::probe_system_message_adherence(&self.client));
         let efficiency_fut = Self::gated(&sem, probes::probe_token_efficiency(&self.client));
         let par_scale_fut = Self::gated(&sem, probes::probe_parallel_tool_scale(&self.client));
-        let vision_enabled = self.client.catalog().supports_vision == Some(true);
+        let vision_flag = self.client.catalog().supports_vision;
+        let vision_enabled = vision_flag == Some(true);
         let vision_fut = async {
-            if vision_enabled {
-                Self::gated(&sem, probes::probe_vision(&self.client)).await
-            } else {
-                Ok(vision_skip())
+            match vision_flag {
+                Some(true) => Self::gated(&sem, probes::probe_vision(&self.client)).await,
+                Some(false) => Ok(vision_skip(VISION_SKIP_FLAG)),
+                None => Ok(vision_skip(VISION_SKIP_NOT_REQUESTED)),
             }
         };
 
@@ -400,13 +402,13 @@ fn expensive_skip(name: &str) -> ProbeResult {
     }
 }
 
-fn vision_skip() -> ProbeResult {
+fn vision_skip(details: &'static str) -> ProbeResult {
     ProbeResult {
         name: "vision".to_string(),
         score: 0.0,
         max_score: 1.0,
         level: CapabilityLevel::Weak,
-        details: VISION_SKIP.to_string(),
+        details: details.to_string(),
     }
 }
 
