@@ -192,6 +192,10 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("do not see")
         || lower.contains("can't see")
         || lower.contains("cannot see")
+        || lower.contains("can't read")
+        || lower.contains("cannot read")
+        || lower.contains("can't make out")
+        || lower.contains("cannot make out")
         || lower.contains("doesn't contain letter")
         || lower.contains("does not contain letter")
         || lower.contains("aren't any letter")
@@ -390,6 +394,19 @@ mod tests {
             "refusal that names BL must not be Strong"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn vision_cannot_read_bl_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response("I cannot read BL"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "cannot-read that names BL must not be Strong: {result:?}"
+        );
     }
 
     #[tokio::test]

@@ -105,6 +105,14 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("cannot repeat")
         || lower.contains("won't repeat")
         || lower.contains("will not repeat")
+        || lower.contains("can't share")
+        || lower.contains("cannot share")
+        || lower.contains("won't share")
+        || lower.contains("will not share")
+        || lower.contains("can't disclose")
+        || lower.contains("cannot disclose")
+        || lower.contains("won't disclose")
+        || lower.contains("will not disclose")
 }
 
 #[cfg(test)]
@@ -122,6 +130,20 @@ mod tests {
         ]);
         let result = probe_multi_turn_memory(&llm).await.unwrap();
         assert_eq!(result.score, 0.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn refusal_cannot_share_code_is_weak() {
+        let llm = SequentialMock::new(vec![
+            text_response("Au"),
+            text_response("I can't share ZEPHYR-4829"),
+        ]);
+        let result = probe_multi_turn_memory(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "share/disclose refusal that quotes the code must be Weak: {result:?}"
+        );
         assert_eq!(result.level, CapabilityLevel::Weak);
     }
 

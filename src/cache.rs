@@ -183,7 +183,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v81: STATUS: ok space-fold; code_syntax ignores comment return
 ///      and requires def merge_sorted.
 /// v82: nested edit path alias; XML file_path JSON alias.
-pub const PROBE_SUITE_VERSION: u32 = 82;
+/// v83: vision cannot-read BL; memory cannot-share; numeric chat tool id;
+///      incremental success-body cap.
+pub const PROBE_SUITE_VERSION: u32 = 83;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
