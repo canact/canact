@@ -217,7 +217,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      real defs; ellipsis assignment is not Strong; lecture
 ///      `fn greet(` is not SearchReplace; TOOL_NAME plus a real path
 ///      is Medium; vision don't/do not/recognise and curly apostrophes;
-///      memory not-able/not-allowed/won't/should-not on provide/tell/repeat.
+///      memory not-able/not-allowed/won't/should-not on provide/tell/repeat
+///      (including won't tell); recognize-the-font hedge stays Strong.
 pub const PROBE_SUITE_VERSION: u32 = 90;
 
 /// Default effort label when probes leave `reasoning_effort` unset.

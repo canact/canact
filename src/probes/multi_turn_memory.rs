@@ -136,6 +136,8 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("can't tell")
         || lower.contains("cannot tell")
         || lower.contains("can not tell")
+        || lower.contains("won't tell")
+        || lower.contains("will not tell")
         || lower.contains("shouldn't tell")
         || lower.contains("should not tell")
         || lower.contains("can't disclose")
@@ -276,6 +278,8 @@ mod tests {
             "I should not repeat ZEPHYR-4829",
             "I shouldn\u{2019}t provide ZEPHYR-4829",
             "I won\u{2019}t provide ZEPHYR-4829",
+            "I won't tell ZEPHYR-4829",
+            "I will not tell ZEPHYR-4829",
         ] {
             let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
             let result = probe_multi_turn_memory(&llm).await.unwrap();
