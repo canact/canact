@@ -44,7 +44,11 @@ pub use runner::{
 #[cfg(all(feature = "runtime", feature = "openai"))]
 mod adapters;
 #[cfg(all(feature = "runtime", feature = "openai"))]
-pub use adapters::openai::{OpenAiCompatClient, list_model_ids};
+pub use adapters::openai::{
+    ListedModel, OpenAiCompatClient, advertised_context_for_model,
+    advertised_context_from_model_object, list_model_ids, list_models, lookup_advertised_context,
+    merge_advertised_context, resolve_advertised_context,
+};
 
 // Aider/Cline overlays and MCP stay off the Bline pin
 // (`default-features = false`, optional `runtime`).
