@@ -150,7 +150,7 @@ impl ProbeClient for OpenAiCompatClient {
             let raw = read_success_body(resp).await?;
             let value: Value = serde_json::from_slice(&raw)?;
             if let Some(err) = value.get("error") {
-                return Err(ProbeError::Llm(error_message(err)));
+                return Err(classify_provider_error(err));
             }
             parse_chat_response(&value)
         }
@@ -199,7 +199,7 @@ pub async fn list_model_ids(
     let raw = read_success_body(resp).await?;
     let value: Value = serde_json::from_slice(&raw)?;
     if let Some(err) = value.get("error") {
-        return Err(ProbeError::Llm(error_message(err)));
+        return Err(classify_provider_error(err));
     }
     let ids = value
         .get("data")
@@ -363,6 +363,35 @@ fn error_message(err: &Value) -> String {
         .map(str::to_owned)
         .unwrap_or_else(|| err.to_string());
     redact_secrets(&raw)
+}
+
+/// OpenRouter (and some proxies) return HTTP 200 with `error` instead of 5xx.
+fn classify_provider_error(err: &Value) -> ProbeError {
+    let msg = error_message(err);
+    if let Some(code) = provider_error_status(err) {
+        return map_status(code, None, &msg);
+    }
+    if body_looks_like_upstream_overload(&msg) {
+        return ProbeError::Transient(msg);
+    }
+    ProbeError::Llm(msg)
+}
+
+fn provider_error_status(err: &Value) -> Option<u16> {
+    match err.get("code") {
+        Some(Value::Number(n)) => n.as_u64().and_then(|v| u16::try_from(v).ok()),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn body_looks_like_upstream_overload(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("temporarily overloaded")
+        || b.contains("service temporarily")
+        || b.contains("service unavailable")
+        || b.contains("bad gateway")
+        || b.contains("timed out")
 }
 
 /// Strip Bearer tokens, `sk-` keys, and values after Authorization / api-key / api_key.
@@ -873,7 +902,7 @@ fn emit_sse_line(
         return Ok(());
     };
     if let Some(err) = value.get("error") {
-        return Err(ProbeError::Llm(error_message(err)));
+        return Err(classify_provider_error(err));
     }
     emit_delta(&value, open_tools, tx, think);
     Ok(())
@@ -1337,6 +1366,46 @@ mod tests {
             br#"{"error":{"message":"max_tokens must be positive"}}"#.to_vec(),
         );
         let err = client(&base).chat(empty_req()).await.expect_err("400");
+        assert!(matches!(err, ProbeError::Llm(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn chat_200_openrouter_overload_is_transient() {
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"Upstream error from Nvidia: Service temporarily overloaded"}}"#
+                .to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("200");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("overloaded")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_200_error_code_502_is_transient() {
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"Provider returned error","code":502}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("200");
+        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn chat_200_validation_error_stays_llm() {
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"max_tokens must be positive"}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("200");
         assert!(matches!(err, ProbeError::Llm(_)), "{err:?}");
     }
 
