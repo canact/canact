@@ -647,10 +647,9 @@ fn models_equivalent(stored: &str, requested: &str, provider: &str) -> bool {
     if stored == requested {
         return true;
     }
-    match strip_normalized_provider_prefix(requested, provider) {
-        Some(stripped) => stored == stripped,
-        None => false,
-    }
+    let stored_n = strip_normalized_provider_prefix(stored, provider).unwrap_or(stored);
+    let requested_n = strip_normalized_provider_prefix(requested, provider).unwrap_or(requested);
+    stored_n == requested_n
 }
 
 fn strip_normalized_provider_prefix<'a>(model_id: &'a str, provider: &str) -> Option<&'a str> {

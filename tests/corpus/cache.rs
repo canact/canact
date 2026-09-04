@@ -327,6 +327,33 @@ fn find_profile_strips_normalized_provider_prefix() {
 }
 
 #[test]
+fn find_profile_matches_when_stored_has_provider_prefix() {
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.model_id = "openrouter/anthropic/claude-3.5-sonnet".into();
+    profile.provider = "openrouter".into();
+    cache.put(profile);
+    assert!(
+        cache
+            .find_profile("anthropic/claude-3.5-sonnet", "openrouter")
+            .is_some(),
+        "export anthropic/claude-3.5-sonnet must hit probed openrouter/anthropic/claude-3.5-sonnet"
+    );
+    assert!(
+        cache
+            .get_with_knobs(
+                "anthropic/claude-3.5-sonnet",
+                "openrouter",
+                false,
+                false,
+                None,
+            )
+            .is_some(),
+        "MCP exact-knob lookup must match after stripping stored openrouter/"
+    );
+}
+
+#[test]
 fn get_with_knobs_accepts_provider_aliases_without_cheap_fallback() {
     let mut cache = ProbeCache::default();
     let mut vision = sample_profile();

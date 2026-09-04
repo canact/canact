@@ -190,7 +190,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| {
-            default_compat_base_url(provider_given.as_deref().unwrap_or(""), from_openrouter)
+            mcp_default_base_url(provider_given.as_deref().unwrap_or(""), from_openrouter)
         });
     let provider = provider_given.unwrap_or_else(|| provider_from_base_url(&base_url));
     let skip_expensive = if full {
@@ -248,6 +248,13 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         eprintln!("warning: failed to save probe cache: {err}");
     }
     Ok(run.host_policy_envelope())
+}
+
+fn mcp_default_base_url(provider: &str, from_openrouter: bool) -> String {
+    let p = provider.to_ascii_lowercase();
+    let from_openrouter =
+        from_openrouter && (p.is_empty() || p == "openrouter" || p == "openrouter.ai");
+    default_compat_base_url(provider, from_openrouter)
 }
 
 fn default_cache_path() -> PathBuf {
@@ -372,6 +379,24 @@ fn write_message(writer: &mut impl Write, value: &Value) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn openai_provider_stays_on_openai_when_only_openrouter_env() {
+        assert_eq!(
+            mcp_default_base_url("openai", true),
+            "https://api.openai.com/v1",
+            "MCP provider openai must not use OpenRouter when only OPENROUTER_API_KEY is set"
+        );
+        assert_eq!(
+            mcp_default_base_url("api.openai.com", true),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            mcp_default_base_url("", true),
+            "https://openrouter.ai/api/v1",
+            "empty provider plus OpenRouter env must keep #116 OpenRouter default"
+        );
+    }
 
     #[test]
     fn tools_list_names_probe_model_not_ttft() {

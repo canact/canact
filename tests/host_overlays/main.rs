@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use canact::{
-    AiderSettingsRow, CapabilityLevel, CapabilityProfile, HostOverlay, ProbeCache, ProbeResult,
+    AiderSettingsRow, CacheEntry, CapabilityLevel, CapabilityProfile, DEFAULT_PROBE_EFFORT,
+    HostOverlay, PROBE_SUITE_VERSION, ProbeCache, ProbeResult,
 };
 
 fn sample(search: CapabilityLevel, unified: CapabilityLevel) -> CapabilityProfile {
@@ -191,6 +192,89 @@ fn cli_export_aider_and_cline_from_cache() {
         String::from_utf8_lossy(&cline.stderr)
     );
     assert!(out_dir.join("cline.modelinfo.json").is_file());
+}
+
+#[test]
+fn cli_export_advertised_context_selects_matching_row() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    let mut older = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    older.effective_context_tokens = Some(32768);
+    older.probed_context_floor = Some(32768);
+    let mut newer = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    newer.effective_context_tokens = Some(8192);
+    newer.probed_context_floor = Some(8192);
+    cache.profiles.insert(
+        ProbeCache::cache_key_with_knobs(
+            "qwen2.5-coder",
+            "ollama",
+            DEFAULT_PROBE_EFFORT,
+            PROBE_SUITE_VERSION,
+            false,
+            false,
+            Some(32768),
+        ),
+        CacheEntry {
+            profile: older,
+            cached_at: now.saturating_sub(60),
+            reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
+            probe_suite_version: PROBE_SUITE_VERSION,
+        },
+    );
+    cache.profiles.insert(
+        ProbeCache::cache_key_with_knobs(
+            "qwen2.5-coder",
+            "ollama",
+            DEFAULT_PROBE_EFFORT,
+            PROBE_SUITE_VERSION,
+            false,
+            false,
+            Some(8192),
+        ),
+        CacheEntry {
+            profile: newer,
+            cached_at: now,
+            reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
+            probe_suite_version: PROBE_SUITE_VERSION,
+        },
+    );
+    cache.save(&cache_path).expect("save");
+    let out_dir = dir.path().join("overlays");
+
+    let export = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "qwen2.5-coder",
+            "--provider",
+            "ollama",
+            "--advertised-context",
+            "32768",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            out_dir.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("export aider");
+    assert!(
+        export.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    let metadata =
+        std::fs::read_to_string(out_dir.join(".aider.model.metadata.json")).expect("metadata");
+    let value: serde_json::Value = serde_json::from_str(&metadata).expect("json");
+    assert_eq!(
+        value["ollama/qwen2.5-coder"]["max_input_tokens"], 32768,
+        "export --advertised-context 32768 must pick the 32k row, not the newer 8k: {value}"
+    );
 }
 
 #[test]
