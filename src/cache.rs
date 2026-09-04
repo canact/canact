@@ -188,7 +188,13 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v84: vision unable/can-not-read; memory unable-to-recall; docstring
 ///      return; merge_sorted fence; native file_path; stream JSON
 ///      Transient; loopback provider URL.
-pub const PROBE_SUITE_VERSION: u32 = 84;
+/// v85: stream strips think/reasoning; ZWSP stream names; file_path
+///      alias on streaming/parallel/sequencing; search_replace ORs
+///      split edits; XML bare path is 0.4; advertised probe isolation;
+///      export provider aliases; overlay prefixes slash models;
+///      looks_cheap uses host hint; code_syntax strips quotes;
+///      nested_arguments pick-best; memory ZWSP refusals.
+pub const PROBE_SUITE_VERSION: u32 = 85;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -334,7 +340,39 @@ impl ProbeCache {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
                     && entry.profile.model_id == model_id
-                    && entry.profile.provider == provider
+                    && providers_equivalent(&entry.profile.provider, provider)
+            })
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(key, entry)| (&entry.profile, key.split('|').nth(4) == Some("cheap")))
+    }
+
+    /// Newest matching row for probe cache hits (cheap/full fallback).
+    ///
+    /// Keeps advertised isolation. Export uses [`Self::find_profile_with_cost`],
+    /// which may still return a loose advertised row.
+    pub fn find_profile_with_cost_and_advertised(
+        &self,
+        model_id: &str,
+        provider: &str,
+        advertised: Option<u32>,
+    ) -> Option<(&CapabilityProfile, bool)> {
+        if let Some(profile) = self.get_with_knobs(
+            model_id,
+            provider,
+            DEFAULT_SKIP_EXPENSIVE,
+            DEFAULT_VISION,
+            advertised,
+        ) {
+            return Some((profile, DEFAULT_SKIP_EXPENSIVE));
+        }
+        self.profiles
+            .iter()
+            .filter(|(key, entry)| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == PROBE_SUITE_VERSION
+                    && entry.profile.model_id == model_id
+                    && providers_equivalent(&entry.profile.provider, provider)
+                    && key_advertised(key) == advertised
             })
             .max_by_key(|(_, entry)| entry.cached_at)
             .map(|(key, entry)| (&entry.profile, key.split('|').nth(4) == Some("cheap")))
@@ -552,6 +590,31 @@ impl ProbeCache {
         let now = unix_now();
         now.saturating_sub(entry.cached_at) < CACHE_TTL_SECS
     }
+}
+
+fn providers_equivalent(stored: &str, requested: &str) -> bool {
+    let a = stored.to_ascii_lowercase();
+    let b = requested.to_ascii_lowercase();
+    if a == b {
+        return true;
+    }
+    provider_family(&a) == provider_family(&b)
+}
+
+fn provider_family(provider: &str) -> &str {
+    match provider {
+        "openai" | "api.openai.com" => "openai",
+        "openrouter" | "openrouter.ai" => "openrouter",
+        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" => "ollama",
+        other => other,
+    }
+}
+
+fn key_advertised(key: &str) -> Option<u32> {
+    let ctx = key.rsplit('|').next().unwrap_or("");
+    ctx.strip_prefix("ctx")
+        .filter(|s| *s != "none")
+        .and_then(|s| s.parse().ok())
 }
 
 /// Current time as Unix epoch seconds.

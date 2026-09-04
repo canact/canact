@@ -310,84 +310,7 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     let response = llm.chat(request).await?;
     refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
-    let edit_call = calls.iter().find(|c| c.name == "edit_file");
-
-    let (score, details) = match edit_call {
-        Some(call) => {
-            let file_path = call
-                .arguments
-                .get("file_path")
-                .or_else(|| call.arguments.get("path"));
-            let edits = call.arguments.get("edits");
-
-            if file_path.is_none() || edits.is_none() {
-                (0.0, "Missing required key file_path or edits".to_string())
-            } else {
-                let file_path_is_string =
-                    nonempty_string_arg_any(&call.arguments, &["file_path", "path"]);
-                match edits {
-                    Some(serde_json::Value::Array(arr)) => {
-                        let valid_edits = arr
-                            .iter()
-                            .filter(|e| {
-                                e.as_object().is_some_and(|m| {
-                                    nonempty_string_arg_any(m, &["old_text", "old_string"])
-                                        && nonempty_string_arg_any(m, &["new_text", "new_string"])
-                                })
-                            })
-                            .count();
-
-                        if valid_edits >= 2 && file_path_is_string {
-                            (
-                                1.0,
-                                format!(
-                                    "Valid nested arguments: {valid_edits} edits with correct structure"
-                                ),
-                            )
-                        } else if valid_edits == 1 {
-                            (0.5, "Valid call but only 1 edit instead of 2".to_string())
-                        } else if valid_edits >= 2 {
-                            (
-                                0.5,
-                                format!(
-                                    "Array present but file_path is not a string, {valid_edits} valid edits"
-                                ),
-                            )
-                        } else {
-                            (
-                                0.5,
-                                format!(
-                                    "Array present but {valid_edits} valid edits, has_file_path={file_path_is_string}"
-                                ),
-                            )
-                        }
-                    }
-                    Some(serde_json::Value::Object(_)) => (
-                        0.5,
-                        "edits is a single object instead of an array".to_string(),
-                    ),
-                    _ => (0.0, "edits field is missing or not structured".to_string()),
-                }
-            }
-        }
-        None => {
-            if calls.is_empty() {
-                (0.0, "No tool calls in response".to_string())
-            } else {
-                (
-                    0.0,
-                    format!(
-                        "Tool calls present but none named edit_file: [{}]",
-                        calls
-                            .iter()
-                            .map(|c| c.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                )
-            }
-        }
-    };
+    let (score, details) = score_nested_edit_calls(calls);
 
     refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
@@ -397,6 +320,86 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
         level: classify(score),
         details,
     })
+}
+
+fn score_nested_edit_calls(calls: &[ProbeToolCall]) -> (f32, String) {
+    let mut best: Option<(f32, String)> = None;
+    for call in calls.iter().filter(|c| c.name == "edit_file") {
+        let scored = score_nested_edit_call(call);
+        best = Some(match best {
+            Some(prev) if prev.0 >= scored.0 => prev,
+            _ => scored,
+        });
+    }
+    match best {
+        Some(scored) => scored,
+        None if calls.is_empty() => (0.0, "No tool calls in response".to_string()),
+        None => (
+            0.0,
+            format!(
+                "Tool calls present but none named edit_file: [{}]",
+                calls
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ),
+    }
+}
+
+fn score_nested_edit_call(call: &ProbeToolCall) -> (f32, String) {
+    let file_path = call
+        .arguments
+        .get("file_path")
+        .or_else(|| call.arguments.get("path"));
+    let edits = call.arguments.get("edits");
+
+    if file_path.is_none() || edits.is_none() {
+        return (0.0, "Missing required key file_path or edits".to_string());
+    }
+    let file_path_is_string = nonempty_string_arg_any(&call.arguments, &["file_path", "path"]);
+    match edits {
+        Some(serde_json::Value::Array(arr)) => {
+            let valid_edits = arr
+                .iter()
+                .filter(|e| {
+                    e.as_object().is_some_and(|m| {
+                        nonempty_string_arg_any(m, &["old_text", "old_string"])
+                            && nonempty_string_arg_any(m, &["new_text", "new_string"])
+                    })
+                })
+                .count();
+
+            if valid_edits >= 2 && file_path_is_string {
+                (
+                    1.0,
+                    format!("Valid nested arguments: {valid_edits} edits with correct structure"),
+                )
+            } else if valid_edits == 1 {
+                (0.5, "Valid call but only 1 edit instead of 2".to_string())
+            } else if valid_edits >= 2 {
+                (
+                    0.5,
+                    format!(
+                        "Array present but file_path is not a string, {valid_edits} valid edits"
+                    ),
+                )
+            } else {
+                (
+                    0.5,
+                    format!(
+                        "Array present but {valid_edits} valid edits, has_file_path={file_path_is_string}"
+                    ),
+                )
+            }
+        }
+        Some(serde_json::Value::Object(_)) => (
+            0.5,
+            "edits is a single object instead of an array".to_string(),
+        ),
+        _ => (0.0, "edits field is missing or not structured".to_string()),
+    }
 }
 
 /// Probe whether the model picks the right tool from a larger set.
@@ -1156,6 +1159,37 @@ mod tests {
         assert_eq!(
             result.score, 1.0,
             "old_string/new_string aliases must score Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_picks_best_same_name_call() {
+        let response = multi_tool_call_response(vec![
+            call(
+                "call_0",
+                "edit_file",
+                serde_json::json!({
+                    "file_path": "/tmp/app.py"
+                }),
+            ),
+            call(
+                "call_1",
+                "edit_file",
+                serde_json::json!({
+                    "file_path": "/tmp/app.py",
+                    "edits": [
+                        {"old_text": "Hello", "new_text": "Hi"},
+                        {"old_text": "World", "new_text": "Earth"}
+                    ]
+                }),
+            ),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_nested_arguments(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "best same-name edit_file must win over a prior incomplete call: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
     }

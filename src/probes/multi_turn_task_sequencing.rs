@@ -70,7 +70,7 @@ fn first_tool_name(calls: &[ProbeToolCall]) -> Option<&str> {
 }
 
 fn is_precise_read(c: &ProbeToolCall) -> bool {
-    c.name == "read_file" && nonempty_string_arg(&c.arguments, "path")
+    c.name == "read_file" && nonempty_string_arg_any(&c.arguments, &["path", "file_path"])
 }
 
 fn is_precise_edit(c: &ProbeToolCall) -> bool {
@@ -284,6 +284,25 @@ mod tests {
         let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert!((result.score - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn file_path_alias_on_read_is_precise() {
+        let llm = SequentialMock::new(vec![
+            tool_resp(vec![tc_args(
+                "read_file",
+                "1",
+                serde_json::json!({"file_path": "src/parser.rs"}),
+            )]),
+            tool_resp(vec![precise_tc("edit_file", "2")]),
+            tool_resp(vec![precise_tc("run_command", "3")]),
+        ]);
+        let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "file_path alias on read_file must be precise: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

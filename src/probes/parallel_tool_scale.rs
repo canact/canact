@@ -10,7 +10,8 @@ use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    nonempty_string_arg, refuse_truncated_incomplete, refuse_truncated_tool_call, tool, user_text,
+    nonempty_string_arg_any, refuse_truncated_incomplete, refuse_truncated_tool_call, tool,
+    user_text,
 };
 
 /// Probe whether the model can produce 5 parallel tool calls.
@@ -61,8 +62,15 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
 
     let valid_calls: Vec<&str> = calls
         .iter()
-        .filter(|c| c.name == "read_file" && nonempty_string_arg(&c.arguments, "path"))
-        .filter_map(|c| c.arguments.get("path").and_then(|v| v.as_str()))
+        .filter(|c| {
+            c.name == "read_file" && nonempty_string_arg_any(&c.arguments, &["path", "file_path"])
+        })
+        .filter_map(|c| {
+            c.arguments
+                .get("path")
+                .or_else(|| c.arguments.get("file_path"))
+                .and_then(|v| v.as_str())
+        })
         .collect();
 
     let mut unique_paths: Vec<&str> = valid_calls.clone();
@@ -215,6 +223,35 @@ mod tests {
         assert_eq!(b.score, 0.1);
         assert_eq!(g.level, CapabilityLevel::Weak);
         assert_eq!(b.level, CapabilityLevel::Weak);
+    }
+
+    fn read_file_call_alias(id: &str, path: &str) -> ProbeToolCall {
+        ProbeToolCall {
+            id: id.into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"file_path": path})
+                .as_object()
+                .unwrap()
+                .clone(),
+        }
+    }
+
+    #[tokio::test]
+    async fn strong_for_five_file_path_alias_calls() {
+        let response = multi_tool_call_response(vec![
+            read_file_call_alias("1", "src/main.rs"),
+            read_file_call_alias("2", "src/lib.rs"),
+            read_file_call_alias("3", "Cargo.toml"),
+            read_file_call_alias("4", "README.md"),
+            read_file_call_alias("5", "tests/integration.rs"),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_parallel_tool_scale(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "file_path alias must count unique paths: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

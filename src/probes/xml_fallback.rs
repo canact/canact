@@ -291,9 +291,18 @@ fn xml_closed_block_is_read_file_attempt(text: &str) -> bool {
     };
     span.contains("<name>read_file</name>")
         && span.contains("<arguments>")
-        && argument_span_starts_json_object(span)
+        && (argument_span_starts_json_object(span) || argument_span_has_asked_path(span))
         && !extract_xml_element_simple(span, "arguments")
             .is_some_and(xml_arguments_text_is_format_card)
+}
+
+/// Bare `/tmp/example.txt` (or other nonempty non-card text that names it)
+/// is a Weak-adjacent attempt, not a lecture.
+fn argument_span_has_asked_path(span: &str) -> bool {
+    extract_xml_element_simple(span, "arguments").is_some_and(|args| {
+        let t = args.trim();
+        !t.is_empty() && t.contains("/tmp/example.txt") && !xml_arguments_text_is_format_card(args)
+    })
 }
 
 /// Unparseable `{'param':'value'}` (and extra-key siblings) is the card.
@@ -454,6 +463,43 @@ mod tests {
             "XML path child must count as arguments: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn xml_bare_path_arguments_are_a_medium_attempt() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>/tmp/example.txt</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 0.4,
+            "bare path arguments must be a 0.4 attempt: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Medium);
+    }
+
+    #[tokio::test]
+    async fn xml_bare_path_does_not_reopen_card_echo() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"param\": \"value\"}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "param/value card must stay Weak after bare-path attempt: {result:?}"
+        );
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

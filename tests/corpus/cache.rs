@@ -47,8 +47,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v84() {
-    assert_eq!(PROBE_SUITE_VERSION, 84);
+fn cache_key_format_is_model_provider_unset_v85() {
+    assert_eq!(PROBE_SUITE_VERSION, 85);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -56,7 +56,7 @@ fn cache_key_format_is_model_provider_unset_v84() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v84|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v85|full|novision|ctxnone");
 }
 
 #[test]
@@ -216,6 +216,74 @@ fn get_misses_when_suite_differs() {
             .is_none(),
         "suite v73 must not hit v6 cache entry"
     );
+}
+
+#[test]
+fn find_profile_with_cost_and_advertised_keeps_isolation() {
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(sample_profile(), false, false, Some(2000));
+    assert!(
+        cache.find_profile("m", "p").is_some(),
+        "export may still use a loose advertised row"
+    );
+    assert!(
+        cache
+            .find_profile_with_cost_and_advertised("m", "p", None)
+            .is_none(),
+        "advertised-capped row must not satisfy an uncapped probe"
+    );
+    assert!(
+        cache
+            .find_profile_with_cost_and_advertised("m", "p", Some(2000))
+            .is_some(),
+        "same advertised cap must still hit"
+    );
+
+    let mut uncapped = ProbeCache::default();
+    uncapped.put_with_knobs(sample_profile(), false, false, None);
+    assert!(
+        uncapped
+            .find_profile_with_cost_and_advertised("m", "p", Some(2000))
+            .is_none(),
+        "uncapped row must not satisfy an advertised-capped probe"
+    );
+    assert!(
+        uncapped
+            .find_profile_with_cost_and_advertised("m", "p", None)
+            .is_some(),
+        "uncapped probe must still hit an uncapped row"
+    );
+}
+
+#[test]
+fn find_profile_accepts_overlay_provider_aliases() {
+    let mut cache = ProbeCache::default();
+    let mut openai = sample_profile();
+    openai.model_id = "gpt-4o".into();
+    openai.provider = "api.openai.com".into();
+    cache.put(openai);
+    assert!(
+        cache.find_profile("gpt-4o", "openai").is_some(),
+        "--provider openai must find a row stored as api.openai.com"
+    );
+    assert!(
+        cache.find_profile("gpt-4o", "OpenAI").is_some(),
+        "provider aliases must compare case-insensitively"
+    );
+
+    let mut openrouter = sample_profile();
+    openrouter.model_id = "claude".into();
+    openrouter.provider = "openrouter.ai".into();
+    cache.put(openrouter);
+    assert!(cache.find_profile("claude", "openrouter").is_some());
+
+    let mut ollama = sample_profile();
+    ollama.model_id = "qwen".into();
+    ollama.provider = "127.0.0.1".into();
+    cache.put(ollama);
+    assert!(cache.find_profile("qwen", "ollama").is_some());
+    assert!(cache.find_profile("qwen", "localhost").is_some());
+    assert!(cache.find_profile("qwen", "::1").is_some());
 }
 
 #[test]

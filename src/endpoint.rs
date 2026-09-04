@@ -10,7 +10,7 @@ pub const VLLM_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 /// Local-provider default when the user omitted `--base-url`.
 pub fn local_provider_base_url(provider: &str) -> Option<&'static str> {
     match provider.to_ascii_lowercase().as_str() {
-        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" => Some(OLLAMA_BASE_URL),
+        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => Some(OLLAMA_BASE_URL),
         "lmstudio" => Some(LMSTUDIO_BASE_URL),
         "vllm" => Some(VLLM_BASE_URL),
         _ => None,
@@ -54,16 +54,20 @@ pub fn provider_from_base_url(base_url: &str) -> String {
 
 pub fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
     let provider = provider.to_ascii_lowercase();
-    let url = base_url.to_ascii_lowercase();
+    let host = url_host_hint(base_url);
     model.contains(":free")
         || matches!(
             provider.as_str(),
-            "ollama" | "lmstudio" | "vllm" | "localhost" | "127.0.0.1" | "::1" | "[::1]"
+            "ollama"
+                | "lmstudio"
+                | "vllm"
+                | "localhost"
+                | "127.0.0.1"
+                | "::1"
+                | "[::1]"
+                | "0.0.0.0"
         )
-        || url.contains("localhost")
-        || url.contains("127.0.0.1")
-        || url.contains("0.0.0.0")
-        || url.contains("[::1]")
+        || matches!(host.as_str(), "localhost" | "127.0.0.1" | "0.0.0.0" | "::1")
 }
 
 fn url_host_hint(url: &str) -> String {
@@ -92,6 +96,38 @@ mod tests {
         assert_eq!(default_compat_base_url("ollama", false), OLLAMA_BASE_URL);
         assert_eq!(default_compat_base_url("Ollama", true), OLLAMA_BASE_URL);
         assert!(!cloud_endpoint_requires_key(OLLAMA_BASE_URL));
+    }
+
+    #[test]
+    fn all_zeros_provider_defaults_to_ollama_url() {
+        assert_eq!(
+            default_compat_base_url("0.0.0.0", false),
+            OLLAMA_BASE_URL,
+            "provider 0.0.0.0 must default like ollama"
+        );
+        assert!(looks_cheap("0.0.0.0", "qwen", "http://example.invalid/v1"));
+    }
+
+    #[test]
+    fn looks_cheap_uses_url_host_not_raw_substring() {
+        assert!(
+            !looks_cheap("openai", "gpt-4o", "https://10.0.0.0/v1"),
+            "0.0.0.0 substring in 10.0.0.0 must not look cheap"
+        );
+        assert!(
+            !looks_cheap("openai", "gpt-4o", "https://127.0.0.1@api.openai.com/v1"),
+            "loopback userinfo must not make a cloud host look cheap"
+        );
+        assert!(looks_cheap(
+            "openai-compat",
+            "llama3",
+            "http://0.0.0.0:11434/v1"
+        ));
+        assert!(looks_cheap(
+            "openai-compat",
+            "llama3",
+            "http://127.0.0.1:11434/v1"
+        ));
     }
 
     #[test]

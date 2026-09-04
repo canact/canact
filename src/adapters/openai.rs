@@ -99,12 +99,13 @@ impl OpenAiCompatClient {
         let mut buf: Vec<u8> = Vec::new();
         let mut received = 0usize;
         let mut open_tools: HashMap<u64, OpenTool> = HashMap::new();
+        let mut think = ThinkFilter::default();
         while let Some(item) = bytes.next().await {
             let chunk = item.map_err(map_transport)?;
             accumulate_stream_bytes(&mut received, chunk.len())?;
             buf.extend_from_slice(&chunk);
             for line in drain_complete_sse_lines(&mut buf) {
-                if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
+                if let Err(err) = emit_sse_line(&line, &mut open_tools, tx, &mut think) {
                     let _ = tx.unbounded_send(Err(err));
                     return Ok(());
                 }
@@ -118,10 +119,14 @@ impl OpenAiCompatClient {
                 )));
                 return Ok(());
             }
-            if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
+            if let Err(err) = emit_sse_line(&line, &mut open_tools, tx, &mut think) {
                 let _ = tx.unbounded_send(Err(err));
                 return Ok(());
             }
+        }
+        let leftover = think.flush();
+        if !leftover.is_empty() {
+            let _ = tx.unbounded_send(Ok(ProbeStreamChunk::TextDelta { text: leftover }));
         }
         end_open_tools(&mut open_tools, tx);
         Ok(())
@@ -833,6 +838,7 @@ fn emit_sse_line(
     line: &str,
     open_tools: &mut HashMap<u64, OpenTool>,
     tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
+    think: &mut ThinkFilter,
 ) -> Result<(), ProbeError> {
     let data = if let Some(rest) = line.strip_prefix("data:") {
         rest.trim()
@@ -853,7 +859,7 @@ fn emit_sse_line(
     if let Some(err) = value.get("error") {
         return Err(ProbeError::Llm(error_message(err)));
     }
-    emit_delta(&value, open_tools, tx);
+    emit_delta(&value, open_tools, tx, think);
     Ok(())
 }
 
@@ -861,6 +867,7 @@ fn emit_delta(
     value: &Value,
     open_tools: &mut HashMap<u64, OpenTool>,
     tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
+    think: &mut ThinkFilter,
 ) {
     let Some(choice) = value.get("choices").and_then(|c| c.get(0)) else {
         return;
@@ -871,7 +878,10 @@ fn emit_delta(
         .unwrap_or(&Value::Null);
 
     if let Some(text) = content_text(delta.get("content")) {
-        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::TextDelta { text }));
+        let visible = think.feed(&text);
+        if !visible.is_empty() {
+            let _ = tx.unbounded_send(Ok(ProbeStreamChunk::TextDelta { text: visible }));
+        }
     }
 
     let tool_calls = delta.get("tool_calls").and_then(|t| t.as_array());
@@ -942,15 +952,80 @@ fn content_text(content: Option<&Value>) -> Option<String> {
     let arr = content.as_array()?;
     let mut out = String::new();
     for part in arr {
+        if is_hidden_reasoning_part(part) {
+            continue;
+        }
         if let Some(s) = part.as_str() {
             out.push_str(s);
             continue;
         }
-        if let Some(s) = part.get("text").and_then(|t| t.as_str()) {
+        if let Some(s) = visible_part_text(part) {
             out.push_str(s);
         }
     }
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// Carry `<think>` across SSE tokens, including when the tag itself is split.
+#[derive(Default)]
+struct ThinkFilter {
+    in_think: bool,
+    hold: String,
+}
+
+impl ThinkFilter {
+    fn feed(&mut self, input: &str) -> String {
+        const OPEN: &str = "<think>";
+        const CLOSE: &str = "</think>";
+        let mut buf = std::mem::take(&mut self.hold);
+        buf.push_str(input);
+        let lower = buf.to_ascii_lowercase();
+        let mut out = String::new();
+        let mut i = 0;
+        loop {
+            if self.in_think {
+                if let Some(rel) = lower.get(i..).and_then(|rest| rest.find(CLOSE)) {
+                    i += rel + CLOSE.len();
+                    self.in_think = false;
+                    continue;
+                }
+                let hold_len = suffix_is_tag_prefix(&lower[i..], CLOSE);
+                self.hold = buf[buf.len() - hold_len..].to_owned();
+                break;
+            }
+            if let Some(rel) = lower.get(i..).and_then(|rest| rest.find(OPEN)) {
+                out.push_str(&buf[i..i + rel]);
+                i += rel + OPEN.len();
+                self.in_think = true;
+                continue;
+            }
+            let hold_len = suffix_is_tag_prefix(&lower[i..], OPEN);
+            out.push_str(&buf[i..buf.len() - hold_len]);
+            self.hold = buf[buf.len() - hold_len..].to_owned();
+            break;
+        }
+        out
+    }
+
+    fn flush(&mut self) -> String {
+        if self.in_think {
+            self.hold.clear();
+            String::new()
+        } else {
+            std::mem::take(&mut self.hold)
+        }
+    }
+}
+
+fn suffix_is_tag_prefix(s: &str, tag: &str) -> usize {
+    let max = s.len().min(tag.len());
+    for len in (1..=max).rev() {
+        let at = s.len() - len;
+        if s.is_char_boundary(at) && tag.starts_with(&s[at..]) {
+            return len;
+        }
+    }
+    0
 }
 
 fn finish_from_reason(reason: &str) -> ProbeFinish {
@@ -974,7 +1049,7 @@ fn emit_function(
     {
         let tool = open_tools.entry(index).or_insert_with(|| OpenTool {
             id: id.unwrap_or("").to_owned(),
-            name: name.to_owned(),
+            name: String::new(),
             started: false,
             pending_args: Vec::new(),
         });
@@ -983,7 +1058,7 @@ fn emit_function(
                 tool.id = id.to_owned();
             }
         }
-        if !name.is_empty() {
+        if crate::probes::has_visible_arg_text(name) {
             tool.name = name.to_owned();
         }
         if let Some(delta) = arg_delta(func.get("arguments")) {
@@ -1014,7 +1089,7 @@ fn start_named_tool(
     tool: &mut OpenTool,
     tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
 ) {
-    if tool.started || tool.name.is_empty() {
+    if tool.started || !crate::probes::has_visible_arg_text(&tool.name) {
         return;
     }
     let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
@@ -1916,13 +1991,14 @@ mod tests {
     fn emit_sse_line_malformed_json_object_is_transient() {
         let (tx, _rx) = futures::channel::mpsc::unbounded();
         let mut open = HashMap::new();
-        let err = emit_sse_line("data: {", &mut open, &tx).expect_err("object");
+        let mut think = ThinkFilter::default();
+        let err = emit_sse_line("data: {", &mut open, &tx, &mut think).expect_err("object");
         assert!(
             matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
             "{err:?}"
         );
-        emit_sse_line("data: ping", &mut open, &tx).expect("keepalive");
-        let err = emit_sse_line("data: [", &mut open, &tx).expect_err("array");
+        emit_sse_line("data: ping", &mut open, &tx, &mut think).expect("keepalive");
+        let err = emit_sse_line("data: [", &mut open, &tx, &mut think).expect_err("array");
         assert!(
             matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
             "{err:?}"
@@ -2038,6 +2114,141 @@ mod tests {
             )),
             "numeric tool id must surface as a string: {chunks:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn stream_thinking_parts_are_not_emitted() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"text\":\"WH-4481 secret\"},{\"type\":\"text\",\"text\":\"ok\"}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        let text: String = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !text.contains("WH-4481"),
+            "stream must drop thinking parts: {chunks:?}"
+        );
+        assert_eq!(text, "ok", "{chunks:?}");
+    }
+
+    #[tokio::test]
+    async fn stream_reasoning_parts_and_think_tags_are_not_emitted() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"reasoning\",\"text\":\"count these words now\"},{\"type\":\"text\",\"text\":\"<think>hidden</think>visible\"}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        let text: String = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !text.contains("count these words"),
+            "stream must drop reasoning parts: {chunks:?}"
+        );
+        assert!(
+            !text.contains("hidden"),
+            "stream must strip <think> in content: {chunks:?}"
+        );
+        assert_eq!(text, "visible", "{chunks:?}");
+    }
+
+    #[tokio::test]
+    async fn stream_think_split_across_sse_lines_is_not_emitted() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hello <thi\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"nk>WH-4481 secret</thi\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"nk> world\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "text/event-stream".into())],
+            sse.as_bytes().to_vec(),
+        );
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        let text: String = chunks
+            .iter()
+            .filter_map(|c| match c {
+                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !text.contains("WH-4481"),
+            "split <think> across SSE lines must not leak: {chunks:?}"
+        );
+        assert!(
+            !text.to_ascii_lowercase().contains("<think"),
+            "split think tags must not leak: {chunks:?}"
+        );
+        assert_eq!(text, "hello  world", "{chunks:?}");
+    }
+
+    #[tokio::test]
+    async fn stream_zwsp_or_whitespace_name_does_not_start_a_tool() {
+        for name in ["   ", "\u{200b}"] {
+            let sse = format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"c1\",\"function\":{{\"name\":{name},\"arguments\":\"{{\\\"path\\\":\\\"/tmp/test.txt\\\"}}\"}}}}]}}}}]}}\n\n\
+                 data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\n\
+                 data: [DONE]\n\n",
+                name = serde_json::to_string(name).expect("name")
+            );
+            let base = spawn_http(
+                200,
+                "OK",
+                vec![("Content-Type".into(), "text/event-stream".into())],
+                sse.as_bytes().to_vec(),
+            );
+            let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
+            let chunks: Vec<ProbeStreamChunk> =
+                chunks.into_iter().map(|c| c.expect("chunk")).collect();
+            let names: Vec<&str> = chunks
+                .iter()
+                .filter_map(|c| match c {
+                    ProbeStreamChunk::ToolCallStart { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                !names.contains(&name),
+                "ZWSP/whitespace name must not start a tool: name={name:?} {chunks:?}"
+            );
+            assert!(
+                names
+                    .iter()
+                    .all(|n| n.is_empty() || crate::probes::has_visible_arg_text(n)),
+                "invisible name must not be treated as a tool start: name={name:?} {chunks:?}"
+            );
+        }
     }
 
     #[tokio::test]
