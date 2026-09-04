@@ -108,12 +108,9 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
             (1.0, "Can read text from images".to_string())
         } else if echoed_question {
             (0.0, "Did not use the image (generic reply)".to_string())
-        } else if saw_glyphs {
-            (
-                0.5,
-                "Processed the image but could not read the text clearly".to_string(),
-            )
-        } else if processed_surface && (make_out_negated || leftover_unread) && !negated_glyphs {
+        } else if saw_glyphs
+            || (processed_surface && (make_out_negated || leftover_unread) && !negated_glyphs)
+        {
             (
                 0.5,
                 "Processed the image but could not read the text clearly".to_string(),
