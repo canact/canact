@@ -152,7 +152,9 @@ fn recalls_heartbeat(lower: &str) -> bool {
         || compact.contains("2.84sec")
         || (lower.contains("2.84")
             && (has_seconds_unit(lower)
-                || (lower.contains("heartbeat") && !has_milliseconds_unit(lower))))
+                || (lower.contains("heartbeat")
+                    && !has_milliseconds_unit(lower)
+                    && !has_minutes_unit(lower))))
 }
 
 fn has_seconds_unit(lower: &str) -> bool {
@@ -168,6 +170,12 @@ fn has_milliseconds_unit(lower: &str) -> bool {
             "millisecond" | "milliseconds" | "ms" | "msec" | "msecs" | "millis"
         )
     })
+}
+
+fn has_minutes_unit(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .any(|w| matches!(w, "minute" | "minutes" | "min" | "mins"))
 }
 
 fn estimate_tokens(chars: usize) -> u32 {
@@ -365,6 +373,10 @@ mod tests {
         assert!(
             !recalls_heartbeat("heartbeat is 2.84 millis"),
             "heartbeat + 2.84 millis must not count as the asked second value"
+        );
+        assert!(
+            !recalls_heartbeat("heartbeat is 2.84 minutes"),
+            "heartbeat + 2.84 minutes must not count as the planted millisecond fact"
         );
     }
 

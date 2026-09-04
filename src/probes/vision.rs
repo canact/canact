@@ -73,7 +73,8 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // User-facing details only. Ground-truth text in the probe image stays
     // internal (see PROBE_IMAGE_BASE64 / scoring above); do not echo it or
     // the raw model reply in default details.
-    let refused = vision_refused(&folded) || vision_refused(&stripped);
+    let font_hedge = vision_font_hedge(&folded) || vision_font_hedge(&stripped);
+    let refused = (vision_refused(&folded) || vision_refused(&stripped)) && !font_hedge;
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
     // is still Medium.
@@ -158,6 +159,10 @@ fn vision_refused(lower: &str) -> bool {
         || lower.contains("unable")
         || lower.contains("not able")
         || lower.contains("don't")
+        || lower.contains("didn't")
+        || lower.contains("did not")
+        || lower.contains("couldn't")
+        || lower.contains("could not")
         || lower.contains("no image")
         || lower.contains("no text")
         || lower.contains("no readable")
@@ -206,23 +211,28 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || recognize_negates_glyphs(lower)
         || lower.contains("can't decipher")
         || lower.contains("cannot decipher")
-        || lower.contains("can't make out")
-        || lower.contains("cannot make out")
         || lower.contains("unable to read")
         || lower.contains("unable to see")
         || lower.contains("unable to identify")
         || lower.contains("unable to decipher")
-        || lower.contains("unable to make out")
         || lower.contains("not able to read")
         || lower.contains("not able to see")
         || lower.contains("not able to identify")
         || lower.contains("not able to decipher")
-        || lower.contains("not able to make out")
         || lower.contains("can not read")
         || lower.contains("can not see")
         || lower.contains("can not identify")
         || lower.contains("can not decipher")
-        || lower.contains("can not make out")
+        || lower.contains("couldn't read")
+        || lower.contains("couldn't see")
+        || lower.contains("couldn't identify")
+        || lower.contains("could not read")
+        || lower.contains("could not see")
+        || lower.contains("could not identify")
+        || lower.contains("didn't see")
+        || lower.contains("didn't read")
+        || lower.contains("did not see")
+        || lower.contains("did not read")
         || lower.contains("doesn't contain letter")
         || lower.contains("does not contain letter")
         || lower.contains("aren't any letter")
@@ -250,11 +260,7 @@ fn recognize_negates_glyphs(lower: &str) -> bool {
         let mut search = 0;
         while let Some(rel) = lower.get(search..).and_then(|s| s.find(stem)) {
             let after = lower[search + rel + stem.len()..].trim_start();
-            if after.starts_with("the font")
-                || after.starts_with("the typeface")
-                || after.starts_with("font")
-                || after.starts_with("typeface")
-            {
+            if rest_is_font_hedge(after) {
                 search += rel + stem.len();
                 continue;
             }
@@ -262,6 +268,30 @@ fn recognize_negates_glyphs(lower: &str) -> bool {
         }
     }
     false
+}
+
+fn rest_is_font_hedge(after: &str) -> bool {
+    let after = after
+        .strip_prefix("the ")
+        .or_else(|| after.strip_prefix("this "))
+        .or_else(|| after.strip_prefix("that "))
+        .unwrap_or(after);
+    after.starts_with("font") || after.starts_with("typeface")
+}
+
+fn vision_font_hedge(lower: &str) -> bool {
+    let has_font = has_surface_word(lower, "font")
+        || has_surface_word(lower, "fonts")
+        || has_surface_word(lower, "typeface")
+        || has_surface_word(lower, "typefaces");
+    if !has_font {
+        return false;
+    }
+    lower.contains("don't")
+        || lower.contains("do not")
+        || lower.contains("can't")
+        || lower.contains("cannot")
+        || lower.contains("can not")
 }
 
 fn cannot_make_token_out(lower: &str) -> bool {
@@ -719,6 +749,83 @@ mod tests {
         };
         let result = probe_vision(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn vision_letters_but_cannot_make_out_is_medium() {
+        let llm = MockLlm {
+            response: text_response("I see letters but cannot make out the text"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Medium,
+            "letters plus cannot-make-out is a partial read: {result:?}"
+        );
+        assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn vision_could_not_read_bl_is_not_strong() {
+        for text in ["I couldn't read BL", "I could not see BL"] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "could-not refusal that names BL must not be Strong: {text:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_did_not_see_letters_is_weak() {
+        for text in ["I didn't see any letters", "I did not see any text"] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "did-not-see letters/text must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_dont_recognize_this_font_with_bl_is_strong() {
+        for text in [
+            "BL (I don't recognize this font)",
+            "BL (I don't recognize that typeface)",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "this/that font hedge with BL must stay Strong: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_white_text_dont_know_font_is_medium() {
+        let llm = MockLlm {
+            response: text_response("I see white text but I don't know the font"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Medium,
+            "processed surface plus font hedge must be Medium, not Weak: {result:?}"
+        );
         assert_eq!(result.score, 0.5);
     }
 

@@ -107,7 +107,9 @@ fn recalls_timeout(lower: &str) -> bool {
         || compact.contains("1.75sec")
         || (lower.contains("1.75")
             && (has_seconds_unit(lower)
-                || (lower.contains("timeout") && !has_milliseconds_unit(lower))))
+                || (lower.contains("timeout")
+                    && !has_milliseconds_unit(lower)
+                    && !has_minutes_unit(lower))))
 }
 
 fn has_seconds_unit(lower: &str) -> bool {
@@ -123,6 +125,12 @@ fn has_milliseconds_unit(lower: &str) -> bool {
             "millisecond" | "milliseconds" | "ms" | "msec" | "msecs" | "millis"
         )
     })
+}
+
+fn has_minutes_unit(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .any(|w| matches!(w, "minute" | "minutes" | "min" | "mins"))
 }
 
 #[cfg(test)]
@@ -310,6 +318,10 @@ mod tests {
         assert!(
             !recalls_timeout("timeout is 1.75 millis"),
             "timeout + 1.75 millis must not count as the asked second value"
+        );
+        assert!(
+            !recalls_timeout("timeout is 1.75 minutes"),
+            "timeout + 1.75 minutes must not count as the planted millisecond fact"
         );
     }
 }
