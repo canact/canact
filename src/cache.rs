@@ -208,7 +208,12 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      repeat/I forgot; vision identify/make-BL-out/can-not; msec
 ///      unit; file_path on sequencing edit, one-shot, and selection
 ///      tasks.
-pub const PROBE_SUITE_VERSION: u32 = 88;
+/// v89: typed merge_sorted signatures and defaults; extract picks
+///      complete fence over stub; return must be in merge_sorted body;
+///      lecture-line return is Weak; JSON nested objects and object
+///      before fenced array; memory provide/tell/should-not refusals;
+///      vision cannot-recognize.
+pub const PROBE_SUITE_VERSION: u32 = 89;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

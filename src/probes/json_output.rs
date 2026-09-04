@@ -118,22 +118,17 @@ fn score_json_text(text: &str) -> (f32, String) {
     let primary = extract_json_from_text(text);
     let primary_is_array =
         serde_json::from_str::<serde_json::Value>(primary).is_ok_and(|val| val.is_array());
-    // A leading parseable array must not abort pick-best. Only search
-    // after that array so an inner object does not count as standalone.
-    let search = if primary_is_array {
-        match text.find(primary) {
-            Some(i) => &text[i + primary.len()..],
-            None => "",
+    // A leading parseable array must not abort pick-best. Search before
+    // and after that array so an earlier standalone object still wins,
+    // but objects only nested inside the array do not count.
+    let mut best: Option<(f32, String)> = None;
+    if primary_is_array {
+        if let Some(i) = text.find(primary) {
+            consider_json_objects(&text[..i], &mut best);
+            consider_json_objects(&text[i + primary.len()..], &mut best);
         }
     } else {
-        text
-    };
-    let mut best: Option<(f32, String)> = None;
-    for val in json_objects_in(search) {
-        let scored = score_json_object(&val);
-        if best.as_ref().is_none_or(|(s, _)| scored.0 > *s) {
-            best = Some(scored);
-        }
+        consider_json_objects(text, &mut best);
     }
     if let Some(best) = best {
         return best;
@@ -142,6 +137,15 @@ fn score_json_text(text: &str) -> (f32, String) {
         return (0.0, "Response JSON is an array, not an object".to_string());
     }
     (0.0, "Response was not valid JSON".to_string())
+}
+
+fn consider_json_objects(text: &str, best: &mut Option<(f32, String)>) {
+    for val in json_objects_in(text) {
+        let scored = score_json_object(&val);
+        if best.as_ref().is_none_or(|(s, _)| scored.0 > *s) {
+            *best = Some(scored);
+        }
+    }
 }
 
 fn score_json_object(val: &serde_json::Value) -> (f32, String) {
@@ -186,7 +190,7 @@ fn json_objects_in(text: &str) -> Vec<serde_json::Value> {
     while i < text.len() {
         if text[i..].starts_with('{') {
             if let Some((val, end)) = next_json_object(text, i) {
-                out.push(val);
+                collect_nested_objects(&val, &mut out);
                 i = end;
                 continue;
             }
@@ -194,6 +198,15 @@ fn json_objects_in(text: &str) -> Vec<serde_json::Value> {
         i += text[i..].chars().next().map_or(1, char::len_utf8);
     }
     out
+}
+
+fn collect_nested_objects(val: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+    if let Some(obj) = val.as_object() {
+        out.push(val.clone());
+        for nested in obj.values() {
+            collect_nested_objects(nested, out);
+        }
+    }
 }
 
 fn next_json_object(text: &str, start: usize) -> Option<(serde_json::Value, usize)> {
@@ -357,6 +370,37 @@ mod tests {
                 "empty json strings must not skip repair: {body}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn json_nested_hello_object_is_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                r#"{"data": {"word": "hello", "length": 5, "reversed": "olleh"}}"#,
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "nested hello object must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn json_hello_before_fenced_array_is_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                "{\"word\": \"hello\", \"length\": 5, \"reversed\": \"olleh\"}\n\n\
+                 ```json\n[{\"word\": \"cat\", \"length\": 3, \"reversed\": \"tac\"}]\n```",
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "hello object before a fenced cat array must stay Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

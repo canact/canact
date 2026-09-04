@@ -201,6 +201,8 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("cannot read")
         || lower.contains("can't identify")
         || lower.contains("cannot identify")
+        || lower.contains("can't recognize")
+        || lower.contains("cannot recognize")
         || lower.contains("can't decipher")
         || lower.contains("cannot decipher")
         || lower.contains("can't make out")
@@ -208,16 +210,19 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("unable to read")
         || lower.contains("unable to see")
         || lower.contains("unable to identify")
+        || lower.contains("unable to recognize")
         || lower.contains("unable to decipher")
         || lower.contains("unable to make out")
         || lower.contains("not able to read")
         || lower.contains("not able to see")
         || lower.contains("not able to identify")
+        || lower.contains("not able to recognize")
         || lower.contains("not able to decipher")
         || lower.contains("not able to make out")
         || lower.contains("can not read")
         || lower.contains("can not see")
         || lower.contains("can not identify")
+        || lower.contains("can not recognize")
         || lower.contains("can not decipher")
         || lower.contains("can not make out")
         || lower.contains("doesn't contain letter")
@@ -452,6 +457,19 @@ mod tests {
             result.level,
             CapabilityLevel::Strong,
             "cannot-identify that names BL must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vision_cannot_recognize_bl_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response("I cannot recognize BL"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "cannot-recognize that names BL must not be Strong: {result:?}"
         );
     }
 
