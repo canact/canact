@@ -5,7 +5,7 @@ use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    has_visible_arg_text, nonempty_string_arg, refuse_truncated_incomplete,
+    has_visible_arg_text, nonempty_string_arg_any, refuse_truncated_incomplete,
     refuse_truncated_tool_call, system_text, user_text,
 };
 
@@ -73,7 +73,7 @@ Available tools:
                     let correct_name = name == "read_file";
                     let has_path = args
                         .as_object()
-                        .is_some_and(|o| nonempty_string_arg(o, "path"));
+                        .is_some_and(|o| nonempty_string_arg_any(o, &["path", "file_path"]));
 
                     if correct_name && has_path {
                         (
@@ -339,7 +339,7 @@ fn parse_xml_tool_block(text: &str) -> Option<(String, serde_json::Value)> {
                     && parsed
                         .1
                         .as_object()
-                        .is_some_and(|o| nonempty_string_arg(o, "path"))
+                        .is_some_and(|o| nonempty_string_arg_any(o, &["path", "file_path"]))
                     && !is_xml_format_card_echo(&parsed.0, &parsed.1);
                 if real_read {
                     best_real = Some(parsed);
@@ -416,6 +416,24 @@ mod tests {
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn xml_file_path_json_alias_is_strong() {
+        let response_text = "\
+<tool_call>
+<name>read_file</name>
+<arguments>{\"file_path\": \"/tmp/example.txt\"}</arguments>
+</tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "JSON file_path alias must score Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

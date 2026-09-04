@@ -312,13 +312,17 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
 
     let (score, details) = match edit_call {
         Some(call) => {
-            let file_path = call.arguments.get("file_path");
+            let file_path = call
+                .arguments
+                .get("file_path")
+                .or_else(|| call.arguments.get("path"));
             let edits = call.arguments.get("edits");
 
             if file_path.is_none() || edits.is_none() {
                 (0.0, "Missing required key file_path or edits".to_string())
             } else {
-                let file_path_is_string = nonempty_string_arg(&call.arguments, "file_path");
+                let file_path_is_string =
+                    nonempty_string_arg_any(&call.arguments, &["file_path", "path"]);
                 match edits {
                     Some(serde_json::Value::Array(arr)) => {
                         let valid_edits = arr
@@ -1065,6 +1069,28 @@ mod tests {
         let result = probe_nested_arguments(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn nested_arguments_path_alias_is_strong() {
+        let response = multi_tool_call_response(vec![call(
+            "call_1",
+            "edit_file",
+            serde_json::json!({
+                "path": "/tmp/app.py",
+                "edits": [
+                    {"old_text": "Hello", "new_text": "Hi"},
+                    {"old_text": "World", "new_text": "Earth"}
+                ]
+            }),
+        )]);
+        let llm = MockLlm { response };
+        let result = probe_nested_arguments(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "path alias for file_path must score Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
