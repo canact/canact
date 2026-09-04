@@ -324,7 +324,8 @@ def merge_sorted(a, b):
 
     #[tokio::test]
     async fn code_syntax_real_return_with_quoted_string_stays_strong() {
-        let code = "def merge_sorted(a, b):\n    return a + b\n";
+        let code =
+            "def merge_sorted(a, b):\n    note = \"return a merged list\"\n    return a + b\n";
         let llm = MockLlm {
             response: text_response(code),
         };

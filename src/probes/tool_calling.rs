@@ -1195,6 +1195,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_arguments_picks_best_when_complete_call_is_first() {
+        let response = multi_tool_call_response(vec![
+            call(
+                "call_0",
+                "edit_file",
+                serde_json::json!({
+                    "file_path": "/tmp/app.py",
+                    "edits": [
+                        {"old_text": "Hello", "new_text": "Hi"},
+                        {"old_text": "World", "new_text": "Earth"}
+                    ]
+                }),
+            ),
+            call(
+                "call_1",
+                "edit_file",
+                serde_json::json!({
+                    "file_path": "/tmp/app.py"
+                }),
+            ),
+        ]);
+        let result = probe_nested_arguments(&MockLlm { response }).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "best same-name edit_file must win over a later incomplete call: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn nested_arguments_weak_for_missing_file_path() {
         let response = multi_tool_call_response(vec![call(
             "call_1",

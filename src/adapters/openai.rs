@@ -790,6 +790,7 @@ struct OpenTool {
     id: String,
     name: String,
     started: bool,
+    rejected: bool,
     pending_args: Vec<String>,
 }
 
@@ -1051,6 +1052,7 @@ fn emit_function(
             id: id.unwrap_or("").to_owned(),
             name: String::new(),
             started: false,
+            rejected: false,
             pending_args: Vec::new(),
         });
         if let Some(id) = id {
@@ -1060,6 +1062,8 @@ fn emit_function(
         }
         if crate::probes::has_visible_arg_text(name) {
             tool.name = name.to_owned();
+        } else if !name.is_empty() {
+            tool.rejected = true;
         }
         if let Some(delta) = arg_delta(func.get("arguments")) {
             if tool.started {
@@ -1110,6 +1114,9 @@ fn flush_pending_args(
 }
 
 fn finish_tool(mut tool: OpenTool, tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>) {
+    if tool.rejected {
+        return;
+    }
     if !tool.started {
         let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
             id: tool.id.clone(),
@@ -2239,14 +2246,8 @@ mod tests {
                 })
                 .collect();
             assert!(
-                !names.contains(&name),
-                "ZWSP/whitespace name must not start a tool: name={name:?} {chunks:?}"
-            );
-            assert!(
-                names
-                    .iter()
-                    .all(|n| n.is_empty() || crate::probes::has_visible_arg_text(n)),
-                "invisible name must not be treated as a tool start: name={name:?} {chunks:?}"
+                names.is_empty(),
+                "ZWSP/whitespace name must not emit ToolCallStart: name={name:?} {chunks:?}"
             );
         }
     }
