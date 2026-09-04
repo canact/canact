@@ -153,6 +153,13 @@ fn consider_standalone_json(
                 i = end;
                 continue;
             }
+            if let Some(end) = delimited_span_end(text, i, '[', ']') {
+                if inner_has_complete_hello(&text[i + 1..end - 1]) {
+                    *array_wrapped_hello = true;
+                }
+                i = end;
+                continue;
+            }
         }
         if text[i..].starts_with('{') {
             if let Some((val, end)) = next_json_object(text, i) {
@@ -252,6 +259,12 @@ fn next_json_delimited(
     open: char,
     close: char,
 ) -> Option<(serde_json::Value, usize)> {
+    let end = delimited_span_end(text, start, open, close)?;
+    let val: serde_json::Value = serde_json::from_str(&text[start..end]).ok()?;
+    Some((val, end))
+}
+
+fn delimited_span_end(text: &str, start: usize, open: char, close: char) -> Option<usize> {
     let slice = &text[start..];
     if !slice.starts_with(open) {
         return None;
@@ -283,13 +296,28 @@ fn next_json_delimited(
         } else if c == close {
             depth -= 1;
             if depth == 0 {
-                let end = off + 1;
-                let val: serde_json::Value = serde_json::from_str(&slice[..end]).ok()?;
-                return Some((val, start + end));
+                return Some(start + off + 1);
             }
         }
     }
     None
+}
+
+fn inner_has_complete_hello(text: &str) -> bool {
+    let mut i = 0;
+    while i < text.len() {
+        if text[i..].starts_with('{') {
+            if let Some((val, end)) = next_json_object(text, i) {
+                if value_contains_complete_hello(&val) {
+                    return true;
+                }
+                i = end;
+                continue;
+            }
+        }
+        i += text[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    false
 }
 
 fn json_length_u64(v: &serde_json::Value) -> Option<u64> {
@@ -473,6 +501,36 @@ mod tests {
             "array-wrapped hello after an example object must stay Weak: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn json_trailing_comma_array_wrapped_hello_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response(r#"[{"word": "hello", "length": 5, "reversed": "olleh"},]"#),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "trailing-comma array wrap must stay Weak (needs_json_repair): {result:?}"
+        );
+        assert_eq!(result.score, 0.0, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn json_commented_array_wrapped_hello_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                "[\n  // hello\n  {\"word\": \"hello\", \"length\": 5, \"reversed\": \"olleh\"}\n]",
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "commented array wrap must stay Weak (needs_json_repair): {result:?}"
+        );
+        assert_eq!(result.score, 0.0, "{result:?}");
     }
 
     #[tokio::test]

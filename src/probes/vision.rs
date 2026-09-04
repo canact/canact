@@ -62,13 +62,16 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // Check if the model identified the text. Be careful not to match "black",
     // "blue", "blank", etc. - only match "BL" as a standalone word or "BLINE".
     let trimmed_lower = lower.trim().trim_matches(|c: char| c == '"' || c == '\'');
+    let letter_tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
     let identified_text = trimmed_lower == "bl"
         || lower.contains("bline")
         || lower.contains("\"bl\"")
         || lower.contains("'bl'")
-        || lower
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|word| word == "bl");
+        || letter_tokens.iter().any(|word| *word == "bl")
+        || letter_tokens.as_slice() == ["b", "l"];
 
     // User-facing details only. Ground-truth text in the probe image stays
     // internal (see PROBE_IMAGE_BASE64 / scoring above); do not echo it or
@@ -229,6 +232,16 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("could not read")
         || lower.contains("could not see")
         || lower.contains("could not identify")
+        || lower.contains("didn't identify")
+        || lower.contains("did not identify")
+        || lower.contains("couldn't decipher")
+        || lower.contains("could not decipher")
+        || lower.contains("didn't decipher")
+        || lower.contains("did not decipher")
+        || lower.contains("wasn't able to read")
+        || lower.contains("wasn't able to see")
+        || lower.contains("wasn't able to identify")
+        || lower.contains("wasn't able to decipher")
         || lower.contains("didn't see")
         || lower.contains("didn't read")
         || lower.contains("did not see")
@@ -248,6 +261,10 @@ fn recognize_negates_glyphs(lower: &str) -> bool {
         "can not recognize",
         "unable to recognize",
         "not able to recognize",
+        "didn't recognize",
+        "did not recognize",
+        "couldn't recognize",
+        "could not recognize",
         "don't recognise",
         "do not recognise",
         "can't recognise",
@@ -255,6 +272,10 @@ fn recognize_negates_glyphs(lower: &str) -> bool {
         "can not recognise",
         "unable to recognise",
         "not able to recognise",
+        "didn't recognise",
+        "did not recognise",
+        "couldn't recognise",
+        "could not recognise",
     ];
     for stem in STEMS {
         let mut search = 0;
@@ -275,6 +296,8 @@ fn rest_is_font_hedge(after: &str) -> bool {
         .strip_prefix("the ")
         .or_else(|| after.strip_prefix("this "))
         .or_else(|| after.strip_prefix("that "))
+        .or_else(|| after.strip_prefix("these "))
+        .or_else(|| after.strip_prefix("those "))
         .unwrap_or(after);
     after.starts_with("font") || after.starts_with("typeface")
 }
@@ -813,6 +836,78 @@ mod tests {
             );
             assert_eq!(result.level, CapabilityLevel::Strong, "{text:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn vision_dont_recognize_these_fonts_with_bl_is_strong() {
+        for text in [
+            "BL (I don't recognize these fonts)",
+            "BL (I don't recognize those typefaces)",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "these/those font hedge with BL must stay Strong: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_didnt_recognize_could_not_identify_is_not_strong() {
+        for text in [
+            "I didn't recognize BL",
+            "I could not recognise BL",
+            "I did not identify BL",
+            "I couldn't decipher BL",
+            "I wasn't able to read BL",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "past-tense recognize/identify that names BL must not be Strong: {text:?} {result:?}"
+            );
+        }
+
+        let was_not = probe_vision(&MockLlm {
+            response: text_response("I was not able to read BL"),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            was_not.level,
+            CapabilityLevel::Weak,
+            "I was not able to read BL must stay Weak: {was_not:?}"
+        );
+
+        let make_out = probe_vision(&MockLlm {
+            response: text_response("I see letters but cannot make them out"),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            make_out.level,
+            CapabilityLevel::Medium,
+            "cannot make them out must stay Medium: {make_out:?}"
+        );
+
+        let spaced = probe_vision(&MockLlm {
+            response: text_response("B L"),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            spaced.level,
+            CapabilityLevel::Strong,
+            "spaced B L must stay a read: {spaced:?}"
+        );
     }
 
     #[tokio::test]
