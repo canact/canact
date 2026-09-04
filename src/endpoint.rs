@@ -6,6 +6,8 @@ pub const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434/v1";
 pub const LMSTUDIO_BASE_URL: &str = "http://127.0.0.1:1234/v1";
 /// Common vLLM OpenAI-compatible listener.
 pub const VLLM_BASE_URL: &str = "http://127.0.0.1:8000/v1";
+/// xAI OpenAI-compatible listener (`--provider xai` / `grok`).
+pub const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 
 /// Local-provider default when the user omitted `--base-url`.
 pub fn local_provider_base_url(provider: &str) -> Option<String> {
@@ -26,11 +28,21 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
         return local;
     }
     let provider = provider.to_ascii_lowercase();
-    if from_openrouter || provider == "openrouter" || provider == "openrouter.ai" {
+    if is_xai_provider_label(&provider) {
+        XAI_BASE_URL.to_owned()
+    } else if from_openrouter || provider == "openrouter" || provider == "openrouter.ai" {
         "https://openrouter.ai/api/v1".to_owned()
     } else {
         "https://api.openai.com/v1".to_owned()
     }
+}
+
+/// `--provider xai` / `grok` / `api.x.ai` (not a loopback host).
+pub fn is_xai_provider_label(provider: &str) -> bool {
+    matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "xai" | "grok" | "api.x.ai" | "x.ai"
+    )
 }
 
 /// Cloud hosts that must not be called without an API key.
@@ -43,6 +55,9 @@ pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
         || host.ends_with(".openrouter.ai")
         || host == "openai.azure.com"
         || host.ends_with(".openai.azure.com")
+        || host == "api.x.ai"
+        || host == "x.ai"
+        || host.ends_with(".x.ai")
 }
 
 /// True when the host or model looks local/free so the cheap suite is enough.
@@ -312,5 +327,28 @@ mod tests {
             cloud_endpoint_requires_key("https://openrouter.ai./api/v1"),
             "trailing-dot openrouter.ai. must still require a key"
         );
+    }
+
+    #[test]
+    fn xai_provider_defaults_to_api_x_ai_and_requires_key() {
+        for provider in ["xai", "grok", "api.x.ai", "x.ai", "Xai"] {
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                XAI_BASE_URL,
+                "provider {provider} must not default to OpenAI"
+            );
+            assert_eq!(
+                default_compat_base_url(provider, true),
+                XAI_BASE_URL,
+                "provider {provider} must stay on xAI even when OpenRouter env is set"
+            );
+        }
+        assert!(cloud_endpoint_requires_key(XAI_BASE_URL));
+        assert!(
+            cloud_endpoint_requires_key("https://api.x.ai./v1"),
+            "trailing-dot api.x.ai. must still require a key"
+        );
+        assert!(!cloud_endpoint_requires_key("https://notx.ai.internal/v1"));
+        assert_eq!(provider_from_base_url(XAI_BASE_URL), "api.x.ai");
     }
 }

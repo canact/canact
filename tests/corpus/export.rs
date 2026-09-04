@@ -119,3 +119,17 @@ fn overlay_localhost_port_still_maps_to_ollama() {
     p.provider = "localhost:11434".into();
     assert_eq!(overlay_model_name(&p), "ollama/qwen2.5-coder");
 }
+
+#[test]
+fn overlay_xai_host_maps_to_xai_family() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.model_id = "grok-4".into();
+    p.provider = "api.x.ai".into();
+    assert_eq!(overlay_model_name(&p), "xai/grok-4");
+    p.provider = "grok".into();
+    assert_eq!(overlay_model_name(&p), "xai/grok-4");
+}

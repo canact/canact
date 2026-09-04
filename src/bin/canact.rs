@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
-    ProbeError, ProbeRun, ProbeRunner, cloud_endpoint_requires_key, default_compat_base_url,
-    list_model_ids, looks_cheap, missing_model_message, overlay_context_tokens,
-    provider_from_base_url, run_mcp_stdio,
+    ProbeError, ProbeRun, ProbeRunner, XAI_BASE_URL, cloud_endpoint_requires_key,
+    default_compat_base_url, is_xai_provider_label, list_model_ids, looks_cheap,
+    missing_model_message, overlay_context_tokens, provider_from_base_url, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -42,7 +42,7 @@ struct ProbeArgs {
     #[arg(long)]
     base_url: Option<String>,
 
-    /// API key (else OPENAI_API_KEY / OPENROUTER_API_KEY)
+    /// API key (else OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY)
     #[arg(long)]
     api_key: Option<String>,
 
@@ -141,11 +141,15 @@ fn main() -> ExitCode {
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let provider_hint = args.provider.clone().unwrap_or_default();
-    let (api_key, from_openrouter) = resolve_api_key(args.api_key.clone(), &provider_hint);
-    let base_url = args
-        .base_url
-        .clone()
-        .unwrap_or_else(|| default_compat_base_url(&provider_hint, from_openrouter));
+    let (api_key, from_openrouter, from_xai) =
+        resolve_api_key(args.api_key.clone(), &provider_hint);
+    let base_url = args.base_url.clone().unwrap_or_else(|| {
+        if from_xai && provider_hint.is_empty() {
+            XAI_BASE_URL.to_owned()
+        } else {
+            default_compat_base_url(&provider_hint, from_openrouter)
+        }
+    });
     let provider = if provider_hint.is_empty() {
         provider_from_base_url(&base_url)
     } else {
@@ -192,7 +196,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
 
     if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
         eprintln!(
-            "error: set --api-key, OPENAI_API_KEY, or OPENROUTER_API_KEY (or pass --base-url for a local host)"
+            "error: set --api-key, OPENAI_API_KEY, OPENROUTER_API_KEY, or XAI_API_KEY (or pass --base-url for a local host)"
         );
         return Err(1);
     }
@@ -393,7 +397,7 @@ fn emit_envelope(
     }
 }
 
-fn resolve_api_key(cli: Option<String>, provider: &str) -> (Option<String>, bool) {
+fn resolve_api_key(cli: Option<String>, provider: &str) -> (Option<String>, bool, bool) {
     resolve_api_key_from(
         cli,
         std::env::var("OPENAI_API_KEY")
@@ -402,6 +406,7 @@ fn resolve_api_key(cli: Option<String>, provider: &str) -> (Option<String>, bool
         std::env::var("OPENROUTER_API_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
+        std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
         provider,
     )
 }
@@ -411,26 +416,35 @@ fn openrouter_default_ok(provider: &str) -> bool {
     p.is_empty() || p == "openrouter" || p == "openrouter.ai"
 }
 
+fn xai_default_ok(provider: &str) -> bool {
+    provider.is_empty() || is_xai_provider_label(provider)
+}
+
 fn resolve_api_key_from(
     cli: Option<String>,
     openai: Option<String>,
     openrouter: Option<String>,
+    xai: Option<String>,
     provider: &str,
-) -> (Option<String>, bool) {
+) -> (Option<String>, bool, bool) {
     let from_openrouter =
         openrouter.is_some() && openai.is_none() && openrouter_default_ok(provider);
+    let from_xai = xai.is_some() && openai.is_none() && xai_default_ok(provider);
     if let Some(key) = cli {
         if !key.is_empty() {
-            return (Some(key), from_openrouter);
+            return (Some(key), from_openrouter, from_xai && !from_openrouter);
         }
     }
     if let Some(key) = openai {
-        return (Some(key), false);
+        return (Some(key), false, false);
+    }
+    if from_xai {
+        return (xai, false, true);
     }
     if let Some(key) = openrouter {
-        return (Some(key), from_openrouter);
+        return (Some(key), from_openrouter, false);
     }
-    (None, false)
+    (None, false, false)
 }
 
 async fn resolve_model(
@@ -509,10 +523,11 @@ mod tests {
 
     #[test]
     fn api_key_flag_plus_openrouter_env_routes_to_openrouter() {
-        let (key, from_openrouter) = resolve_api_key_from(
+        let (key, from_openrouter, from_xai) = resolve_api_key_from(
             Some("sk-or-cli".to_owned()),
             None,
             Some("sk-or-env".to_owned()),
+            None,
             "",
         );
         assert_eq!(key.as_deref(), Some("sk-or-cli"));
@@ -520,6 +535,7 @@ mod tests {
             from_openrouter,
             "--api-key with OPENROUTER_API_KEY set must not default to OpenAI"
         );
+        assert!(!from_xai);
         assert_eq!(
             canact::default_compat_base_url("", from_openrouter),
             "https://openrouter.ai/api/v1"
@@ -528,10 +544,11 @@ mod tests {
 
     #[test]
     fn api_key_flag_plus_openai_provider_stays_on_openai() {
-        let (key, from_openrouter) = resolve_api_key_from(
+        let (key, from_openrouter, _) = resolve_api_key_from(
             Some("sk-proj-cli".to_owned()),
             None,
             Some("sk-or-env".to_owned()),
+            None,
             "openai",
         );
         assert_eq!(key.as_deref(), Some("sk-proj-cli"));
@@ -544,10 +561,11 @@ mod tests {
             "https://api.openai.com/v1",
             "--provider openai plus a CLI key must not hit OpenRouter"
         );
-        let (_, from_host) = resolve_api_key_from(
+        let (_, from_host, _) = resolve_api_key_from(
             Some("sk-proj-cli".to_owned()),
             None,
             Some("sk-or-env".to_owned()),
+            None,
             "api.openai.com",
         );
         assert!(!from_host);
@@ -556,13 +574,42 @@ mod tests {
             "https://api.openai.com/v1",
             "--provider api.openai.com plus a CLI key must not hit OpenRouter"
         );
-        let (env_key, from_env) =
-            resolve_api_key_from(None, None, Some("sk-or-env".to_owned()), "openai");
+        let (env_key, from_env, _) =
+            resolve_api_key_from(None, None, Some("sk-or-env".to_owned()), None, "openai");
         assert_eq!(env_key.as_deref(), Some("sk-or-env"));
         assert!(
             !from_env,
             "OPENROUTER_API_KEY alone must not reroute --provider openai"
         );
+    }
+
+    #[test]
+    fn xai_api_key_alone_routes_to_api_x_ai() {
+        let (key, from_openrouter, from_xai) =
+            resolve_api_key_from(None, None, None, Some("xai-env".to_owned()), "");
+        assert_eq!(key.as_deref(), Some("xai-env"));
+        assert!(!from_openrouter);
+        assert!(from_xai);
+        assert_eq!(
+            if from_xai {
+                canact::XAI_BASE_URL.to_owned()
+            } else {
+                canact::default_compat_base_url("", from_openrouter)
+            },
+            canact::XAI_BASE_URL
+        );
+        let (_, _, from_named) =
+            resolve_api_key_from(None, None, None, Some("xai-env".to_owned()), "grok");
+        assert!(from_named);
+        let (_, from_or, from_x) = resolve_api_key_from(
+            None,
+            None,
+            Some("sk-or-env".to_owned()),
+            Some("xai-env".to_owned()),
+            "openai",
+        );
+        assert!(!from_or);
+        assert!(!from_x, "--provider openai must not select xAI");
     }
 
     #[test]

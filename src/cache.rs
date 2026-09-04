@@ -236,7 +236,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v94: JSON string-wrapped hello stays Weak; loopback :11434
 ///      shares the ollama cache family; MCP isError only on
 ///      actual tool failures.
-pub const PROBE_SUITE_VERSION: u32 = 94;
+/// v95: xai/grok/api.x.ai share the xai cache family; api.x.ai
+///      requires a key; 400 incorrect-key is Auth.
+pub const PROBE_SUITE_VERSION: u32 = 95;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -733,6 +735,7 @@ fn provider_family(provider: &str) -> &str {
     match provider {
         "openai" | "api.openai.com" => "openai",
         "openrouter" | "openrouter.ai" => "openrouter",
+        "xai" | "grok" | "api.x.ai" | "x.ai" => "xai",
         "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => "ollama",
         other if loopback_default_ollama_port(other) => "ollama",
         other => other,

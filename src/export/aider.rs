@@ -195,6 +195,15 @@ mod tests {
             meta.litellm_provider, "ollama",
             "mixed-case Localhost must match overlay_model_name family ollama"
         );
+
+        p.provider = "api.x.ai".to_owned();
+        p.model_id = "grok-4".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay.metadata.get("xai/grok-4").expect("xai meta");
+        assert_eq!(
+            meta.litellm_provider, "xai",
+            "api.x.ai must match overlay_model_name family xai"
+        );
     }
 
     #[test]

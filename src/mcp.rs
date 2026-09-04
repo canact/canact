@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError, ProbeRunner,
-    cloud_endpoint_requires_key, default_compat_base_url, looks_cheap, provider_from_base_url,
+    XAI_BASE_URL, cloud_endpoint_requires_key, default_compat_base_url, looks_cheap,
+    provider_from_base_url,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -157,24 +158,28 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     let mut cache = ProbeCache::load(&cache_path)
         .map_err(|e| format!("failed to load cache {}: {e}", cache_path.display()))?;
 
-    let (api_key, from_openrouter) = match args.get("api_key_env").and_then(Value::as_str) {
+    let (api_key, from_openrouter, from_xai) = match args.get("api_key_env").and_then(Value::as_str)
+    {
         Some(var) if !var.is_empty() => (
             std::env::var(var).ok().filter(|s| !s.is_empty()),
             var == "OPENROUTER_API_KEY",
+            var == "XAI_API_KEY",
         ),
         _ => {
             if let Some(key) = std::env::var("OPENAI_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
             {
-                (Some(key), false)
+                (Some(key), false, false)
+            } else if let Some(key) = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()) {
+                (Some(key), false, true)
             } else if let Some(key) = std::env::var("OPENROUTER_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
             {
-                (Some(key), true)
+                (Some(key), true, false)
             } else {
-                (None, false)
+                (None, false, false)
             }
         }
     };
@@ -189,7 +194,11 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| {
-            mcp_default_base_url(provider_given.as_deref().unwrap_or(""), from_openrouter)
+            mcp_default_base_url(
+                provider_given.as_deref().unwrap_or(""),
+                from_openrouter,
+                from_xai,
+            )
         });
     let provider = provider_given.unwrap_or_else(|| provider_from_base_url(&base_url));
     let skip_expensive = if full {
@@ -223,7 +232,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     }
     if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
         return Err(
-            "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY), or pass base_url for a local host"
+            "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY), or pass base_url for a local host"
                 .to_owned(),
         );
     }
@@ -249,8 +258,11 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     Ok(run.host_policy_envelope())
 }
 
-fn mcp_default_base_url(provider: &str, from_openrouter: bool) -> String {
+fn mcp_default_base_url(provider: &str, from_openrouter: bool, from_xai: bool) -> String {
     let p = provider.to_ascii_lowercase();
+    if from_xai && p.is_empty() {
+        return XAI_BASE_URL.to_owned();
+    }
     let from_openrouter =
         from_openrouter && (p.is_empty() || p == "openrouter" || p == "openrouter.ai");
     default_compat_base_url(provider, from_openrouter)
@@ -382,27 +394,33 @@ mod tests {
     #[test]
     fn openai_provider_stays_on_openai_when_only_openrouter_env() {
         assert_eq!(
-            mcp_default_base_url("openai", true),
+            mcp_default_base_url("openai", true, false),
             "https://api.openai.com/v1",
             "MCP provider openai must not use OpenRouter when only OPENROUTER_API_KEY is set"
         );
         assert_eq!(
-            mcp_default_base_url("api.openai.com", true),
+            mcp_default_base_url("api.openai.com", true, false),
             "https://api.openai.com/v1"
         );
         assert_eq!(
-            mcp_default_base_url("", true),
+            mcp_default_base_url("", true, false),
             "https://openrouter.ai/api/v1",
             "empty provider plus OpenRouter env must keep #116 OpenRouter default"
         );
         assert_eq!(
-            mcp_default_base_url("127.0.0.1:1234", false),
+            mcp_default_base_url("127.0.0.1:1234", false, false),
             "http://127.0.0.1:1234/v1",
             "MCP provider 127.0.0.1:1234 without base_url must stay on loopback"
         );
         assert_eq!(
-            mcp_default_base_url("localhost:11434", true),
+            mcp_default_base_url("localhost:11434", true, false),
             "http://localhost:11434/v1"
+        );
+        assert_eq!(mcp_default_base_url("xai", false, false), XAI_BASE_URL);
+        assert_eq!(
+            mcp_default_base_url("", false, true),
+            XAI_BASE_URL,
+            "empty provider plus XAI_API_KEY must default to api.x.ai"
         );
     }
 
