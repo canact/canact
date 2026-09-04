@@ -236,7 +236,8 @@ fn signature_colon_offset(after: &str) -> Option<usize> {
 }
 
 fn looks_like_parameter_list(between: &str) -> bool {
-    let s = strip_return_annotation(between.trim());
+    let stripped = strip_hash_comments(between);
+    let s = strip_return_annotation(stripped.trim());
     if s.starts_with('(') && s.ends_with(')') {
         if count_char(s, '(') != count_char(s, ')') {
             return false;
@@ -313,6 +314,10 @@ fn is_parameter(s: &str) -> bool {
     let s = s.trim();
     if s.is_empty() {
         return false;
+    }
+    // Positional-only `/` and keyword-only `*` are slots, not names.
+    if s == "/" || s == "*" {
+        return true;
     }
     let name = match s.split_once('=') {
         Some((head, _)) => match head.split_once(':') {
@@ -1044,6 +1049,27 @@ def merge_sorted(
         assert_eq!(
             result.score, 1.0,
             "wrapped typed merge_sorted must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_wrapped_params_with_hash_comments_is_strong() {
+        let code = "\
+def merge_sorted(
+    a: list[int],  # already sorted
+    b: list[int],  # already sorted
+) -> list[int]:
+    return a + b
+";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "wrapped typed params with # comments must be Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
     }

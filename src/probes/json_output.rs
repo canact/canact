@@ -118,17 +118,16 @@ fn score_json_text(text: &str) -> (f32, String) {
     let primary = extract_json_from_text(text);
     let primary_is_array =
         serde_json::from_str::<serde_json::Value>(primary).is_ok_and(|val| val.is_array());
-    // A leading parseable array must not abort pick-best. Search before
-    // and after that array so an earlier standalone object still wins,
-    // but objects only nested inside the array do not count.
+    // Standalone objects win. A complete hello that only lives inside an
+    // array envelope stays Weak (needs_json_repair).
     let mut best: Option<(f32, String)> = None;
-    if primary_is_array {
-        if let Some(i) = text.find(primary) {
-            consider_json_objects(&text[..i], &mut best);
-            consider_json_objects(&text[i + primary.len()..], &mut best);
-        }
-    } else {
-        consider_json_objects(text, &mut best);
+    let mut array_wrapped_hello = false;
+    consider_standalone_json(text, &mut best, &mut array_wrapped_hello);
+    if best.as_ref().is_some_and(|(s, _)| *s >= 1.0) {
+        return best.expect("best is Some");
+    }
+    if array_wrapped_hello {
+        return (0.0, "Response JSON is an array, not an object".to_string());
     }
     if let Some(best) = best {
         return best;
@@ -139,12 +138,55 @@ fn score_json_text(text: &str) -> (f32, String) {
     (0.0, "Response was not valid JSON".to_string())
 }
 
-fn consider_json_objects(text: &str, best: &mut Option<(f32, String)>) {
-    for val in json_objects_in(text) {
-        let scored = score_json_object(&val);
+fn consider_standalone_json(
+    text: &str,
+    best: &mut Option<(f32, String)>,
+    array_wrapped_hello: &mut bool,
+) {
+    let mut i = 0;
+    while i < text.len() {
+        if text[i..].starts_with('[') {
+            if let Some((val, end)) = next_json_array(text, i) {
+                if value_contains_complete_hello(&val) {
+                    *array_wrapped_hello = true;
+                }
+                i = end;
+                continue;
+            }
+        }
+        if text[i..].starts_with('{') {
+            if let Some((val, end)) = next_json_object(text, i) {
+                collect_nested_object_scores(&val, best);
+                i = end;
+                continue;
+            }
+        }
+        i += text[i..].chars().next().map_or(1, char::len_utf8);
+    }
+}
+
+fn collect_nested_object_scores(val: &serde_json::Value, best: &mut Option<(f32, String)>) {
+    if val.is_object() {
+        let scored = score_json_object(val);
         if best.as_ref().is_none_or(|(s, _)| scored.0 > *s) {
             *best = Some(scored);
         }
+        if let Some(obj) = val.as_object() {
+            for nested in obj.values() {
+                collect_nested_object_scores(nested, best);
+            }
+        }
+    }
+}
+
+fn value_contains_complete_hello(val: &serde_json::Value) -> bool {
+    if val.is_object() && score_json_object(val).0 >= 1.0 {
+        return true;
+    }
+    match val {
+        serde_json::Value::Array(arr) => arr.iter().any(value_contains_complete_hello),
+        serde_json::Value::Object(o) => o.values().any(value_contains_complete_hello),
+        _ => false,
     }
 }
 
@@ -184,34 +226,34 @@ fn score_json_object(val: &serde_json::Value) -> (f32, String) {
     }
 }
 
-fn json_objects_in(text: &str) -> Vec<serde_json::Value> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < text.len() {
-        if text[i..].starts_with('{') {
-            if let Some((val, end)) = next_json_object(text, i) {
-                collect_nested_objects(&val, &mut out);
-                i = end;
-                continue;
-            }
-        }
-        i += text[i..].chars().next().map_or(1, char::len_utf8);
-    }
-    out
-}
-
-fn collect_nested_objects(val: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
-    if let Some(obj) = val.as_object() {
-        out.push(val.clone());
-        for nested in obj.values() {
-            collect_nested_objects(nested, out);
-        }
-    }
-}
-
 fn next_json_object(text: &str, start: usize) -> Option<(serde_json::Value, usize)> {
+    next_json_delimited(text, start, '{', '}').and_then(|(val, end)| {
+        if val.is_object() {
+            Some((val, end))
+        } else {
+            None
+        }
+    })
+}
+
+fn next_json_array(text: &str, start: usize) -> Option<(serde_json::Value, usize)> {
+    next_json_delimited(text, start, '[', ']').and_then(|(val, end)| {
+        if val.is_array() {
+            Some((val, end))
+        } else {
+            None
+        }
+    })
+}
+
+fn next_json_delimited(
+    text: &str,
+    start: usize,
+    open: char,
+    close: char,
+) -> Option<(serde_json::Value, usize)> {
     let slice = &text[start..];
-    if !slice.starts_with('{') {
+    if !slice.starts_with(open) {
         return None;
     }
     let mut depth = 0i32;
@@ -232,21 +274,19 @@ fn next_json_object(text: &str, start: usize) -> Option<(serde_json::Value, usiz
             }
             continue;
         }
-        match c {
-            '"' => in_str = true,
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    let end = off + 1;
-                    let val: serde_json::Value = serde_json::from_str(&slice[..end]).ok()?;
-                    if val.is_object() {
-                        return Some((val, start + end));
-                    }
-                    return None;
-                }
+        if c == '"' {
+            in_str = true;
+            continue;
+        }
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                let end = off + 1;
+                let val: serde_json::Value = serde_json::from_str(&slice[..end]).ok()?;
+                return Some((val, start + end));
             }
-            _ => {}
         }
     }
     None
@@ -417,6 +457,22 @@ mod tests {
             "fenced cat array must not abort pick-best of a later hello object: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn json_example_object_then_array_wrapped_hello_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                "Example: {\"word\": \"cat\", \"length\": 3, \"reversed\": \"tac\"}\n\
+                 [{\"word\": \"hello\", \"length\": 5, \"reversed\": \"olleh\"}]",
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "array-wrapped hello after an example object must stay Weak: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]

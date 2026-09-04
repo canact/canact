@@ -102,3 +102,20 @@ fn overlay_model_name_stable() {
     );
     assert_eq!(overlay_model_name(&p), "ollama/qwen2.5-coder");
 }
+
+#[test]
+fn overlay_localhost_port_still_maps_to_ollama() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.provider = "127.0.0.1:1234".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "ollama/qwen2.5-coder",
+        "export still maps loopback host:port to ollama"
+    );
+    p.provider = "localhost:11434".into();
+    assert_eq!(overlay_model_name(&p), "ollama/qwen2.5-coder");
+}

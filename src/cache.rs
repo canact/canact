@@ -219,7 +219,12 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      is Medium; vision don't/do not/recognise and curly apostrophes;
 ///      memory not-able/not-allowed/won't/should-not on provide/tell/repeat
 ///      (including won't tell); recognize-the-font hedge stays Strong.
-pub const PROBE_SUITE_VERSION: u32 = 90;
+/// v91: hash comments in wrapped typed defs; start-of-line lecture
+///      signatures; array-wrapped hello after an example object;
+///      vision could-not / did-not-see / make-out plus letters Medium;
+///      this/that font hedges; memory hyphenless code and more refusals;
+///      minutes are not the planted ms fact; XML file_path=value echo.
+pub const PROBE_SUITE_VERSION: u32 = 91;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

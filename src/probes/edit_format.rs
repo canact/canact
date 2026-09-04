@@ -242,11 +242,118 @@ Rename the function `greet` to `welcome` and change the greeting from \
 }
 
 /// `fn greet(` / `fn welcome(` must start a line (after indent), not sit mid-sentence.
+/// The rest of the line must look like a Rust signature, not English (`should say`).
 fn has_code_fn_token(text: &str, token: &str) -> bool {
     text.lines().any(|line| {
         let t = line.trim_start();
-        t.starts_with(token) || (t.starts_with("pub ") && t[4..].trim_start().starts_with(token))
+        let after = if let Some(rest) = t.strip_prefix(token) {
+            rest
+        } else if let Some(rest) = t.strip_prefix("pub ") {
+            let rest = rest.trim_start();
+            let Some(rest) = rest.strip_prefix(token) else {
+                return false;
+            };
+            rest
+        } else {
+            return false;
+        };
+        looks_like_rust_fn_signature_rest(after)
     })
+}
+
+/// After `fn greet(`, the rest must close the params and then be a type/`{`/`;`.
+fn looks_like_rust_fn_signature_rest(after_open_paren: &str) -> bool {
+    let mut depth = 1i32;
+    let mut close = None;
+    for (i, c) in after_open_paren.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close) = close else {
+        return false;
+    };
+    let after = after_open_paren[close + 1..].trim();
+    let after = after
+        .strip_suffix('{')
+        .or_else(|| after.strip_suffix(';'))
+        .map(str::trim)
+        .unwrap_or(after);
+    if after.is_empty() {
+        return true;
+    }
+    let Some(ty) = after.strip_prefix("->") else {
+        return false;
+    };
+    is_rust_type_tokens(ty.trim().trim_end_matches(['{', ';']).trim())
+}
+
+fn is_rust_type_tokens(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut saw_ident = false;
+    let mut i = 0;
+    let bytes = s.as_bytes();
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if matches!(
+            c,
+            b':' | b'<' | b'>' | b'&' | b'\'' | b',' | b'[' | b']' | b'(' | b')' | b'+' | b'*'
+        ) {
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let word = &s[start..i];
+            if matches!(
+                word,
+                "should"
+                    | "say"
+                    | "the"
+                    | "a"
+                    | "an"
+                    | "to"
+                    | "and"
+                    | "or"
+                    | "for"
+                    | "with"
+                    | "from"
+                    | "that"
+                    | "this"
+                    | "is"
+                    | "be"
+                    | "no"
+                    | "longer"
+                    | "use"
+                    | "change"
+                    | "rename"
+            ) {
+                return false;
+            }
+            saw_ident = true;
+            continue;
+        }
+        return false;
+    }
+    saw_ident
 }
 
 fn is_code_diff_line(line: &str, mark: char) -> bool {
@@ -630,6 +737,26 @@ Rename welcome Welcome
     }
 
     #[tokio::test]
+    async fn search_replace_lecture_signature_line_is_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+fn greet(name: &str) -> String should say Hello
+=======
+fn welcome(name: &str) -> String should say Welcome
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "start-of-line lecture signatures must not be Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn search_replace_lecture_fn_greet_paren_is_not_strong() {
         let response_text = "\
 <<<<<<< SEARCH
@@ -953,6 +1080,26 @@ The format uses -removed line and +added line.
         };
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_ne!(result.level, CapabilityLevel::Strong, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn unified_diff_lecture_signature_line_is_not_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,1 +1,1 @@
+-fn greet(name: &str) -> String should say Hello
++fn welcome(name: &str) -> String should say Welcome
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "start-of-line lecture signatures must not be UnifiedDiff Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

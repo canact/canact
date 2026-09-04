@@ -43,12 +43,13 @@ pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
 
 /// True when the host or model looks local/free so the cheap suite is enough.
 /// Host label used as `provider` when the user omitted `--provider`.
+/// Loopback URLs keep `host:port` so different listeners do not share a cache row.
 pub fn provider_from_base_url(base_url: &str) -> String {
-    let host = url_host_hint(base_url);
-    if host.is_empty() {
+    let hostport = url_host_port_hint(base_url);
+    if hostport.is_empty() {
         "openai-compat".to_owned()
     } else {
-        host
+        hostport
     }
 }
 
@@ -71,6 +72,11 @@ pub fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
 }
 
 fn url_host_hint(url: &str) -> String {
+    let hostport = url_host_port_hint(url);
+    host_without_port(&hostport).to_owned()
+}
+
+fn url_host_port_hint(url: &str) -> String {
     let url = url.to_ascii_lowercase();
     let after_scheme = url.split("://").nth(1).unwrap_or(&url);
     let authority = after_scheme
@@ -81,10 +87,23 @@ fn url_host_hint(url: &str) -> String {
         .rsplit_once('@')
         .map(|(_, h)| h)
         .unwrap_or(authority);
-    if let Some(inner) = hostport.strip_prefix('[').and_then(|s| s.split(']').next()) {
-        return inner.to_owned();
+    if let Some(rest) = hostport.strip_prefix('[') {
+        let (host, after) = rest.split_once(']').unwrap_or((rest, ""));
+        if let Some(port) = after.strip_prefix(':').filter(|p| !p.is_empty()) {
+            return format!("{host}:{port}");
+        }
+        return host.to_owned();
     }
-    hostport.split(':').next().unwrap_or(hostport).to_owned()
+    hostport.to_owned()
+}
+
+fn host_without_port(hostport: &str) -> &str {
+    if let Some((host, port)) = hostport.rsplit_once(':') {
+        if !host.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
+            return host;
+        }
+    }
+    hostport
 }
 
 #[cfg(test)]
@@ -178,10 +197,27 @@ mod tests {
     fn ipv6_loopback_host_is_not_open_bracket() {
         assert_eq!(
             provider_from_base_url("http://[::1]:11434/v1"),
-            "::1",
-            "IPv6 authority must not split on the first colon"
+            "::1:11434",
+            "IPv6 authority must keep host:port and not split on the first colon"
         );
         assert!(looks_cheap("::1", "qwen", "http://[::1]:11434/v1"));
+    }
+
+    #[test]
+    fn url_derived_provider_keeps_loopback_port() {
+        assert_eq!(
+            provider_from_base_url("http://127.0.0.1:1234/v1"),
+            "127.0.0.1:1234"
+        );
+        assert_eq!(
+            provider_from_base_url("http://localhost:1234/v1"),
+            "localhost:1234"
+        );
+        assert_eq!(
+            provider_from_base_url("https://api.openai.com/v1"),
+            "api.openai.com",
+            "cloud hosts without an explicit port stay host-only"
+        );
     }
 
     #[test]

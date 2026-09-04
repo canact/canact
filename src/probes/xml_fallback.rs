@@ -145,7 +145,8 @@ fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
 fn xml_args_have_real_path(args: &serde_json::Value) -> bool {
     match args {
         serde_json::Value::Object(o) => {
-            let own = xml_map_get_ci(o, "path").is_some_and(xml_path_value_is_real);
+            let own = xml_map_get_ci(o, "path").is_some_and(xml_path_value_is_real)
+                || xml_map_get_ci(o, "file_path").is_some_and(xml_path_value_is_real);
             own || o.values().any(xml_args_have_real_path)
         }
         serde_json::Value::Array(arr) => arr.iter().any(xml_args_have_real_path),
@@ -175,14 +176,15 @@ fn xml_args_are_card_tokens(args: &serde_json::Value) -> bool {
 fn xml_object_is_card(o: &serde_json::Map<String, serde_json::Value>) -> bool {
     let param_value_echo = xml_map_get_ci(o, "param").is_some_and(xml_value_is_card_value);
     let path_value_echo = xml_map_get_ci(o, "path").is_some_and(xml_value_is_card_value);
+    let file_path_value_echo = xml_map_get_ci(o, "file_path").is_some_and(xml_value_is_card_value);
     let schema_echo = xml_map_get_ci(o, "type")
         .and_then(|v| v.as_str())
         .is_some_and(|s| s.eq_ignore_ascii_case("object"))
         && xml_map_get_ci(o, "properties").is_some()
         && !xml_map_get_ci(o, "path")
             .and_then(|v| v.as_str())
-            .is_some_and(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("value"));
-    param_value_echo || path_value_echo || schema_echo
+            .is_some_and(|s| !s.trim().is_empty() && !xml_is_card_token_str(s));
+    param_value_echo || path_value_echo || file_path_value_echo || schema_echo
 }
 
 /// A string or array `path` that is not the card token `value`.
@@ -190,7 +192,7 @@ fn xml_object_is_card(o: &serde_json::Map<String, serde_json::Value>) -> bool {
 fn xml_path_value_is_real(v: &serde_json::Value) -> bool {
     if let Some(s) = v.as_str() {
         let t = xml_visible_card_token(s);
-        return !t.is_empty() && !t.eq_ignore_ascii_case("value");
+        return !t.is_empty() && !xml_is_card_token_str(s);
     }
     v.as_array()
         .is_some_and(|arr| !arr.is_empty() && !xml_value_is_card_value(v))
@@ -198,18 +200,22 @@ fn xml_path_value_is_real(v: &serde_json::Value) -> bool {
 
 /// `{"param":"value"}` and `{"param":["value"]}`.
 fn xml_value_is_card_value(v: &serde_json::Value) -> bool {
-    if v.as_str()
-        .is_some_and(|s| xml_visible_card_token(s).eq_ignore_ascii_case("value"))
-    {
+    if v.as_str().is_some_and(xml_is_card_token_str) {
         return true;
     }
     v.as_array().is_some_and(|arr| {
         !arr.is_empty()
-            && arr.iter().all(|el| {
-                el.as_str()
-                    .is_some_and(|s| xml_visible_card_token(s).eq_ignore_ascii_case("value"))
-            })
+            && arr
+                .iter()
+                .all(|el| el.as_str().is_some_and(xml_is_card_token_str))
     })
+}
+
+fn xml_is_card_token_str(s: &str) -> bool {
+    let t = xml_visible_card_token(s);
+    t.eq_ignore_ascii_case("value")
+        || t.eq_ignore_ascii_case("param")
+        || t.eq_ignore_ascii_case("tool_name")
 }
 
 /// Drop whitespace and ZWSP/format marks so `value` + U+200B is still the card.
@@ -425,6 +431,48 @@ mod tests {
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn xml_file_path_value_card_is_echo() {
+        for args in [
+            r#"{"file_path": "value"}"#,
+            r#"{"path":"param"}"#,
+            r#"{"path":"TOOL_NAME"}"#,
+        ] {
+            let response_text = format!(
+                "<tool_call><name>read_file</name><arguments>{args}</arguments></tool_call>"
+            );
+            let llm = MockLlm {
+                response: text_response(&response_text),
+            };
+            let result = probe_xml_tool_calling(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "card tokens on the path alias must be echo: {args} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "args={args}");
+        }
+
+        let nested = "\
+<tool_call>
+<name>read_file</name>
+<arguments>
+<file_path>value</file_path>
+</arguments>
+</tool_call>";
+        let result = probe_xml_tool_calling(&MockLlm {
+            response: text_response(nested),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "XML file_path=value child must be echo: {result:?}"
+        );
+        assert_eq!(result.score, 0.0);
     }
 
     #[tokio::test]

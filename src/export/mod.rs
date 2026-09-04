@@ -138,12 +138,24 @@ fn strip_overlay_model_prefix<'a>(
 }
 
 pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
-    match provider.to_ascii_lowercase().as_str() {
+    let lowered = provider.to_ascii_lowercase();
+    match lowered.as_str() {
         "openrouter.ai" | "openrouter" => "openrouter",
         "api.openai.com" | "openai" => "openai",
-        "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => "ollama",
+        p if overlay_loopback_host(p) => "ollama",
         _ => provider,
     }
+}
+
+fn overlay_loopback_host(provider: &str) -> bool {
+    matches!(
+        provider,
+        "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0"
+    ) || provider.starts_with("localhost:")
+        || provider.starts_with("127.0.0.1:")
+        || provider.starts_with("0.0.0.0:")
+        || provider.starts_with("::1:")
+        || provider.starts_with("[::1]:")
 }
 
 /// Context tokens the host should compact against.

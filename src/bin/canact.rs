@@ -6,7 +6,8 @@ use std::process::ExitCode;
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
     ProbeError, ProbeRun, ProbeRunner, cloud_endpoint_requires_key, default_compat_base_url,
-    list_model_ids, looks_cheap, missing_model_message, overlay_context_tokens, run_mcp_stdio,
+    list_model_ids, looks_cheap, missing_model_message, overlay_context_tokens,
+    provider_from_base_url, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -146,7 +147,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         .clone()
         .unwrap_or_else(|| default_compat_base_url(&provider_hint, from_openrouter));
     let provider = if provider_hint.is_empty() {
-        provider_from_url(&base_url)
+        provider_from_base_url(&base_url)
     } else {
         provider_hint
     };
@@ -457,14 +458,6 @@ async fn resolve_model(
             Err(1)
         }
     }
-}
-
-fn provider_from_url(base_url: &str) -> String {
-    reqwest::Url::parse(base_url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_owned))
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "openai-compat".to_owned())
 }
 
 fn default_cache_path() -> PathBuf {

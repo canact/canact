@@ -64,7 +64,7 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
     let recall_resp = llm.chat(request_recall).await?;
     let upper = recall_resp.text.to_uppercase();
 
-    let has_full = upper.contains("ZEPHYR-4829");
+    let has_full = memory_has_full_code(&upper);
     let has_partial = upper.contains("ZEPHYR") || upper.contains("4829");
     let refused = memory_refused(&recall_resp.text);
 
@@ -91,6 +91,17 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
     })
 }
 
+fn memory_has_full_code(upper: &str) -> bool {
+    if upper.contains("ZEPHYR-4829") {
+        return true;
+    }
+    let folded: String = upper
+        .chars()
+        .filter(|c| !matches!(c, '-' | ' ' | '\t' | '\u{2013}' | '\u{2014}' | '\u{2212}'))
+        .collect();
+    folded.contains("ZEPHYR4829")
+}
+
 fn memory_refused(text: &str) -> bool {
     let folded: String = text
         .chars()
@@ -105,6 +116,10 @@ fn memory_refused(text: &str) -> bool {
     let lower = folded.to_lowercase();
     lower.contains("don't remember")
         || lower.contains("do not remember")
+        || lower.contains("didn't remember")
+        || lower.contains("did not remember")
+        || lower.contains("don't know")
+        || lower.contains("do not know")
         || lower.contains("can't remember")
         || lower.contains("cannot remember")
         || lower.contains("can not remember")
@@ -129,6 +144,9 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("can't provide")
         || lower.contains("cannot provide")
         || lower.contains("can not provide")
+        || lower.contains("can't give")
+        || lower.contains("cannot give")
+        || lower.contains("can not give")
         || lower.contains("won't provide")
         || lower.contains("will not provide")
         || lower.contains("shouldn't provide")
@@ -213,6 +231,23 @@ mod tests {
         let result = probe_multi_turn_memory(&llm).await.unwrap();
         assert_eq!(result.score, 0.0, "{result:?}");
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn refusal_didnt_remember_dont_know_cannot_give_quoted_code_is_weak() {
+        for text in [
+            "I didn't remember ZEPHYR-4829",
+            "I don't know ZEPHYR-4829",
+            "I cannot give you ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "didn't-remember/don't-know/cannot-give that quotes the code must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
     }
 
     #[tokio::test]
@@ -322,6 +357,23 @@ mod tests {
                 "not-able/can-not-repeat/forgot that quotes the code must be Weak: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_code_without_hyphen_is_full() {
+        for text in [
+            "The secret code is ZEPHYR 4829.",
+            "The secret code is ZEPHYR4829.",
+            "The secret code is ZEPHYR\u{2013}4829.",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "code without a hyphen must still be full recall: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{text:?}");
         }
     }
 
