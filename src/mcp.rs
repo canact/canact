@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use crate::{
     ANTHROPIC_BASE_URL, CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRunner, XAI_BASE_URL, cloud_endpoint_requires_key, default_compat_base_url, looks_cheap,
-    provider_from_base_url, resolve_host_catalog,
+    ProbeRunner, XAI_BASE_URL, claude_code_access_token, cloud_endpoint_requires_key,
+    default_compat_base_url, looks_cheap, provider_from_base_url, resolve_host_catalog,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -327,6 +327,7 @@ fn anthropic_env_key() -> Option<String> {
                 .ok()
                 .filter(|s| !s.is_empty())
         })
+        .or_else(claude_code_access_token)
 }
 
 fn default_cache_path() -> PathBuf {
