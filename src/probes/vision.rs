@@ -312,9 +312,6 @@ fn rest_is_font_hedge(after: &str) -> bool {
 /// Infix leftover read verbs plus BL are not a read.
 /// Font hedges (`cannot identify the font`) stay Strong.
 fn leftover_read_blocks_strong(lower: &str) -> bool {
-    if vision_font_hedge(lower) {
-        return false;
-    }
     if lower.contains("not readable")
         || lower.contains("isn't readable")
         || lower.contains("is not readable")
@@ -342,7 +339,16 @@ fn cannot_plus_read_verb(lower: &str) -> bool {
         while let Some(rel) = lower.get(search..).and_then(|s| s.find(neg)) {
             let after = lower[search + rel + neg.len()..].trim_start();
             let rest = skip_one_adverb(after, ADVERBS);
-            if VERBS.iter().any(|verb| starts_with_word(rest, verb)) {
+            if let Some(verb) = VERBS
+                .iter()
+                .copied()
+                .find(|verb| starts_with_word(rest, verb))
+            {
+                let after_verb = rest[verb.len()..].trim_start();
+                if rest_is_font_hedge(after_verb) {
+                    search += rel + neg.len();
+                    continue;
+                }
                 return true;
             }
             search += rel + neg.len();
@@ -615,6 +621,8 @@ mod tests {
             "I cannot discern BL",
             "BL is not readable",
             "I'm having trouble reading BL",
+            "I cannot quite read BL (I don't know the font)",
+            "BL is not readable. I cannot identify the font",
         ] {
             let llm = MockLlm {
                 response: text_response(text),

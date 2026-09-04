@@ -224,6 +224,10 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("unable to give")
         || lower.contains("unable to say")
         || lower.contains("wouldn't share")
+        || lower.contains("wouldn't say")
+        || lower.contains("would not say")
+        || lower.contains("wouldn't give")
+        || lower.contains("would not give")
         || lower.contains("would not share")
         || lower.contains("not permitted to share")
         || lower.contains("not permitted to")
@@ -422,6 +426,9 @@ mod tests {
             "I won't say ZEPHYR-4829",
             "I'm unable to give ZEPHYR-4829",
             "I wouldn't share ZEPHYR-4829",
+            "I wouldn't say ZEPHYR-4829",
+            "I would not say ZEPHYR-4829",
+            "I wouldn't give ZEPHYR-4829",
             "I'm not permitted to share ZEPHYR-4829",
             "I cannot retrieve ZEPHYR-4829",
             "I no longer remember ZEPHYR-4829",
