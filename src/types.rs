@@ -54,10 +54,15 @@ impl ProbeResult {
     /// Level host policy uses. Skips, unprobed defaults, and synthesized
     /// errors are Weak even when the stored `level` is Medium.
     pub fn completed_level(&self) -> CapabilityLevel {
+        self.measured_level().unwrap_or(CapabilityLevel::Weak)
+    }
+
+    /// Completed score only. Transient / skip / unprobed are `None`.
+    pub fn measured_level(&self) -> Option<CapabilityLevel> {
         if self.is_synthesized_error() || self.is_unprobed_default() || self.is_skipped() {
-            CapabilityLevel::Weak
+            None
         } else {
-            self.level
+            Some(self.level)
         }
     }
 }
@@ -310,11 +315,21 @@ pub const CORE_DIMENSION_NAMES: &[&str] = &[
 ];
 
 impl CapabilityProfile {
-    /// Overall capability level (minimum of the three required dimensions).
+    /// Overall capability level (minimum of completed core dimensions).
+    ///
+    /// Transient, skipped, and unprobed cores are omitted. A 5xx/overload
+    /// on JSON must not collapse a Strong tools+instruction card to Weak.
+    /// If no core finished, Weak.
     pub fn overall_level(&self) -> CapabilityLevel {
-        completed_level(&self.tool_calling)
-            .min(completed_level(&self.json_output))
-            .min(completed_level(&self.instruction_following))
+        [
+            self.tool_calling.measured_level(),
+            self.json_output.measured_level(),
+            self.instruction_following.measured_level(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(CapabilityLevel::Weak)
     }
 
     /// Whether the host should use XML-tag fallback for tool calls.
@@ -323,8 +338,12 @@ impl CapabilityProfile {
     }
 
     /// Whether JSON output should be wrapped in a repair layer.
+    ///
+    /// Transient / skipped JSON does not turn repair on.
     pub fn needs_json_repair(&self) -> bool {
-        completed_level(&self.json_output) <= CapabilityLevel::Medium
+        self.json_output
+            .measured_level()
+            .is_some_and(|level| level <= CapabilityLevel::Medium)
     }
 
     /// Whether the model can be used for agentic work (tool calling).
