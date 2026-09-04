@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::{
     ANTHROPIC_BASE_URL, CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, XAI_BASE_URL, cloud_endpoint_requires_key, default_compat_base_url, looks_cheap,
-    provider_from_base_url,
+    provider_from_base_url, resolve_advertised_context,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -214,6 +214,30 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     } else {
         looks_cheap(&provider, &model, &base_url)
     };
+    if !force {
+        if let Some(profile) =
+            cache.get_with_knobs(&model, &provider, skip_expensive, vision, advertised)
+        {
+            return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
+                cacheable: true,
+                skip_expensive,
+                advertised_context_tokens: advertised,
+            }));
+        }
+        if !full && !vision {
+            if let Some((profile, cheap_row)) =
+                cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
+            {
+                return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
+                    cacheable: true,
+                    skip_expensive: cheap_row,
+                    advertised_context_tokens: advertised,
+                }));
+            }
+        }
+    }
+    let advertised =
+        resolve_advertised_context(advertised, &base_url, api_key.as_deref(), &model).await;
     if !force {
         if let Some(profile) =
             cache.get_with_knobs(&model, &provider, skip_expensive, vision, advertised)

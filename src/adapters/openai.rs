@@ -183,11 +183,37 @@ impl ProbeClient for OpenAiCompatClient {
     }
 }
 
+/// One row from `GET /models`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedModel {
+    /// Provider model id.
+    pub id: String,
+    /// Catalog window when the host sent one.
+    pub advertised_context_tokens: Option<u32>,
+}
+
+/// Catalog window from a `/models` object.
+///
+/// OpenAI-compat, OpenRouter, and xAI send `context_length`.
+/// Anthropic sends `max_input_tokens`. Zero is ignored.
+pub fn advertised_context_from_model_object(model: &Value) -> Option<u32> {
+    json_positive_u32(model.get("context_length"))
+        .or_else(|| json_positive_u32(model.get("max_input_tokens")))
+}
+
+/// Match a listed row to the probe model id.
+pub fn advertised_context_for_model(models: &[ListedModel], model_id: &str) -> Option<u32> {
+    models
+        .iter()
+        .find(|model| model.id == model_id)
+        .and_then(|model| model.advertised_context_tokens)
+}
+
 /// `GET {base}/models`. 404 yields an empty list so the CLI can require `--model`.
-pub async fn list_model_ids(
+pub async fn list_models(
     base_url: &str,
     api_key: Option<&str>,
-) -> Result<Vec<String>, ProbeError> {
+) -> Result<Vec<ListedModel>, ProbeError> {
     let http = default_http_client()?;
     let url = join_url(&trim_slash(base_url.to_owned()), "models");
     let builder = apply_cloud_auth(http.get(url), api_key, base_url);
@@ -201,16 +227,90 @@ pub async fn list_model_ids(
     if let Some(err) = value.get("error") {
         return Err(classify_provider_error(err));
     }
-    let ids = value
+    Ok(parse_listed_models(&value))
+}
+
+/// `GET {base}/models` ids only.
+pub async fn list_model_ids(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<String>, ProbeError> {
+    Ok(list_models(base_url, api_key)
+        .await?
+        .into_iter()
+        .map(|model| model.id)
+        .collect())
+}
+
+/// Catalog window for `model_id`, if `/models` listed one.
+pub async fn lookup_advertised_context(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_id: &str,
+) -> Result<Option<u32>, ProbeError> {
+    let models = list_models(base_url, api_key).await?;
+    Ok(advertised_context_for_model(&models, model_id))
+}
+
+/// Caller flag wins. Catalog `Err` or a missing row stays `None`.
+pub fn merge_advertised_context(
+    flag: Option<u32>,
+    catalog: Result<Option<u32>, ProbeError>,
+) -> Option<u32> {
+    if flag.is_some() {
+        return flag;
+    }
+    catalog.ok().flatten()
+}
+
+/// Fill advertised context from `/models` when the caller omitted it.
+pub async fn resolve_advertised_context(
+    flag: Option<u32>,
+    base_url: &str,
+    api_key: Option<&str>,
+    model_id: &str,
+) -> Option<u32> {
+    if flag.is_some() {
+        return flag;
+    }
+    merge_advertised_context(
+        flag,
+        lookup_advertised_context(base_url, api_key, model_id).await,
+    )
+}
+
+fn parse_listed_models(value: &Value) -> Vec<ListedModel> {
+    value
         .get("data")
-        .and_then(|d| d.as_array())
+        .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(str::to_owned))
+                .filter_map(|model| {
+                    let id = model.get("id").and_then(Value::as_str)?.to_owned();
+                    if id.is_empty() {
+                        return None;
+                    }
+                    Some(ListedModel {
+                        id,
+                        advertised_context_tokens: advertised_context_from_model_object(model),
+                    })
+                })
                 .collect()
         })
-        .unwrap_or_default();
-    Ok(ids)
+        .unwrap_or_default()
+}
+
+fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
+    let n = match value? {
+        Value::Number(num) => num.as_u64().or_else(|| {
+            num.as_f64()
+                .filter(|f| f.is_finite() && *f > 0.0)
+                .map(|f| f as u64)
+        })?,
+        Value::String(s) => s.parse().ok()?,
+        _ => return None,
+    };
+    u32::try_from(n).ok().filter(|n| *n > 0)
 }
 
 fn default_http_client() -> Result<reqwest::Client, ProbeError> {
@@ -2433,5 +2533,132 @@ mod tests {
         let base = spawn_http(404, "Not Found", Vec::new(), b"missing".to_vec());
         let ids = list_model_ids(&base, Some(SECRET)).await.expect("404");
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn advertised_context_reads_openrouter_context_length() {
+        let model = serde_json::json!({
+            "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "context_length": 1_000_000
+        });
+        assert_eq!(
+            advertised_context_from_model_object(&model),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn advertised_context_reads_anthropic_max_input_tokens() {
+        let model = serde_json::json!({
+            "id": "claude-haiku-4-5-20251001",
+            "max_input_tokens": 200_000,
+            "max_tokens": 64_000
+        });
+        assert_eq!(advertised_context_from_model_object(&model), Some(200_000));
+    }
+
+    #[test]
+    fn advertised_context_prefers_context_length_over_max_input() {
+        let model = serde_json::json!({
+            "id": "x",
+            "context_length": 128_000,
+            "max_input_tokens": 200_000
+        });
+        assert_eq!(advertised_context_from_model_object(&model), Some(128_000));
+    }
+
+    #[test]
+    fn merge_advertised_flag_wins_over_catalog() {
+        assert_eq!(
+            merge_advertised_context(Some(8192), Ok(Some(1_000_000))),
+            Some(8192)
+        );
+    }
+
+    #[test]
+    fn merge_advertised_uses_catalog_when_flag_unset() {
+        assert_eq!(
+            merge_advertised_context(None, Ok(Some(200_000))),
+            Some(200_000)
+        );
+    }
+
+    #[test]
+    fn merge_advertised_catalog_error_stays_none() {
+        assert_eq!(
+            merge_advertised_context(None, Err(ProbeError::Transient("overload".into()))),
+            None
+        );
+        assert_eq!(
+            merge_advertised_context(Some(4096), Err(ProbeError::Transient("x".into()))),
+            Some(4096)
+        );
+    }
+
+    #[test]
+    fn advertised_context_ignores_zero_and_missing() {
+        assert_eq!(
+            advertised_context_from_model_object(&serde_json::json!({"id": "x"})),
+            None
+        );
+        assert_eq!(
+            advertised_context_from_model_object(&serde_json::json!({
+                "id": "x",
+                "context_length": 0
+            })),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn list_models_keeps_context_length() {
+        let body = br#"{"data":[{"id":"grok-4.20-0309-non-reasoning","context_length":1000000}]}"#;
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            body.to_vec(),
+        );
+        let models = list_models(&base, Some(SECRET)).await.expect("200");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "grok-4.20-0309-non-reasoning");
+        assert_eq!(models[0].advertised_context_tokens, Some(1_000_000));
+        assert_eq!(
+            advertised_context_for_model(&models, "grok-4.20-0309-non-reasoning"),
+            Some(1_000_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_advertised_fills_from_models_when_flag_unset() {
+        let body = br#"{"data":[{"id":"nemo","context_length":1000000}]}"#;
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            body.to_vec(),
+        );
+        assert_eq!(
+            resolve_advertised_context(None, &base, Some(SECRET), "nemo").await,
+            Some(1_000_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_advertised_flag_wins_when_catalog_fails() {
+        let base = spawn_http(500, "ERR", Vec::new(), b"nope".to_vec());
+        assert_eq!(
+            resolve_advertised_context(Some(8192), &base, Some(SECRET), "nemo").await,
+            Some(8192)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_advertised_catalog_error_is_none() {
+        let base = spawn_http(500, "ERR", Vec::new(), b"nope".to_vec());
+        assert_eq!(
+            resolve_advertised_context(None, &base, Some(SECRET), "nemo").await,
+            None
+        );
     }
 }
