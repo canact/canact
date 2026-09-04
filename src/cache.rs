@@ -224,7 +224,11 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      vision could-not / did-not-see / make-out plus letters Medium;
 ///      this/that font hedges; memory hyphenless code and more refusals;
 ///      minutes are not the planted ms fact; XML file_path=value echo.
-pub const PROBE_SUITE_VERSION: u32 = 91;
+/// v92: these/those font hedges; past-tense recognize/identify; memory
+///      didn't-recall / I'd-forgotten; hyphenless warehouse and proto;
+///      hours and 1750 minutes are not the planted ms fact; trailing-
+///      comma or commented array wrap stays Weak.
+pub const PROBE_SUITE_VERSION: u32 = 92;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

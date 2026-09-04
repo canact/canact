@@ -134,27 +134,52 @@ fn build_rung_request(model: &str, rung: u32) -> ProbeRequest {
 
 fn recalls_all_facts(text: &str) -> bool {
     let lower = text.to_lowercase();
-    lower.contains(&FACT_WAREHOUSE.to_lowercase())
-        && lower.contains(&FACT_PROTOCOL.to_lowercase())
-        && recalls_heartbeat(&lower)
+    recalls_warehouse(&lower) && recalls_protocol(&lower) && recalls_heartbeat(&lower)
+}
+
+fn fold_marker(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '-' | ' ' | '\t' | '\u{2013}' | '\u{2014}' | '\u{2212}'))
+        .collect()
+}
+
+fn recalls_warehouse(lower: &str) -> bool {
+    fold_marker(lower).contains(&fold_marker(&FACT_WAREHOUSE.to_lowercase()))
+}
+
+fn recalls_protocol(lower: &str) -> bool {
+    let proto = FACT_PROTOCOL.to_lowercase();
+    let version = proto.trim_start_matches("proto-");
+    lower.contains(&proto) || lower.contains(&proto.replace('-', " ")) || lower.contains(version)
 }
 
 fn recalls_heartbeat(lower: &str) -> bool {
     if lower.contains(FACT_HEARTBEAT) || lower.contains("2,840") {
-        return true;
+        return integer_is_planted_ms(lower);
     }
     let compact: String = lower
         .chars()
         .filter(|c| !c.is_whitespace() && *c != ',')
         .collect();
-    compact.contains(FACT_HEARTBEAT)
+    (compact.contains(FACT_HEARTBEAT) && integer_is_planted_ms(lower))
         || compact.contains("2.84s")
         || compact.contains("2.84sec")
         || (lower.contains("2.84")
             && (has_seconds_unit(lower)
                 || (lower.contains("heartbeat")
                     && !has_milliseconds_unit(lower)
-                    && !has_minutes_unit(lower))))
+                    && !has_minutes_unit(lower)
+                    && !has_hours_unit(lower))))
+}
+
+fn integer_is_planted_ms(lower: &str) -> bool {
+    if has_milliseconds_unit(lower) || has_seconds_unit(lower) {
+        return true;
+    }
+    if has_minutes_unit(lower) || has_hours_unit(lower) {
+        return false;
+    }
+    true
 }
 
 fn has_seconds_unit(lower: &str) -> bool {
@@ -176,6 +201,12 @@ fn has_minutes_unit(lower: &str) -> bool {
     lower
         .split(|c: char| !c.is_ascii_alphabetic())
         .any(|w| matches!(w, "minute" | "minutes" | "min" | "mins"))
+}
+
+fn has_hours_unit(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .any(|w| matches!(w, "hour" | "hours" | "hr" | "hrs"))
 }
 
 fn estimate_tokens(chars: usize) -> u32 {
@@ -377,6 +408,38 @@ mod tests {
         assert!(
             !recalls_heartbeat("heartbeat is 2.84 minutes"),
             "heartbeat + 2.84 minutes must not count as the planted millisecond fact"
+        );
+        assert!(
+            !recalls_heartbeat("heartbeat is 2.84 hours"),
+            "heartbeat + 2.84 hours must not count as the planted millisecond fact"
+        );
+        assert!(
+            !recalls_heartbeat("2840 minutes"),
+            "2840 minutes must not count as 2840 ms"
+        );
+        assert!(
+            recalls_heartbeat("2840"),
+            "bare 2840 still counts; the question already asks for milliseconds"
+        );
+    }
+
+    #[test]
+    fn ladder_hyphenless_warehouse_and_proto_count() {
+        assert!(
+            recalls_all_facts("WH4481\nproto-9.2.11\n2840"),
+            "hyphenless warehouse must fold like ZEPHYR4829"
+        );
+        assert!(
+            recalls_all_facts("WH 4481\nproto-9.2.11\n2840"),
+            "spaced warehouse must fold like ZEPHYR 4829"
+        );
+        assert!(
+            recalls_all_facts("WH-4481\nproto 9.2.11\n2840"),
+            "spaced proto must count as proto-9.2.11"
+        );
+        assert!(
+            recalls_all_facts("WH-4481\n9.2.11\n2840"),
+            "bare 9.2.11 with warehouse and heartbeat must count"
         );
     }
 

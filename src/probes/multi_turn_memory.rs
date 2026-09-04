@@ -118,8 +118,12 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("do not remember")
         || lower.contains("didn't remember")
         || lower.contains("did not remember")
+        || lower.contains("didn't recall")
+        || lower.contains("did not recall")
         || lower.contains("don't know")
         || lower.contains("do not know")
+        || lower.contains("didn't know")
+        || lower.contains("did not know")
         || lower.contains("can't remember")
         || lower.contains("cannot remember")
         || lower.contains("can not remember")
@@ -137,6 +141,8 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("can't share")
         || lower.contains("cannot share")
         || lower.contains("can not share")
+        || lower.contains("couldn't share")
+        || lower.contains("could not share")
         || lower.contains("won't share")
         || lower.contains("will not share")
         || lower.contains("shouldn't share")
@@ -154,6 +160,8 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("can't tell")
         || lower.contains("cannot tell")
         || lower.contains("can not tell")
+        || lower.contains("couldn't tell")
+        || lower.contains("could not tell")
         || lower.contains("won't tell")
         || lower.contains("will not tell")
         || lower.contains("shouldn't tell")
@@ -178,6 +186,14 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("unable to tell")
         || lower.contains("not able to remember")
         || lower.contains("not able to recall")
+        || lower.contains("wasn't able to recall")
+        || lower.contains("wasn't able to remember")
+        || lower.contains("wasn't able to share")
+        || lower.contains("wasn't able to tell")
+        || lower.contains("wasn't able to provide")
+        || lower.contains("wasn't able to disclose")
+        || lower.contains("wasn't able to reveal")
+        || lower.contains("wasn't able to repeat")
         || lower.contains("not able to share")
         || lower.contains("not able to disclose")
         || lower.contains("not able to reveal")
@@ -197,8 +213,9 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("could not recall")
         || lower.contains("i've forgotten")
         || lower.contains("i have forgotten")
-        || lower.contains("i forgot")
+        || lower.contains("i'd forgotten")
         || lower.contains("i had forgotten")
+        || lower.contains("i forgot")
 }
 
 #[cfg(test)]
@@ -245,6 +262,27 @@ mod tests {
             assert_eq!(
                 result.score, 0.0,
                 "didn't-remember/don't-know/cannot-give that quotes the code must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refusal_didnt_recall_did_not_know_couldnt_tell_quoted_code_is_weak() {
+        for text in [
+            "I didn't recall ZEPHYR-4829",
+            "I did not know ZEPHYR-4829",
+            "I couldn't tell you ZEPHYR-4829",
+            "I could not share ZEPHYR-4829",
+            "I wasn't able to recall ZEPHYR-4829",
+            "I wasn't able to provide ZEPHYR-4829",
+            "I'd forgotten ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "didn't-recall/did-not-know/couldn't-tell that quotes the code must be Weak: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
         }

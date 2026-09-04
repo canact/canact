@@ -96,20 +96,31 @@ pub async fn probe_context_faithfulness<C: ProbeClient>(
 /// phrasing miss does not drop the score.
 fn recalls_timeout(lower: &str) -> bool {
     if lower.contains("1750") || lower.contains("1,750") {
-        return true;
+        return integer_is_planted_ms(lower);
     }
     let compact: String = lower
         .chars()
         .filter(|c| !c.is_whitespace() && *c != ',')
         .collect();
-    compact.contains("1750")
+    (compact.contains("1750") && integer_is_planted_ms(lower))
         || compact.contains("1.75s")
         || compact.contains("1.75sec")
         || (lower.contains("1.75")
             && (has_seconds_unit(lower)
                 || (lower.contains("timeout")
                     && !has_milliseconds_unit(lower)
-                    && !has_minutes_unit(lower))))
+                    && !has_minutes_unit(lower)
+                    && !has_hours_unit(lower))))
+}
+
+fn integer_is_planted_ms(lower: &str) -> bool {
+    if has_milliseconds_unit(lower) || has_seconds_unit(lower) {
+        return true;
+    }
+    if has_minutes_unit(lower) || has_hours_unit(lower) {
+        return false;
+    }
+    true
 }
 
 fn has_seconds_unit(lower: &str) -> bool {
@@ -131,6 +142,12 @@ fn has_minutes_unit(lower: &str) -> bool {
     lower
         .split(|c: char| !c.is_ascii_alphabetic())
         .any(|w| matches!(w, "minute" | "minutes" | "min" | "mins"))
+}
+
+fn has_hours_unit(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .any(|w| matches!(w, "hour" | "hours" | "hr" | "hrs"))
 }
 
 #[cfg(test)]
@@ -322,6 +339,18 @@ mod tests {
         assert!(
             !recalls_timeout("timeout is 1.75 minutes"),
             "timeout + 1.75 minutes must not count as the planted millisecond fact"
+        );
+        assert!(
+            !recalls_timeout("timeout is 1.75 hours"),
+            "timeout + 1.75 hours must not count as the planted millisecond fact"
+        );
+        assert!(
+            !recalls_timeout("1750 minutes"),
+            "1750 minutes must not count as 1750 ms"
+        );
+        assert!(
+            recalls_timeout("1750"),
+            "bare 1750 still counts; the question already asks for milliseconds"
         );
     }
 }
