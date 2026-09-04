@@ -594,5 +594,20 @@ mod tests {
             !looks_cheap("openai", "gpt-4o", "https://[2001:db8::1]/v1"),
             "non-loopback IPv6 must not match via a naive ::1 substring"
         );
+        assert!(looks_cheap(
+            "127.0.0.1:1234",
+            "llama3",
+            "http://example.invalid/v1"
+        ));
+        assert!(looks_cheap(
+            "localhost:11434",
+            "llama3",
+            "http://example.invalid/v1"
+        ));
+        assert_eq!(
+            canact::default_compat_base_url("127.0.0.1:1234", false),
+            "http://127.0.0.1:1234/v1",
+            "--provider 127.0.0.1:1234 without --base-url must stay on loopback"
+        );
     }
 }

@@ -396,6 +396,15 @@ mod tests {
             "https://openrouter.ai/api/v1",
             "empty provider plus OpenRouter env must keep #116 OpenRouter default"
         );
+        assert_eq!(
+            mcp_default_base_url("127.0.0.1:1234", false),
+            "http://127.0.0.1:1234/v1",
+            "MCP provider 127.0.0.1:1234 without base_url must stay on loopback"
+        );
+        assert_eq!(
+            mcp_default_base_url("localhost:11434", true),
+            "http://localhost:11434/v1"
+        );
     }
 
     #[test]

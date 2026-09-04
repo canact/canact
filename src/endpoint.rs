@@ -8,19 +8,22 @@ pub const LMSTUDIO_BASE_URL: &str = "http://127.0.0.1:1234/v1";
 pub const VLLM_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 
 /// Local-provider default when the user omitted `--base-url`.
-pub fn local_provider_base_url(provider: &str) -> Option<&'static str> {
-    match provider.to_ascii_lowercase().as_str() {
-        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => Some(OLLAMA_BASE_URL),
-        "lmstudio" => Some(LMSTUDIO_BASE_URL),
-        "vllm" => Some(VLLM_BASE_URL),
-        _ => None,
+pub fn local_provider_base_url(provider: &str) -> Option<String> {
+    let provider = provider.to_ascii_lowercase();
+    match provider.as_str() {
+        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => {
+            Some(OLLAMA_BASE_URL.to_owned())
+        }
+        "lmstudio" => Some(LMSTUDIO_BASE_URL.to_owned()),
+        "vllm" => Some(VLLM_BASE_URL.to_owned()),
+        other => loopback_host_port_base_url(other),
     }
 }
 
 /// Base URL when `--base-url` is omitted.
 pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String {
     if let Some(local) = local_provider_base_url(provider) {
-        return local.to_owned();
+        return local;
     }
     let provider = provider.to_ascii_lowercase();
     if from_openrouter || provider == "openrouter" || provider == "openrouter.ai" {
@@ -57,18 +60,38 @@ pub fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
     let provider = provider.to_ascii_lowercase();
     let host = url_host_hint(base_url);
     model.contains(":free")
-        || matches!(
-            provider.as_str(),
-            "ollama"
-                | "lmstudio"
-                | "vllm"
-                | "localhost"
-                | "127.0.0.1"
-                | "::1"
-                | "[::1]"
-                | "0.0.0.0"
-        )
+        || is_local_provider_label(&provider)
         || matches!(host.as_str(), "localhost" | "127.0.0.1" | "0.0.0.0" | "::1")
+}
+
+fn is_local_provider_label(provider: &str) -> bool {
+    matches!(
+        provider,
+        "ollama" | "lmstudio" | "vllm" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0"
+    ) || loopback_host_port_base_url(provider).is_some()
+}
+
+fn loopback_host_port_base_url(provider: &str) -> Option<String> {
+    let host = host_without_port(provider);
+    if host == provider {
+        return None;
+    }
+    let port = provider.rsplit_once(':').map(|(_, p)| p)?;
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if !matches!(bare, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1") {
+        return None;
+    }
+    if bare == "::1" {
+        Some(format!("http://[::1]:{port}/v1"))
+    } else {
+        Some(format!("http://{host}:{port}/v1"))
+    }
 }
 
 fn url_host_hint(url: &str) -> String {
@@ -217,6 +240,52 @@ mod tests {
             provider_from_base_url("https://api.openai.com/v1"),
             "api.openai.com",
             "cloud hosts without an explicit port stay host-only"
+        );
+    }
+
+    #[test]
+    fn host_port_loopback_provider_defaults_to_loopback_url() {
+        assert_eq!(
+            default_compat_base_url("127.0.0.1:1234", false),
+            "http://127.0.0.1:1234/v1",
+            "provider 127.0.0.1:1234 must stay on loopback, not api.openai.com"
+        );
+        assert_eq!(
+            default_compat_base_url("localhost:11434", false),
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(
+            default_compat_base_url("[::1]:11434", false),
+            "http://[::1]:11434/v1"
+        );
+        assert_eq!(
+            default_compat_base_url("127.0.0.1:1234", true),
+            "http://127.0.0.1:1234/v1",
+            "loopback host:port must stay local even when OpenRouter env is set"
+        );
+        assert_ne!(
+            default_compat_base_url("127.0.0.1:1234", false),
+            "https://api.openai.com/v1"
+        );
+        assert!(looks_cheap(
+            "127.0.0.1:1234",
+            "qwen",
+            "http://example.invalid/v1"
+        ));
+        assert!(looks_cheap(
+            "localhost:11434",
+            "qwen",
+            "http://example.invalid/v1"
+        ));
+        assert!(looks_cheap(
+            "[::1]:11434",
+            "qwen",
+            "http://example.invalid/v1"
+        ));
+        assert_ne!(
+            local_provider_base_url("127.0.0.1:1234"),
+            local_provider_base_url("ollama"),
+            "cache isolation of :1234 vs the ollama label must stay"
         );
     }
 
