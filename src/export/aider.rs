@@ -204,6 +204,18 @@ mod tests {
             meta.litellm_provider, "xai",
             "api.x.ai must match overlay_model_name family xai"
         );
+
+        p.provider = "api.anthropic.com".to_owned();
+        p.model_id = "claude-haiku-4-5-20251001".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("anthropic/claude-haiku-4-5-20251001")
+            .expect("anthropic meta");
+        assert_eq!(
+            meta.litellm_provider, "anthropic",
+            "api.anthropic.com must match overlay_model_name family anthropic"
+        );
     }
 
     #[test]

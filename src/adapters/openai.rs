@@ -14,7 +14,11 @@ use crate::client::{
     CatalogPriors, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage,
     ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall, ProbeUsage,
 };
+use crate::endpoint::is_anthropic_cloud_host;
 use crate::error::ProbeError;
+
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_OAUTH_BETA: &str = "oauth-2025-04-20";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -67,12 +71,7 @@ impl OpenAiCompatClient {
     }
 
     fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match &self.api_key {
-            Some(key) if !key.is_empty() => {
-                builder.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}"))
-            }
-            _ => builder,
-        }
+        apply_cloud_auth(builder, self.api_key.as_deref(), &self.base_url)
     }
 
     async fn stream_into(
@@ -191,12 +190,7 @@ pub async fn list_model_ids(
 ) -> Result<Vec<String>, ProbeError> {
     let http = default_http_client()?;
     let url = join_url(&trim_slash(base_url.to_owned()), "models");
-    let mut builder = http.get(url);
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            builder = builder.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}"));
-        }
-    }
+    let builder = apply_cloud_auth(http.get(url), api_key, base_url);
     let resp = builder.send().await.map_err(map_transport)?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(Vec::new());
@@ -303,6 +297,24 @@ async fn read_capped_text(resp: reqwest::Response, max: usize) -> String {
         buf.extend_from_slice(&chunk);
     }
     String::from_utf8_lossy(&buf).into_owned()
+}
+
+fn apply_cloud_auth(
+    mut builder: reqwest::RequestBuilder,
+    api_key: Option<&str>,
+    base_url: &str,
+) -> reqwest::RequestBuilder {
+    if let Some(key) = api_key {
+        if !key.is_empty() {
+            builder = builder.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}"));
+        }
+    }
+    if is_anthropic_cloud_host(base_url) {
+        builder = builder
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("anthropic-beta", ANTHROPIC_OAUTH_BETA);
+    }
+    builder
 }
 
 fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {

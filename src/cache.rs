@@ -238,7 +238,9 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      actual tool failures.
 /// v95: xai/grok/api.x.ai share the xai cache family; api.x.ai
 ///      requires a key; 400 incorrect-key is Auth.
-pub const PROBE_SUITE_VERSION: u32 = 95;
+/// v96: claude/anthropic/api.anthropic.com share the anthropic
+///      family; Anthropic OAuth headers; ANTHROPIC_* keys.
+pub const PROBE_SUITE_VERSION: u32 = 96;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -736,6 +738,7 @@ fn provider_family(provider: &str) -> &str {
         "openai" | "api.openai.com" => "openai",
         "openrouter" | "openrouter.ai" => "openrouter",
         "xai" | "grok" | "api.x.ai" | "x.ai" => "xai",
+        "claude" | "anthropic" | "api.anthropic.com" => "anthropic",
         "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => "ollama",
         other if loopback_default_ollama_port(other) => "ollama",
         other => other,

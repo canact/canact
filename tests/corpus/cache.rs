@@ -48,8 +48,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v95() {
-    assert_eq!(PROBE_SUITE_VERSION, 95);
+fn cache_key_format_is_model_provider_unset_v96() {
+    assert_eq!(PROBE_SUITE_VERSION, 96);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -57,7 +57,7 @@ fn cache_key_format_is_model_provider_unset_v95() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v95|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v96|full|novision|ctxnone");
 }
 
 #[test]
@@ -341,6 +341,35 @@ fn find_profile_hits_across_xai_aliases() {
     assert!(
         cache.find_profile("grok-4", "openai").is_none(),
         "xai must not share the openai family"
+    );
+}
+
+#[test]
+fn find_profile_hits_across_anthropic_aliases() {
+    let mut cache = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "claude-haiku-4-5-20251001".into();
+    stored.provider = "claude".into();
+    cache.put(stored);
+    for requested in ["anthropic", "api.anthropic.com", "claude"] {
+        assert!(
+            cache
+                .find_profile("claude-haiku-4-5-20251001", requested)
+                .is_some(),
+            "probe --provider claude must hit export --provider {requested}"
+        );
+    }
+    assert!(
+        cache
+            .find_profile("claude-haiku-4-5-20251001", "openai")
+            .is_none(),
+        "anthropic must not share the openai family"
+    );
+    assert!(
+        cache
+            .find_profile("claude-haiku-4-5-20251001", "xai")
+            .is_none(),
+        "anthropic must not share the xai family"
     );
 }
 

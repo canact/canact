@@ -133,3 +133,23 @@ fn overlay_xai_host_maps_to_xai_family() {
     p.provider = "grok".into();
     assert_eq!(overlay_model_name(&p), "xai/grok-4");
 }
+
+#[test]
+fn overlay_anthropic_host_maps_to_anthropic_family() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.model_id = "claude-haiku-4-5-20251001".into();
+    p.provider = "api.anthropic.com".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "anthropic/claude-haiku-4-5-20251001"
+    );
+    p.provider = "claude".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "anthropic/claude-haiku-4-5-20251001"
+    );
+}

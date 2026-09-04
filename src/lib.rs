@@ -11,8 +11,9 @@ pub use cache::{
     PROBE_SUITE_VERSION, ProbeCache,
 };
 pub use endpoint::{
-    LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, XAI_BASE_URL, cloud_endpoint_requires_key,
-    default_compat_base_url, is_xai_provider_label, local_provider_base_url, looks_cheap,
+    ANTHROPIC_BASE_URL, LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, XAI_BASE_URL,
+    cloud_endpoint_requires_key, default_compat_base_url, is_anthropic_cloud_host,
+    is_anthropic_provider_label, is_xai_provider_label, local_provider_base_url, looks_cheap,
     provider_from_base_url,
 };
 pub use error::ProbeError;
