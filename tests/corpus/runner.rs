@@ -153,6 +153,17 @@ fn resolve_probe_auth_aborts() {
 }
 
 #[test]
+fn resolve_probe_not_found_aborts() {
+    let err: Result<ProbeResult, ProbeError> =
+        Err(ProbeError::NotFound("model 'x' not found".into()));
+    let result = resolve_probe(err, "tool_calling");
+    match result {
+        Err(ProbeError::NotFound(msg)) => assert!(msg.contains("not found"), "{msg}"),
+        other => panic!("expected NotFound abort, got {other:?}"),
+    }
+}
+
+#[test]
 fn resolve_probe_unreachable_host_aborts() {
     let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient(
         "failed to connect: error sending request for url (http://127.0.0.1:1/v1/chat/completions)"
@@ -623,6 +634,29 @@ async fn run_fills_edit_json_instruction_probes() {
             "{name} must run instead of named_default"
         );
     }
+}
+
+#[tokio::test]
+async fn not_found_aborts_run_detailed_and_does_not_persist() {
+    let runner = ProbeRunner::new(
+        MockLlm::new("m", "p").with_error(ProbeError::NotFound("model 'x' not found".into())),
+    );
+    let result = runner.run_detailed().await;
+    match result {
+        Err(ProbeError::NotFound(msg)) => assert!(msg.contains("not found"), "{msg}"),
+        other => panic!("expected NotFound abort, got {other:?}"),
+    }
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = runner.persist(&mut cache, &path).expect("persist");
+    assert!(!wrote, "not-found abort must not persist");
+    assert!(
+        !path.exists(),
+        "not-found abort must not write a cache file"
+    );
+    assert!(cache.get("m", "p").is_none());
 }
 
 #[tokio::test]
