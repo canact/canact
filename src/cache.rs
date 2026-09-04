@@ -202,11 +202,12 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      requires read<edit<run turns; MCP stdio NDJSON.
 /// v88: code_syntax sentence-with-paren is not a def; English paren
 ///      contents, same-line prose after colon, and English return
-///      phrases stay Weak; extract falls back when no fence is a
-///      real def; path-once SEARCH/REPLACE; array-then-object JSON
-///      pick-best; memory not-able/can-not-repeat/I forgot; vision
-///      identify/make-BL-out/can-not; msec unit; file_path on
-///      sequencing edit, one-shot, and selection tasks.
+///      phrases (same-line or indented) stay Weak; extract falls
+///      back when no fence is a real def; path-once SEARCH/REPLACE;
+///      array-then-object JSON pick-best; memory not-able/can-not-
+///      repeat/I forgot; vision identify/make-BL-out/can-not; msec
+///      unit; file_path on sequencing edit, one-shot, and selection
+///      tasks.
 pub const PROBE_SUITE_VERSION: u32 = 88;
 
 /// Default effort label when probes leave `reasoning_effort` unset.

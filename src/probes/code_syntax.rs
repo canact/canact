@@ -195,7 +195,18 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
                     if line.trim().is_empty() {
                         continue;
                     }
-                    return line.starts_with(' ') || line.starts_with('\t');
+                    if !(line.starts_with(' ') || line.starts_with('\t')) {
+                        return false;
+                    }
+                    if looks_like_same_line_body(line) {
+                        return true;
+                    }
+                    // English `return a single sorted list` is not a body;
+                    // keep looking for a later real statement.
+                    if line.trim_start().starts_with("return") {
+                        continue;
+                    }
+                    return true;
                 }
             }
             colon_search = colon_abs + 1;
@@ -715,6 +726,7 @@ def merge_sorted(a, b):
         for text in [
             "def merge_sorted(a, b): return a single sorted list",
             "```\ndef merge_sorted(a, b): return a single sorted list\n```",
+            "def merge_sorted(a, b):\n    return a single sorted list\n",
         ] {
             let result = probe_code_syntax(&MockLlm {
                 response: text_response(text),
