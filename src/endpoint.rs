@@ -69,14 +69,18 @@ pub fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
 fn url_host_hint(url: &str) -> String {
     let url = url.to_ascii_lowercase();
     let after_scheme = url.split("://").nth(1).unwrap_or(&url);
-    after_scheme
+    let authority = after_scheme
         .split(['/', '?', '#'])
         .next()
-        .unwrap_or(after_scheme)
-        .split(':')
-        .next()
-        .unwrap_or(after_scheme)
-        .to_owned()
+        .unwrap_or(after_scheme);
+    let hostport = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    if let Some(inner) = hostport.strip_prefix('[').and_then(|s| s.split(']').next()) {
+        return inner.to_owned();
+    }
+    hostport.split(':').next().unwrap_or(hostport).to_owned()
 }
 
 #[cfg(test)]
@@ -114,6 +118,28 @@ mod tests {
         ));
         assert_eq!(
             provider_from_base_url("https://api.openai.com/v1"),
+            "api.openai.com"
+        );
+    }
+
+    #[test]
+    fn ipv6_loopback_host_is_not_open_bracket() {
+        assert_eq!(
+            provider_from_base_url("http://[::1]:11434/v1"),
+            "::1",
+            "IPv6 authority must not split on the first colon"
+        );
+        assert!(looks_cheap("::1", "qwen", "http://[::1]:11434/v1"));
+    }
+
+    #[test]
+    fn userinfo_does_not_hide_openai_cloud_host() {
+        assert!(
+            cloud_endpoint_requires_key("https://user:pass@api.openai.com/v1"),
+            "userinfo must not skip the cloud-key gate"
+        );
+        assert_eq!(
+            provider_from_base_url("https://user:pass@api.openai.com/v1"),
             "api.openai.com"
         );
     }
