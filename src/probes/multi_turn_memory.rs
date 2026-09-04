@@ -113,6 +113,16 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("cannot disclose")
         || lower.contains("won't disclose")
         || lower.contains("will not disclose")
+        || lower.contains("unable to remember")
+        || lower.contains("unable to recall")
+        || lower.contains("unable to share")
+        || lower.contains("unable to disclose")
+        || lower.contains("not allowed to share")
+        || lower.contains("not allowed to disclose")
+        || lower.contains("couldn't remember")
+        || lower.contains("couldn't recall")
+        || lower.contains("could not remember")
+        || lower.contains("could not recall")
 }
 
 #[cfg(test)]
@@ -145,6 +155,22 @@ mod tests {
             "share/disclose refusal that quotes the code must be Weak: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn refusal_unable_to_recall_quoted_code_is_weak() {
+        for text in [
+            "I am unable to recall the secret code ZEPHYR-4829",
+            "I'm not allowed to share ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "unable/not-allowed refusal that quotes the code must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
     }
 
     #[tokio::test]

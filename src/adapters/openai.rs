@@ -97,12 +97,11 @@ impl OpenAiCompatClient {
         use futures::StreamExt;
         let mut bytes = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
+        let mut received = 0usize;
         let mut open_tools: HashMap<u64, OpenTool> = HashMap::new();
         while let Some(item) = bytes.next().await {
             let chunk = item.map_err(map_transport)?;
-            if buf.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                return Err(ProbeError::Transient("response too large".into()));
-            }
+            accumulate_stream_bytes(&mut received, chunk.len())?;
             buf.extend_from_slice(&chunk);
             for line in drain_complete_sse_lines(&mut buf) {
                 if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
@@ -821,6 +820,15 @@ fn sse_tail_is_truncated(line: &str) -> bool {
     !data.is_empty() && data != "[DONE]" && serde_json::from_str::<Value>(data).is_err()
 }
 
+fn accumulate_stream_bytes(received: &mut usize, chunk_len: usize) -> Result<(), ProbeError> {
+    let next = received.saturating_add(chunk_len);
+    if next > MAX_RESPONSE_BYTES {
+        return Err(ProbeError::Transient("response too large".into()));
+    }
+    *received = next;
+    Ok(())
+}
+
 fn emit_sse_line(
     line: &str,
     open_tools: &mut HashMap<u64, OpenTool>,
@@ -837,6 +845,9 @@ fn emit_sse_line(
         return Ok(());
     }
     let Ok(value) = serde_json::from_str::<Value>(data) else {
+        if data.starts_with('{') || data.starts_with('[') {
+            return Err(ProbeError::Transient("malformed stream JSON".into()));
+        }
         return Ok(());
     };
     if let Some(err) = value.get("error") {
@@ -1899,6 +1910,40 @@ mod tests {
             .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
             .count();
         assert_eq!(ends, 2, "{chunks:?}");
+    }
+
+    #[test]
+    fn emit_sse_line_malformed_json_object_is_transient() {
+        let (tx, _rx) = futures::channel::mpsc::unbounded();
+        let mut open = HashMap::new();
+        let err = emit_sse_line("data: {", &mut open, &tx).expect_err("object");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
+            "{err:?}"
+        );
+        emit_sse_line("data: ping", &mut open, &tx).expect("keepalive");
+        let err = emit_sse_line("data: [", &mut open, &tx).expect_err("array");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn accumulate_stream_bytes_counts_after_sse_drain() {
+        let line = b"data: {\"ok\":true}\n";
+        let mut buf = line.to_vec();
+        let mut received = 0usize;
+        accumulate_stream_bytes(&mut received, line.len()).expect("under cap");
+        let _ = drain_complete_sse_lines(&mut buf);
+        assert!(buf.is_empty(), "complete SSE line must drain");
+        assert_eq!(received, line.len(), "budget must not reset on drain");
+        let err = accumulate_stream_bytes(&mut received, MAX_RESPONSE_BYTES).unwrap_err();
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("too large")),
+            "{err:?}"
+        );
+        assert_eq!(received, line.len());
     }
 
     #[test]

@@ -71,7 +71,8 @@ fn score_read_file_calls(calls: &[ProbeToolCall]) -> (f32, String) {
         if !has_visible_arg_text(&tc.name) {
             continue;
         }
-        if tc.name == "read_file" && nonempty_string_arg(&tc.arguments, "path") {
+        if tc.name == "read_file" && nonempty_string_arg_any(&tc.arguments, &["path", "file_path"])
+        {
             return (
                 1.0,
                 "Valid tool call with correct name and arguments".to_string(),
@@ -179,7 +180,8 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
     refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
 
-    let path_is_string = |c: &ProbeToolCall| nonempty_string_arg(&c.arguments, "path");
+    let path_is_string =
+        |c: &ProbeToolCall| nonempty_string_arg_any(&c.arguments, &["path", "file_path"]);
     let has_read_file = calls
         .iter()
         .any(|c| c.name == "read_file" && path_is_string(c));
@@ -941,6 +943,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_calling_strong_when_path_alias_is_file_path() {
+        let response = ProbeResponse {
+            text: String::new(),
+            tool_calls: vec![call(
+                "call_1",
+                "read_file",
+                serde_json::json!({"file_path": "/tmp/test.txt"}),
+            )],
+            finish: ProbeFinish::ToolCalls,
+            usage: None,
+        };
+        let result = probe_tool_calling(&MockLlm { response }).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "file_path alias must score Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn tool_calling_medium_when_path_is_number() {
         let response = ProbeResponse {
             text: String::new(),
@@ -952,6 +974,29 @@ mod tests {
         let result = probe_tool_calling(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn complex_tool_calling_strong_for_file_path_alias() {
+        let response = multi_tool_call_response(vec![
+            call(
+                "call_1",
+                "read_file",
+                serde_json::json!({"file_path": "/tmp/config.json"}),
+            ),
+            call(
+                "call_2",
+                "list_dir",
+                serde_json::json!({"file_path": "/tmp/data/"}),
+            ),
+        ]);
+        let result = probe_complex_tool_calling(&MockLlm { response })
+            .await
+            .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "file_path alias on both tools must score Strong: {result:?}"
+        );
     }
 
     #[tokio::test]

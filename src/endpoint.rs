@@ -10,7 +10,7 @@ pub const VLLM_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 /// Local-provider default when the user omitted `--base-url`.
 pub fn local_provider_base_url(provider: &str) -> Option<&'static str> {
     match provider.to_ascii_lowercase().as_str() {
-        "ollama" => Some(OLLAMA_BASE_URL),
+        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" => Some(OLLAMA_BASE_URL),
         "lmstudio" => Some(LMSTUDIO_BASE_URL),
         "vllm" => Some(VLLM_BASE_URL),
         _ => None,
@@ -92,6 +92,22 @@ mod tests {
         assert_eq!(default_compat_base_url("ollama", false), OLLAMA_BASE_URL);
         assert_eq!(default_compat_base_url("Ollama", true), OLLAMA_BASE_URL);
         assert!(!cloud_endpoint_requires_key(OLLAMA_BASE_URL));
+    }
+
+    #[test]
+    fn loopback_provider_label_defaults_to_ollama_url() {
+        for provider in ["localhost", "127.0.0.1", "::1", "[::1]"] {
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                OLLAMA_BASE_URL,
+                "provider {provider} must not default to OpenAI"
+            );
+            assert_eq!(
+                default_compat_base_url(provider, true),
+                OLLAMA_BASE_URL,
+                "provider {provider} must stay local even when OpenRouter env is set"
+            );
+        }
     }
 
     #[test]

@@ -185,7 +185,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v82: nested edit path alias; XML file_path JSON alias.
 /// v83: vision cannot-read BL; memory cannot-share; numeric chat tool id;
 ///      incremental success-body cap.
-pub const PROBE_SUITE_VERSION: u32 = 83;
+/// v84: vision unable/can-not-read; memory unable-to-recall; docstring
+///      return; merge_sorted fence; native file_path; stream JSON
+///      Transient; loopback provider URL.
+pub const PROBE_SUITE_VERSION: u32 = 84;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
