@@ -315,7 +315,7 @@ fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
 fn map_status(code: u16, retry_after: Option<u64>, body: &str) -> ProbeError {
     match code {
         401 => ProbeError::Auth(body_or_status(code, body)),
-        403 if body_looks_like_auth(body) => ProbeError::Auth(body_or_status(code, body)),
+        400 | 403 if body_looks_like_auth(body) => ProbeError::Auth(body_or_status(code, body)),
         403 => ProbeError::Llm(body_or_status(code, body)),
         429 => ProbeError::RateLimit { retry_after },
         408 | 500..=599 => ProbeError::Transient(body_or_status(code, body)),
@@ -328,6 +328,9 @@ fn body_looks_like_auth(body: &str) -> bool {
     b.contains("api key")
         || b.contains("api_key")
         || b.contains("unauthorized")
+        || b.contains("unauthenticated")
+        || b.contains("no credentials")
+        || b.contains("no-credentials")
         || b.contains("invalid key")
         || b.contains("incorrect api")
 }
@@ -1299,6 +1302,30 @@ mod tests {
         assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
         let text = err.to_string();
         assert!(!text.contains(SECRET), "{text}");
+    }
+
+    #[tokio::test]
+    async fn chat_400_incorrect_api_key_is_auth() {
+        let base = spawn_http(
+            400,
+            "Bad Request",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("400");
+        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn chat_400_validation_is_llm() {
+        let base = spawn_http(
+            400,
+            "Bad Request",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"max_tokens must be positive"}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("400");
+        assert!(matches!(err, ProbeError::Llm(_)), "{err:?}");
     }
 
     #[tokio::test]

@@ -48,8 +48,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v94() {
-    assert_eq!(PROBE_SUITE_VERSION, 94);
+fn cache_key_format_is_model_provider_unset_v95() {
+    assert_eq!(PROBE_SUITE_VERSION, 95);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -57,7 +57,7 @@ fn cache_key_format_is_model_provider_unset_v94() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v94|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v95|full|novision|ctxnone");
 }
 
 #[test]
@@ -322,6 +322,25 @@ fn find_profile_hits_across_ollama_and_default_port() {
     assert!(
         ported.find_profile("qwen", "127.0.0.1:1234").is_none(),
         "127.0.0.1:1234 must not share the ollama :11434 row"
+    );
+}
+
+#[test]
+fn find_profile_hits_across_xai_aliases() {
+    let mut cache = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "grok-4".into();
+    stored.provider = "xai".into();
+    cache.put(stored);
+    for requested in ["api.x.ai", "grok", "x.ai"] {
+        assert!(
+            cache.find_profile("grok-4", requested).is_some(),
+            "probe --provider xai must hit export --provider {requested}"
+        );
+    }
+    assert!(
+        cache.find_profile("grok-4", "openai").is_none(),
+        "xai must not share the openai family"
     );
 }
 

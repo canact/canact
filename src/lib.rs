@@ -11,8 +11,9 @@ pub use cache::{
     PROBE_SUITE_VERSION, ProbeCache,
 };
 pub use endpoint::{
-    LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, cloud_endpoint_requires_key,
-    default_compat_base_url, local_provider_base_url, looks_cheap, provider_from_base_url,
+    LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, XAI_BASE_URL, cloud_endpoint_requires_key,
+    default_compat_base_url, is_xai_provider_label, local_provider_base_url, looks_cheap,
+    provider_from_base_url,
 };
 pub use error::ProbeError;
 pub use report::missing_model_message;
