@@ -72,10 +72,10 @@ Rename the function `greet` to `welcome` and change the greeting from \
             let has_file_ref = block.path.contains("greet.rs");
             let search = strip_comments(block.search);
             let replace = strip_comments(block.replace);
-            // Strong requires the function signatures in code, not comments.
-            let block_old_fn = search.contains("fn greet(");
+            // Strong requires function-definition lines, not lecture tokens.
+            let block_old_fn = has_code_fn_token(&search, "fn greet(");
             let block_old_hello = search.contains("Hello");
-            let block_new_fn = replace.contains("fn welcome(");
+            let block_new_fn = has_code_fn_token(&replace, "fn welcome(");
             let block_new_welcome = replace.contains("Welcome");
             let has_old_content = block_old_fn && block_old_hello;
             let has_new_content = block_new_fn && block_new_welcome;
@@ -192,12 +192,14 @@ Rename the function `greet` to `welcome` and change the greeting from \
         .lines()
         .any(|l| (l.starts_with("---") || l.starts_with("+++")) && l.contains("greet.rs"));
     let minus_has_greet = text.lines().any(|l| {
-        l.starts_with('-') && !l.starts_with("---") && strip_comments(&l[1..]).contains("fn greet(")
+        l.starts_with('-')
+            && !l.starts_with("---")
+            && has_code_fn_token(&strip_comments(&l[1..]), "fn greet(")
     });
     let plus_has_welcome = text.lines().any(|l| {
         l.starts_with('+')
             && !l.starts_with("+++")
-            && strip_comments(&l[1..]).contains("fn welcome(")
+            && has_code_fn_token(&strip_comments(&l[1..]), "fn welcome(")
     });
     let minus_has_hello = text.lines().any(|l| {
         l.starts_with('-') && !l.starts_with("---") && strip_comments(&l[1..]).contains("Hello")
@@ -236,6 +238,14 @@ Rename the function `greet` to `welcome` and change the greeting from \
         max_score: 1.0,
         level: classify(score),
         details,
+    })
+}
+
+/// `fn greet(` / `fn welcome(` must start a line (after indent), not sit mid-sentence.
+fn has_code_fn_token(text: &str, token: &str) -> bool {
+    text.lines().any(|line| {
+        let t = line.trim_start();
+        t.starts_with(token) || (t.starts_with("pub ") && t[4..].trim_start().starts_with(token))
     })
 }
 
@@ -620,6 +630,26 @@ Rename welcome Welcome
     }
 
     #[tokio::test]
+    async fn search_replace_lecture_fn_greet_paren_is_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+Change fn greet( so it no longer says Hello
+=======
+Use fn welcome( and say Welcome
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "lecture fn greet( mid-sentence must not be Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn search_replace_two_one_edit_blocks_are_strong() {
         let response_text = "\
 <<<<<<< SEARCH
@@ -923,6 +953,26 @@ The format uses -removed line and +added line.
         };
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_ne!(result.level, CapabilityLevel::Strong, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn unified_diff_lecture_fn_greet_paren_is_not_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,1 +1,1 @@
+-Change fn greet( so it no longer says Hello
++Use fn welcome( and say Welcome
+";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_unified_diff(&llm).await.unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "lecture fn greet( mid-sentence must not be UnifiedDiff Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

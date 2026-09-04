@@ -132,11 +132,11 @@ Available tools:
 
 /// True when the parsed block is the system-card example, not a call.
 fn is_xml_format_card_echo(name: &str, args: &serde_json::Value) -> bool {
-    if name == "TOOL_NAME" {
-        return true;
-    }
     if xml_args_have_real_path(args) {
         return false;
+    }
+    if name == "TOOL_NAME" {
+        return true;
     }
     xml_args_are_card_tokens(args)
 }
@@ -632,6 +632,21 @@ mod tests {
         };
         let result = probe_xml_tool_calling(&llm).await.unwrap();
         assert_eq!(result.score, 0.7);
+    }
+
+    #[tokio::test]
+    async fn xml_tool_name_placeholder_with_real_path_is_medium() {
+        let response_text = "\
+<tool_call><name>TOOL_NAME</name><arguments>{\"path\": \"/tmp/example.txt\"}</arguments></tool_call>";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_xml_tool_calling(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 0.7,
+            "TOOL_NAME plus a real path must be Medium, not card echo: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Medium);
     }
 
     #[tokio::test]

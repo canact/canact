@@ -130,6 +130,7 @@ fn fold_format_marks(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}' => ' ',
+            '\u{2019}' => '\'',
             _ => c,
         })
         .collect::<String>()
@@ -146,6 +147,7 @@ fn strip_format_marks(s: &str) -> String {
                 '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
             )
         })
+        .map(|c| if c == '\u{2019}' { '\'' } else { c })
         .collect()
 }
 
@@ -201,8 +203,14 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("cannot read")
         || lower.contains("can't identify")
         || lower.contains("cannot identify")
+        || lower.contains("don't recognize")
+        || lower.contains("do not recognize")
         || lower.contains("can't recognize")
         || lower.contains("cannot recognize")
+        || lower.contains("don't recognise")
+        || lower.contains("do not recognise")
+        || lower.contains("can't recognise")
+        || lower.contains("cannot recognise")
         || lower.contains("can't decipher")
         || lower.contains("cannot decipher")
         || lower.contains("can't make out")
@@ -211,18 +219,21 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("unable to see")
         || lower.contains("unable to identify")
         || lower.contains("unable to recognize")
+        || lower.contains("unable to recognise")
         || lower.contains("unable to decipher")
         || lower.contains("unable to make out")
         || lower.contains("not able to read")
         || lower.contains("not able to see")
         || lower.contains("not able to identify")
         || lower.contains("not able to recognize")
+        || lower.contains("not able to recognise")
         || lower.contains("not able to decipher")
         || lower.contains("not able to make out")
         || lower.contains("can not read")
         || lower.contains("can not see")
         || lower.contains("can not identify")
         || lower.contains("can not recognize")
+        || lower.contains("can not recognise")
         || lower.contains("can not decipher")
         || lower.contains("can not make out")
         || lower.contains("doesn't contain letter")
@@ -471,6 +482,27 @@ mod tests {
             CapabilityLevel::Strong,
             "cannot-recognize that names BL must not be Strong: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn vision_dont_recognize_bl_is_not_strong() {
+        for text in [
+            "I don't recognize BL",
+            "I do not recognize BL",
+            "I cannot recognise BL",
+            "I don\u{2019}t recognize BL",
+            "I can\u{2019}t recognise BL",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "recognize/recognise refusal that names BL must not be Strong: {text:?} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]

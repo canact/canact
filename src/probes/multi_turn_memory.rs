@@ -100,6 +100,7 @@ fn memory_refused(text: &str) -> bool {
                 '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
             )
         })
+        .map(|c| if c == '\u{2019}' { '\'' } else { c })
         .collect();
     let lower = folded.to_lowercase();
     lower.contains("don't remember")
@@ -116,6 +117,8 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("cannot repeat")
         || lower.contains("won't repeat")
         || lower.contains("will not repeat")
+        || lower.contains("shouldn't repeat")
+        || lower.contains("should not repeat")
         || lower.contains("can't share")
         || lower.contains("cannot share")
         || lower.contains("can not share")
@@ -126,9 +129,15 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("can't provide")
         || lower.contains("cannot provide")
         || lower.contains("can not provide")
+        || lower.contains("won't provide")
+        || lower.contains("will not provide")
+        || lower.contains("shouldn't provide")
+        || lower.contains("should not provide")
         || lower.contains("can't tell")
         || lower.contains("cannot tell")
         || lower.contains("can not tell")
+        || lower.contains("shouldn't tell")
+        || lower.contains("should not tell")
         || lower.contains("can't disclose")
         || lower.contains("cannot disclose")
         || lower.contains("can not disclose")
@@ -153,11 +162,15 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("not able to disclose")
         || lower.contains("not able to reveal")
         || lower.contains("not able to repeat")
+        || lower.contains("not able to provide")
+        || lower.contains("not able to tell")
         || lower.contains("can not repeat")
         || lower.contains("not allowed to share")
         || lower.contains("not allowed to disclose")
         || lower.contains("not allowed to reveal")
         || lower.contains("not allowed to repeat")
+        || lower.contains("not allowed to provide")
+        || lower.contains("not allowed to tell")
         || lower.contains("couldn't remember")
         || lower.contains("couldn't recall")
         || lower.contains("could not remember")
@@ -247,6 +260,28 @@ mod tests {
             assert_eq!(
                 result.score, 0.0,
                 "provide/tell/not-allowed-repeat/should-not-share that quotes the code must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refusal_not_able_not_allowed_wont_should_not_provide_tell_repeat_is_weak() {
+        for text in [
+            "I'm not able to provide ZEPHYR-4829",
+            "I'm not allowed to provide ZEPHYR-4829",
+            "I won't provide ZEPHYR-4829",
+            "I should not tell you ZEPHYR-4829",
+            "I shouldn't provide ZEPHYR-4829",
+            "I should not repeat ZEPHYR-4829",
+            "I shouldn\u{2019}t provide ZEPHYR-4829",
+            "I won\u{2019}t provide ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "not-able/not-allowed/won't/should-not provide/tell/repeat that quotes the code must be Weak: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
         }
