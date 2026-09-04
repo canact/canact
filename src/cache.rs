@@ -197,7 +197,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v86: code_syntax unfenced prose; memory can-not/reveal/forgotten;
 ///      vision no-readable / not-able-to-read; second != milliseconds;
 ///      0.0.0.0 is ollama; export strips provider prefix; knob aliases.
-pub const PROBE_SUITE_VERSION: u32 = 86;
+/// v87: code_syntax fenced name-only; extract prefers def merge_sorted(;
+///      colon-in-prose name-drops are not a signature; multi_turn
+///      requires read<edit<run turns; MCP stdio NDJSON.
+pub const PROBE_SUITE_VERSION: u32 = 87;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
