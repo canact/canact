@@ -38,7 +38,6 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let text = &response.text;
 
     let fenced = extract_code_block(text);
-    let from_fence = fenced.is_some();
     let code = fenced.unwrap_or(text);
     let trimmed = code.trim();
 
@@ -54,10 +53,10 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     }
 
     let code_body = strip_python_string_literals(&strip_hash_comments(trimmed));
-    // Unfenced prose can name `def merge_sorted` and `return` as tokens.
-    // Strong needs a real function (colon + indented body) or a fence.
-    let has_def = code_body.contains("def merge_sorted")
-        && (from_fence || has_indented_merge_sorted_body(trimmed));
+    // Fenced or unfenced prose can name `def merge_sorted` and `return`.
+    // Strong needs `def merge_sorted(` or colon+body even inside a fence.
+    let has_def =
+        code_body.contains("def merge_sorted(") || has_indented_merge_sorted_body(trimmed);
     let has_return = code_body.contains("return ") || code_body.contains("return(");
 
     let parens_balanced = count_char(trimmed, '(') == count_char(trimmed, ')');
@@ -205,9 +204,14 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
     false
 }
 
+fn is_real_merge_sorted(body: &str) -> bool {
+    body.contains("def merge_sorted(") || has_indented_merge_sorted_body(body)
+}
+
 fn extract_code_block(text: &str) -> Option<&str> {
     let mut search = 0;
     let mut first = None;
+    let mut name_mention = None;
     while let Some(rel) = text.get(search..).and_then(|s| s.find("```")) {
         let start_marker = search + rel;
         let after_marker = start_marker + 3;
@@ -222,12 +226,15 @@ fn extract_code_block(text: &str) -> Option<&str> {
         if first.is_none() {
             first = Some(body);
         }
-        if body.contains("def merge_sorted") {
+        if is_real_merge_sorted(body) {
             return Some(body);
+        }
+        if name_mention.is_none() && body.contains("def merge_sorted") {
+            name_mention = Some(body);
         }
         search = code_start + end_rel + 3;
     }
-    first
+    name_mention.or(first)
 }
 
 fn count_char(s: &str, c: char) -> usize {
@@ -455,6 +462,53 @@ def merge_sorted(a, b):
     }
 
     #[tokio::test]
+    async fn code_syntax_fenced_sentence_naming_def_is_not_strong() {
+        let text = "\
+```
+I would write a function def merge_sorted that takes two lists \
+and return a single sorted list.
+```";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(text),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "fenced sentence that only names def merge_sorted and return must not be Strong: {result:?}"
+        );
+        assert_eq!(
+            result.score, 0.0,
+            "name-only fenced sentence is not a function: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_prefers_def_paren_fence_after_name_mention() {
+        let text = "\
+```
+I would write def merge_sorted and return a list
+```
+
+```python
+def merge_sorted(a, b):
+    return a + b
+```
+";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(text),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "later def merge_sorted( fence must win over a name-only mention: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn code_syntax_unfenced_prose_tokens_are_not_strong() {
         let llm = MockLlm {
             response: text_response(
@@ -549,6 +603,29 @@ def merge_sorted(a, b):
         };
         let result = probe_code_syntax(&llm).await.unwrap();
         assert_eq!(result.score, 0.0);
+    }
+
+    #[test]
+    fn extract_code_block_prefers_def_paren_over_name_mention() {
+        let text = "\
+```
+I would write def merge_sorted
+```
+
+```python
+def merge_sorted(a, b):
+    return a + b
+```
+";
+        let code = extract_code_block(text).unwrap();
+        assert!(
+            code.contains("def merge_sorted("),
+            "must prefer the fence with def merge_sorted(: {code:?}"
+        );
+        assert!(
+            !code.contains("I would write"),
+            "must not pick the first name-mention fence: {code:?}"
+        );
     }
 
     #[test]

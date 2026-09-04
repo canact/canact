@@ -93,9 +93,10 @@ fn is_precise_run(c: &ProbeToolCall) -> bool {
 /// 4. After `run_command`, stop.
 ///
 /// Scoring:
-/// - `1.0` - observed read, then edit, then run across turns, each with
+/// - `1.0` - first precise read turn < edit turn < run turn, each with
 ///   nonempty string args (`path`; `path`+`old_string`+`new_string`; `command`)
-/// - `0.7` - read then edit (missing verify) or read then run (skipped explicit edit)
+/// - `0.7` - all three names but wrong order or same-turn dump; or
+///   read then edit (missing verify); or read then run; or edit then run
 /// - `0.5` - full name chain with empty, whitespace, or imprecise args
 /// - `0.3` - sensible first tool only (`read_file` or `edit_file`) then stops
 /// - `0.0` - no tools or wrong-only start
@@ -117,6 +118,9 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
     let mut precise_read = false;
     let mut precise_edit = false;
     let mut precise_run = false;
+    let mut precise_read_turn: Option<u32> = None;
+    let mut precise_edit_turn: Option<u32> = None;
+    let mut precise_run_turn: Option<u32> = None;
     let mut first_tool: Option<String> = None;
     let mut turns = 0u32;
     let mut last_finish = ProbeFinish::Stop;
@@ -150,17 +154,32 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
             let result_text = match tool_name {
                 "read_file" => {
                     saw_read = true;
-                    precise_read |= is_precise_read(call);
+                    if is_precise_read(call) {
+                        precise_read = true;
+                        if precise_read_turn.is_none() {
+                            precise_read_turn = Some(turns);
+                        }
+                    }
                     "fn parse(items: &[u8]) -> usize {\n    let mut i = 0;\n    while i < items.len() { // bug: should be <=\n        i += 1;\n    }\n    i\n}\n".to_string()
                 }
                 "edit_file" => {
                     saw_edit = true;
-                    precise_edit |= is_precise_edit(call);
+                    if is_precise_edit(call) {
+                        precise_edit = true;
+                        if precise_edit_turn.is_none() {
+                            precise_edit_turn = Some(turns);
+                        }
+                    }
                     "ok: file updated".to_string()
                 }
                 "run_command" => {
                     saw_run = true;
-                    precise_run |= is_precise_run(call);
+                    if is_precise_run(call) {
+                        precise_run = true;
+                        if precise_run_turn.is_none() {
+                            precise_run_turn = Some(turns);
+                        }
+                    }
                     "test result: ok. 3 passed".to_string()
                 }
                 other => format!("ok: {other}"),
@@ -173,10 +192,21 @@ pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
         }
     }
 
+    let ordered = matches!(
+        (precise_read_turn, precise_edit_turn, precise_run_turn),
+        (Some(read_t), Some(edit_t), Some(run_t)) if read_t < edit_t && edit_t < run_t
+    );
+
     let (score, details) = match (saw_read, saw_edit, saw_run) {
-        (true, true, true) if precise_read && precise_edit && precise_run => (
+        (true, true, true) if ordered => (
             1.0,
             format!("Completed read → edit → verify across {turns} turn(s)"),
+        ),
+        (true, true, true) if precise_read && precise_edit && precise_run => (
+            0.7,
+            format!(
+                "Saw read, edit, and run but not read-then-edit-then-run order (turns={turns})"
+            ),
         ),
         (true, true, true) => (
             0.5,
@@ -363,6 +393,45 @@ mod tests {
         let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
         assert!((result.score - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn edit_then_read_then_run_is_not_strong() {
+        let llm = SequentialMock::new(vec![
+            tool_resp(vec![precise_tc("edit_file", "1")]),
+            tool_resp(vec![precise_tc("read_file", "2")]),
+            tool_resp(vec![precise_tc("run_command", "3")]),
+        ]);
+        let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "edit then read then run must not be Strong: {result:?}"
+        );
+        assert!(
+            (result.score - 0.7).abs() < f32::EPSILON,
+            "wrong order stays 0.7: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Medium);
+    }
+
+    #[tokio::test]
+    async fn one_turn_dump_of_all_three_is_not_strong() {
+        let llm = SequentialMock::new(vec![tool_resp(vec![
+            precise_tc("read_file", "1"),
+            precise_tc("edit_file", "2"),
+            precise_tc("run_command", "3"),
+        ])]);
+        let result = probe_multi_turn_task_sequencing(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "one-turn dump of all three must not be Strong: {result:?}"
+        );
+        assert_ne!(
+            result.score, 1.0,
+            "one-turn dump must not score 1.0: {result:?}"
+        );
     }
 
     #[tokio::test]

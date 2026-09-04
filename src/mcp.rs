@@ -1,7 +1,7 @@
 //! Stdio MCP server. Tool name `probe_model` is stolen from Jwrede/llmprobe;
 //! the payload is canact host-policy JSON, not TTFT.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -294,18 +294,36 @@ fn error_response(id: Value, message: String) -> Value {
     })
 }
 
-fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
-    let mut headers = String::new();
+const MAX_MCP_BYTES: u64 = 8 * 1024 * 1024;
+
+fn read_limited_line(reader: &mut impl BufRead) -> Result<Option<String>, String> {
+    let mut line = String::new();
+    let n = {
+        let mut limited = reader.take(MAX_MCP_BYTES + 1);
+        limited.read_line(&mut line).map_err(|e| e.to_string())?
+    };
+    if n == 0 {
+        return Ok(None);
+    }
+    if line.len() as u64 > MAX_MCP_BYTES {
+        return Err("line too large".to_owned());
+    }
+    Ok(Some(line))
+}
+
+fn read_content_length_body(
+    reader: &mut impl BufRead,
+    first_line: &str,
+) -> Result<Option<Value>, String> {
+    let mut headers = first_line.to_owned();
     loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
-        if n == 0 {
-            return Ok(None);
-        }
-        if line == "\r\n" || line == "\n" {
+        let Some(next) = read_limited_line(reader)? else {
+            return Err("eof during headers".to_owned());
+        };
+        if next == "\r\n" || next == "\n" {
             break;
         }
-        headers.push_str(&line);
+        headers.push_str(&next);
     }
     let mut len = None;
     for header in headers.lines() {
@@ -315,7 +333,7 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
         }
     }
     let len = len.ok_or_else(|| "missing Content-Length".to_owned())?;
-    if len > 8 * 1024 * 1024 {
+    if len as u64 > MAX_MCP_BYTES {
         return Err("Content-Length too large".to_owned());
     }
     let mut buf = vec![0u8; len];
@@ -325,9 +343,27 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
         .map_err(|e| e.to_string())
 }
 
+fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
+    loop {
+        let Some(line) = read_limited_line(reader)? else {
+            return Ok(None);
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            return serde_json::from_str(trimmed)
+                .map(Some)
+                .map_err(|e| e.to_string());
+        }
+        return read_content_length_body(reader, &line);
+    }
+}
+
 fn write_message(writer: &mut impl Write, value: &Value) -> Result<(), String> {
-    let body = serde_json::to_vec(value).map_err(|e| e.to_string())?;
-    write!(writer, "Content-Length: {}\r\n\r\n", body.len()).map_err(|e| e.to_string())?;
+    let mut body = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    body.push(b'\n');
     writer.write_all(&body).map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())
 }
@@ -357,8 +393,60 @@ mod tests {
     }
 
     #[test]
+    fn content_length_input_still_accepted() {
+        let original = json!({"jsonrpc":"2.0","id":1,"method":"ping"});
+        let body = serde_json::to_vec(&original).expect("json");
+        let mut framed = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+        framed.extend_from_slice(&body);
+        let mut cursor = Cursor::new(framed);
+        let got = read_message(&mut cursor).expect("read").expect("eof");
+        assert_eq!(got, original);
+    }
+
+    #[test]
     fn content_length_too_large_is_error() {
         let mut cursor = Cursor::new(b"Content-Length: 999999999\r\n\r\n");
+        let err = read_message(&mut cursor).expect_err("cap");
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn ndjson_initialize_line_is_accepted() {
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        let mut cursor = Cursor::new(format!("{line}\n"));
+        let got = read_message(&mut cursor).expect("read").expect("eof");
+        assert_eq!(got["method"], "initialize");
+        assert_eq!(got["id"], 1);
+    }
+
+    #[test]
+    fn ndjson_skips_empty_lines() {
+        let mut cursor = Cursor::new("\n\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n");
+        let got = read_message(&mut cursor).expect("read").expect("eof");
+        assert_eq!(got["method"], "ping");
+    }
+
+    #[test]
+    fn write_message_is_ndjson() {
+        let original = json!({"jsonrpc":"2.0","id":1,"result":{}});
+        let mut buf = Vec::new();
+        write_message(&mut buf, &original).expect("write");
+        let s = String::from_utf8(buf).expect("utf8");
+        assert!(s.ends_with('\n'), "{s:?}");
+        assert!(
+            !s.contains("Content-Length"),
+            "MCP 2024-11-05 writes json+newline, not LSP headers: {s:?}"
+        );
+        let parsed: Value = serde_json::from_str(s.trim_end()).expect("json");
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn ndjson_line_too_large_is_error() {
+        let mut huge = "{".to_string();
+        huge.push_str(&"x".repeat(8 * 1024 * 1024));
+        huge.push('\n');
+        let mut cursor = Cursor::new(huge);
         let err = read_message(&mut cursor).expect_err("cap");
         assert!(err.contains("too large"), "{err}");
     }

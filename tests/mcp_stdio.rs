@@ -52,27 +52,18 @@ fn write_rpc(stdin: &mut impl Write, value: &Value) {
 }
 
 fn read_rpc(stdout: &mut impl Read) -> Value {
-    let mut headers = Vec::new();
-    let mut byte = [0u8; 1];
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut line = String::new();
     loop {
-        stdout.read_exact(&mut byte).expect("hdr byte");
-        headers.push(byte[0]);
-        if headers.windows(4).any(|w| w == b"\r\n\r\n") {
+        line.clear();
+        reader.read_line(&mut line).expect("ndjson reply");
+        assert!(!line.is_empty(), "MCP stdout closed before JSON-RPC reply");
+        if !line.trim().is_empty() {
             break;
         }
-        assert!(headers.len() < 4096, "MCP headers too long");
     }
-    let header_txt = String::from_utf8_lossy(&headers);
-    let len = header_txt
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("Content-Length:")
-                .map(|rest| rest.trim().parse::<usize>().expect("len"))
-        })
-        .expect("Content-Length");
-    let mut buf = vec![0u8; len];
-    stdout.read_exact(&mut buf).expect("body");
-    serde_json::from_slice(&buf).expect("rpc json")
+    serde_json::from_str(line.trim()).expect("rpc json")
 }
 
 #[test]
@@ -159,6 +150,51 @@ fn mcp_probe_model_returns_host_policy_from_cache() {
         envelope.get("ttft").is_none(),
         "must not emit Jwrede TTFT fields: {envelope}"
     );
+
+    drop(stdin);
+    let _ = child.wait_timeout();
+}
+
+#[test]
+fn mcp_ndjson_initialize_gets_jsonrpc_reply() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn canact mcp");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "canact-test", "version": "0" }
+        }
+    });
+    writeln!(stdin, "{req}").expect("ndjson initialize");
+    stdin.flush().expect("flush");
+
+    let mut line = String::new();
+    {
+        use std::io::BufRead;
+        let mut reader = std::io::BufReader::new(&mut stdout);
+        reader.read_line(&mut line).expect("ndjson reply");
+    }
+    assert!(
+        !line.is_empty(),
+        "single-line initialize must get a JSON-RPC reply"
+    );
+    let init: Value = serde_json::from_str(line.trim()).expect("jsonrpc");
+    assert_eq!(init["jsonrpc"], "2.0", "{init}");
+    assert_eq!(init["id"], 1, "{init}");
+    assert_eq!(init["result"]["serverInfo"]["name"], "canact", "{init}");
+    assert_eq!(init["result"]["protocolVersion"], "2024-11-05", "{init}");
 
     drop(stdin);
     let _ = child.wait_timeout();
