@@ -119,6 +119,7 @@ pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
     match provider {
         "openrouter.ai" | "openrouter" => "openrouter",
         "api.openai.com" | "openai" => "openai",
+        "localhost" | "127.0.0.1" | "::1" | "[::1]" => "ollama",
         other => other,
     }
 }
@@ -239,6 +240,23 @@ mod tests {
             probed_at: 1_700_000_000,
             effective_context_tokens: Some(8192),
             probed_context_floor: Some(8192),
+        }
+    }
+
+    #[test]
+    fn overlay_name_maps_loopback_host_to_ollama() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        for host in ["localhost", "127.0.0.1", "::1", "[::1]"] {
+            p.provider = host.to_owned();
+            assert_eq!(
+                overlay_model_name(&p),
+                "ollama/qwen2.5-coder",
+                "loopback provider {host} must export as ollama"
+            );
         }
     }
 

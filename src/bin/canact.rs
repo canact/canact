@@ -311,7 +311,7 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         return Err(1);
     }
     let files = overlay.files();
-    let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("."));
+    let dir = expand_tilde(args.dir.clone().unwrap_or_else(|| PathBuf::from(".")));
     if dir.exists() && !dir.is_dir() {
         eprintln!(
             "error: --dir must be a directory (got a file: {})",
@@ -388,20 +388,33 @@ fn emit_envelope(
 }
 
 fn resolve_api_key(cli: Option<String>) -> (Option<String>, bool) {
+    resolve_api_key_from(
+        cli,
+        std::env::var("OPENAI_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        std::env::var("OPENROUTER_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+    )
+}
+
+fn resolve_api_key_from(
+    cli: Option<String>,
+    openai: Option<String>,
+    openrouter: Option<String>,
+) -> (Option<String>, bool) {
+    let from_openrouter = openrouter.is_some() && openai.is_none();
     if let Some(key) = cli {
         if !key.is_empty() {
-            return (Some(key), false);
+            return (Some(key), from_openrouter);
         }
     }
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        if !key.is_empty() {
-            return (Some(key), false);
-        }
+    if let Some(key) = openai {
+        return (Some(key), false);
     }
-    if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-        if !key.is_empty() {
-            return (Some(key), true);
-        }
+    if let Some(key) = openrouter {
+        return (Some(key), true);
     }
     (None, false)
 }
@@ -484,7 +497,41 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::{expand_tilde, resolve_api_key_from};
     use canact::looks_cheap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn api_key_flag_plus_openrouter_env_routes_to_openrouter() {
+        let (key, from_openrouter) = resolve_api_key_from(
+            Some("sk-or-cli".to_owned()),
+            None,
+            Some("sk-or-env".to_owned()),
+        );
+        assert_eq!(key.as_deref(), Some("sk-or-cli"));
+        assert!(
+            from_openrouter,
+            "--api-key with OPENROUTER_API_KEY set must not default to OpenAI"
+        );
+        assert_eq!(
+            canact::default_compat_base_url("", from_openrouter),
+            "https://openrouter.ai/api/v1"
+        );
+    }
+
+    #[test]
+    fn expand_tilde_joins_home_for_export_dir() {
+        let home = dirs::home_dir().expect("home");
+        assert_eq!(
+            expand_tilde(PathBuf::from("~/overlays")),
+            home.join("overlays")
+        );
+        assert_eq!(expand_tilde(PathBuf::from("~")), home);
+        assert_eq!(
+            expand_tilde(PathBuf::from("/tmp/overlays")),
+            PathBuf::from("/tmp/overlays")
+        );
+    }
 
     #[test]
     fn looks_cheap_treats_ipv6_loopback_like_localhost() {

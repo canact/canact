@@ -194,6 +194,44 @@ fn cli_export_aider_and_cline_from_cache() {
 }
 
 #[test]
+fn cli_export_dir_expands_tilde() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).expect("home");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(sample(CapabilityLevel::Strong, CapabilityLevel::Medium));
+    cache.save(&cache_path).expect("save");
+
+    let export = canact()
+        .env("HOME", &home)
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "qwen2.5-coder",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            "~/overlays",
+        ])
+        .output()
+        .expect("export aider");
+    assert!(
+        export.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    assert!(
+        home.join("overlays/.aider.model.settings.yml").is_file(),
+        "stderr={}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+}
+
+#[test]
 fn optional_aider_cli_loads_exported_settings() {
     let aider = Command::new("aider").arg("--help").output();
     let Ok(help) = aider else {
