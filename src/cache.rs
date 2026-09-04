@@ -182,7 +182,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v80: JSON length "5"; port 9,847; old_text aliases; XML path child.
 /// v81: STATUS: ok space-fold; code_syntax ignores comment return
 ///      and requires def merge_sorted.
-pub const PROBE_SUITE_VERSION: u32 = 81;
+/// v82: nested edit path alias; XML file_path JSON alias.
+pub const PROBE_SUITE_VERSION: u32 = 82;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
