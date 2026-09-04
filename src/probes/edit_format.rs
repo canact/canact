@@ -91,11 +91,11 @@ Rename the function `greet` to `welcome` and change the greeting from \
             }
             if has_file_ref {
                 any_greet = true;
-                old_fn |= block_old_fn;
-                old_hello |= block_old_hello;
-                new_fn |= block_new_fn;
-                new_welcome |= block_new_welcome;
             }
+            old_fn |= block_old_fn;
+            old_hello |= block_old_hello;
+            new_fn |= block_new_fn;
+            new_welcome |= block_new_welcome;
         }
         if any_greet && old_fn && old_hello && new_fn && new_welcome {
             best = 1.0;
@@ -389,32 +389,39 @@ fn path_line_before(before: &str) -> &str {
         .lines()
         .rev()
         .map(str::trim)
-        .find(|l| !l.is_empty())
-        .filter(|l| looks_like_path(l))
+        .filter(|l| !l.is_empty() && !l.starts_with(">>>>>>>"))
+        .find(|l| looks_like_path(l))
         .unwrap_or("")
 }
 
 fn parse_search_replace_blocks(text: &str) -> Vec<SearchReplaceBlock<'_>> {
     let mut blocks = Vec::new();
-    let mut rest = text;
+    let mut offset = 0;
+    let mut last_path = "";
     const START: &str = "<<<<<<< SEARCH";
     const SEP: &str = "\n=======\n";
     const END: &str = "\n>>>>>>> REPLACE";
-    while let Some(start) = rest.find(START) {
-        let before = &rest[..start];
-        let after_marker = &rest[start + START.len()..];
+    while let Some(start) = text.get(offset..).and_then(|s| s.find(START)) {
+        let abs_start = offset + start;
+        let before = &text[..abs_start];
+        let after_marker = &text[abs_start + START.len()..];
         let after_nl = after_marker.strip_prefix('\n').unwrap_or(after_marker);
         let Some(sep) = after_nl.find(SEP) else {
-            rest = after_marker;
+            offset = abs_start + START.len();
             continue;
         };
         let (mut path, search) = split_path_and_search(&after_nl[..sep]);
         if path.is_empty() {
             path = path_line_before(before);
         }
+        if path.is_empty() {
+            path = last_path;
+        } else {
+            last_path = path;
+        }
         let after_sep = &after_nl[sep + SEP.len()..];
         let Some(end) = after_sep.find(END) else {
-            rest = after_sep;
+            offset = text.len() - after_sep.len();
             continue;
         };
         blocks.push(SearchReplaceBlock {
@@ -422,7 +429,7 @@ fn parse_search_replace_blocks(text: &str) -> Vec<SearchReplaceBlock<'_>> {
             search,
             replace: &after_sep[..end],
         });
-        rest = &after_sep[end + END.len()..];
+        offset = text.len() - after_sep.len() + end + END.len();
     }
     blocks
 }
@@ -634,6 +641,31 @@ src/greet.rs
         assert_eq!(
             result.score, 1.0,
             "two correct one-block-per-edit SEARCH/REPLACE blocks must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn search_replace_path_once_split_blocks_is_strong() {
+        let response_text = "\
+src/greet.rs
+<<<<<<< SEARCH
+fn greet(name: &str) -> String {
+=======
+fn welcome(name: &str) -> String {
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+    format!(\"Hello, {}\", name)
+=======
+    format!(\"Welcome, {}\", name)
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "path-once Aider split SEARCH/REPLACE must be Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
     }

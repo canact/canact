@@ -53,10 +53,9 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     }
 
     let code_body = strip_python_string_literals(&strip_hash_comments(trimmed));
-    // Fenced or unfenced prose can name `def merge_sorted` and `return`.
-    // Strong needs `def merge_sorted(` or colon+body even inside a fence.
-    let has_def =
-        code_body.contains("def merge_sorted(") || has_indented_merge_sorted_body(trimmed);
+    // Fenced or unfenced prose can name `def merge_sorted(` and `return`.
+    // Strong needs a colon plus a real body, not a parenthesized name-drop.
+    let has_def = has_indented_merge_sorted_body(trimmed);
     let has_return = code_body.contains("return ") || code_body.contains("return(");
 
     let parens_balanced = count_char(trimmed, '(') == count_char(trimmed, ')');
@@ -189,11 +188,7 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
             // English "lists:" after the name is not a signature colon.
             if looks_like_parameter_list(&same_line[..colon_abs]) {
                 let rest = &after[colon_abs + 1..];
-                if rest
-                    .lines()
-                    .next()
-                    .is_some_and(|line| !line.trim().is_empty())
-                {
+                if rest.lines().next().is_some_and(looks_like_same_line_body) {
                     return true;
                 }
                 for line in rest.lines().skip(1) {
@@ -213,10 +208,46 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
 fn looks_like_parameter_list(between: &str) -> bool {
     let s = between.trim();
     if s.starts_with('(') && s.ends_with(')') {
-        return count_char(s, '(') == count_char(s, ')');
+        if count_char(s, '(') != count_char(s, ')') {
+            return false;
+        }
+        let inner = s[1..s.len() - 1].trim();
+        if inner.is_empty() {
+            return true;
+        }
+        return inner.split(',').map(str::trim).all(is_simple_ident);
     }
     let parts: Vec<&str> = s.split(',').map(str::trim).collect();
     parts.len() >= 2 && parts.iter().all(|p| is_simple_ident(p))
+}
+
+fn looks_like_same_line_body(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.is_empty() {
+        return false;
+    }
+    if let Some(after) = t.strip_prefix("return") {
+        return after.is_empty() || after.starts_with(|c: char| c.is_whitespace() || c == '(');
+    }
+    if t == "pass"
+        || t.starts_with("pass ")
+        || t.starts_with("pass\t")
+        || t.starts_with("pass#")
+        || t.starts_with("pass;")
+    {
+        return true;
+    }
+    if t.starts_with('[') {
+        return true;
+    }
+    let ident_end = t
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(t.len());
+    if ident_end == 0 || !is_simple_ident(&t[..ident_end]) {
+        return false;
+    }
+    let after = t[ident_end..].trim_start();
+    after.starts_with('=') || after.starts_with('(')
 }
 
 fn is_simple_ident(s: &str) -> bool {
@@ -229,13 +260,11 @@ fn is_simple_ident(s: &str) -> bool {
 }
 
 fn is_real_merge_sorted(body: &str) -> bool {
-    body.contains("def merge_sorted(") || has_indented_merge_sorted_body(body)
+    has_indented_merge_sorted_body(body)
 }
 
 fn extract_code_block(text: &str) -> Option<&str> {
     let mut search = 0;
-    let mut first = None;
-    let mut name_mention = None;
     while let Some(rel) = text.get(search..).and_then(|s| s.find("```")) {
         let start_marker = search + rel;
         let after_marker = start_marker + 3;
@@ -247,18 +276,12 @@ fn extract_code_block(text: &str) -> Option<&str> {
             break;
         };
         let body = &text[code_start..code_start + end_rel];
-        if first.is_none() {
-            first = Some(body);
-        }
         if is_real_merge_sorted(body) {
             return Some(body);
         }
-        if name_mention.is_none() && body.contains("def merge_sorted") {
-            name_mention = Some(body);
-        }
         search = code_start + end_rel + 3;
     }
-    name_mention.or(first)
+    None
 }
 
 fn count_char(s: &str, c: char) -> usize {
@@ -624,6 +647,76 @@ def merge_sorted(a, b):
     }
 
     #[tokio::test]
+    async fn code_syntax_sentence_with_paren_signature_is_not_strong() {
+        for text in [
+            "I would write def merge_sorted(a, b) and return a single sorted list.",
+            "```\nI would write def merge_sorted(a, b) and return a single sorted list.\n```",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "sentence with def merge_sorted( plus return must not be Strong: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_english_paren_contents_not_strong() {
+        let code = "def merge_sorted (two lists): and return a merged list";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "English inside parens is not a parameter list: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_english_same_line_body_not_strong() {
+        let code = "def merge_sorted a, b: you should return one list";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "English after a no-paren signature colon is not a body: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_unfenced_real_fn_after_name_fence_is_strong() {
+        let text = "\
+```
+I would write def merge_sorted
+```
+def merge_sorted(a, b):
+    return a + b
+";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(text),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "name-drop fence must not hide a later unfenced real function: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn code_syntax_one_line_function_is_strong() {
         let code = "def merge_sorted(a, b): return a + b\n";
         let result = probe_code_syntax(&MockLlm {
@@ -726,16 +819,19 @@ def merge_sorted(a, b):
     #[test]
     fn extract_code_block_python() {
         let text = "```python\ndef foo():\n    return 42\n```";
-        let code = extract_code_block(text).unwrap();
-        assert!(code.contains("def foo()"));
-        assert!(code.contains("return 42"));
+        assert!(
+            extract_code_block(text).is_none(),
+            "a fence that is not a real merge_sorted must fall back to the full text"
+        );
     }
 
     #[test]
     fn extract_code_block_bare() {
         let text = "```\nprint(1)\n```";
-        let code = extract_code_block(text).unwrap();
-        assert_eq!(code.trim(), "print(1)");
+        assert!(
+            extract_code_block(text).is_none(),
+            "a name-less fence must fall back to the full text"
+        );
     }
 
     #[test]

@@ -117,9 +117,12 @@ fn has_seconds_unit(lower: &str) -> bool {
 }
 
 fn has_milliseconds_unit(lower: &str) -> bool {
-    lower
-        .split(|c: char| !c.is_ascii_alphabetic())
-        .any(|w| matches!(w, "millisecond" | "milliseconds" | "ms"))
+    lower.split(|c: char| !c.is_ascii_alphabetic()).any(|w| {
+        matches!(
+            w,
+            "millisecond" | "milliseconds" | "ms" | "msec" | "msecs" | "millis"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -261,6 +264,24 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn context_1_75_msec_is_not_1750ms() {
+        let llm = MockLlm {
+            response: text_response("9847\nv3.7.42-rc1\n1.75 msec"),
+        };
+        let result = probe_context_faithfulness(&llm).await.unwrap();
+        assert!(
+            result.score < 1.0,
+            "1.75 msec must not count as 1750 ms / 1.75 seconds: {}",
+            result.details
+        );
+        assert!(
+            result.details.contains("timeout=false"),
+            "msec must not satisfy the seconds synonym: {}",
+            result.details
+        );
+    }
+
     #[test]
     fn recalls_timeout_accepts_equivalent_phrasings() {
         assert!(recalls_timeout("1750"));
@@ -273,6 +294,22 @@ mod tests {
         assert!(
             !recalls_timeout("1.75 milliseconds"),
             "second must not match inside milliseconds"
+        );
+        assert!(
+            !recalls_timeout("1.75 msec"),
+            "1.75 msec must not count as 1750 ms / 1.75 seconds"
+        );
+        assert!(
+            !recalls_timeout("timeout is 1.75 msec"),
+            "timeout + 1.75 msec must not count as the asked second value"
+        );
+        assert!(
+            !recalls_timeout("1.75 msecs"),
+            "1.75 msecs must not count as 1750 ms"
+        );
+        assert!(
+            !recalls_timeout("timeout is 1.75 millis"),
+            "timeout + 1.75 millis must not count as the asked second value"
         );
     }
 }

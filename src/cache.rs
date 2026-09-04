@@ -200,7 +200,13 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v87: code_syntax fenced name-only; extract prefers def merge_sorted(;
 ///      colon-in-prose name-drops are not a signature; multi_turn
 ///      requires read<edit<run turns; MCP stdio NDJSON.
-pub const PROBE_SUITE_VERSION: u32 = 87;
+/// v88: code_syntax sentence-with-paren is not a def; English paren
+///      contents and same-line prose after colon stay Weak; extract
+///      falls back when no fence is a real def; path-once SEARCH/REPLACE;
+///      array-then-object JSON pick-best; memory not-able/can-not-repeat/
+///      I forgot; vision identify/make-BL-out/can-not; msec unit;
+///      file_path on sequencing edit, one-shot, and selection tasks.
+pub const PROBE_SUITE_VERSION: u32 = 88;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

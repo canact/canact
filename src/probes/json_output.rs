@@ -116,19 +116,32 @@ fn peel_one_fence(s: &str) -> &str {
 
 fn score_json_text(text: &str) -> (f32, String) {
     let primary = extract_json_from_text(text);
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(primary) {
-        if val.is_array() {
-            return (0.0, "Response JSON is an array, not an object".to_string());
+    let primary_is_array =
+        serde_json::from_str::<serde_json::Value>(primary).is_ok_and(|val| val.is_array());
+    // A leading parseable array must not abort pick-best. Only search
+    // after that array so an inner object does not count as standalone.
+    let search = if primary_is_array {
+        match text.find(primary) {
+            Some(i) => &text[i + primary.len()..],
+            None => "",
         }
-    }
+    } else {
+        text
+    };
     let mut best: Option<(f32, String)> = None;
-    for val in json_objects_in(text) {
+    for val in json_objects_in(search) {
         let scored = score_json_object(&val);
         if best.as_ref().is_none_or(|(s, _)| scored.0 > *s) {
             best = Some(scored);
         }
     }
-    best.unwrap_or((0.0, "Response was not valid JSON".to_string()))
+    if let Some(best) = best {
+        return best;
+    }
+    if primary_is_array {
+        return (0.0, "Response JSON is an array, not an object".to_string());
+    }
+    (0.0, "Response was not valid JSON".to_string())
 }
 
 fn score_json_object(val: &serde_json::Value) -> (f32, String) {
@@ -344,6 +357,22 @@ mod tests {
                 "empty json strings must not skip repair: {body}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn json_array_then_hello_object_is_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                "```json\n[{\"word\": \"cat\", \"length\": 3, \"reversed\": \"tac\"}]\n```\n\n\
+                 {\"word\": \"hello\", \"length\": 5, \"reversed\": \"olleh\"}",
+            ),
+        };
+        let result = probe_json_output(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "fenced cat array must not abort pick-best of a later hello object: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

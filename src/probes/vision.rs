@@ -78,6 +78,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // Do not gate on `refused`: "I see letters but cannot make them out"
     // is still Medium.
     let negated_glyphs = vision_negated_glyphs(&folded) || vision_negated_glyphs(&stripped);
+    let make_out_negated = cannot_make_token_out(&folded) || cannot_make_token_out(&stripped);
     let saw_glyphs = !negated_glyphs
         && (has_surface_word(lower, "letter")
             || has_surface_word(lower, "letters")
@@ -95,7 +96,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
 
     // Strong is a read, not any "don't"/"cannot" hedge (font, typeface).
     // See-denial still blocks Strong via negated_glyphs ("I don't see BL").
-    let (score, details) = if identified_text && !negated_glyphs {
+    let (score, details) = if identified_text && !negated_glyphs && !make_out_negated {
         (1.0, "Can read text from images".to_string())
     } else if echoed_question {
         (0.0, "Did not use the image (generic reply)".to_string())
@@ -151,7 +152,9 @@ fn strip_format_marks(s: &str) -> String {
 fn vision_refused(lower: &str) -> bool {
     lower.contains("cannot")
         || lower.contains("can't")
+        || lower.contains("can not")
         || lower.contains("unable")
+        || lower.contains("not able")
         || lower.contains("don't")
         || lower.contains("no image")
         || lower.contains("no text")
@@ -196,21 +199,40 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("cannot see")
         || lower.contains("can't read")
         || lower.contains("cannot read")
+        || lower.contains("can't identify")
+        || lower.contains("cannot identify")
+        || lower.contains("can't decipher")
+        || lower.contains("cannot decipher")
         || lower.contains("can't make out")
         || lower.contains("cannot make out")
         || lower.contains("unable to read")
         || lower.contains("unable to see")
+        || lower.contains("unable to identify")
+        || lower.contains("unable to decipher")
         || lower.contains("unable to make out")
         || lower.contains("not able to read")
         || lower.contains("not able to see")
+        || lower.contains("not able to identify")
+        || lower.contains("not able to decipher")
         || lower.contains("not able to make out")
         || lower.contains("can not read")
         || lower.contains("can not see")
+        || lower.contains("can not identify")
+        || lower.contains("can not decipher")
         || lower.contains("can not make out")
         || lower.contains("doesn't contain letter")
         || lower.contains("does not contain letter")
         || lower.contains("aren't any letter")
         || lower.contains("are not any letter")
+}
+
+fn cannot_make_token_out(lower: &str) -> bool {
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    tokens.windows(2).any(|w| w[0] == "make" && w[1] == "out")
+        || tokens.windows(3).any(|w| w[0] == "make" && w[2] == "out")
 }
 
 fn has_surface_word(lower: &str, word: &str) -> bool {
@@ -421,6 +443,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vision_cannot_identify_bl_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response("I cannot identify BL"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "cannot-identify that names BL must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vision_cannot_make_bl_out_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response("I cannot make BL out"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "cannot-make-BL-out must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn vision_no_readable_text_or_letters_is_weak() {
         for text in ["no readable text", "no readable letters"] {
             let llm = MockLlm {
@@ -560,6 +608,21 @@ mod tests {
         };
         let result = probe_vision(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.score, 0.0);
+        assert_eq!(result.details, "Cannot process images");
+    }
+
+    #[tokio::test]
+    async fn vision_can_not_process_black_white_is_weak() {
+        let llm = MockLlm {
+            response: text_response("I can not process this black and white image"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(
+            result.level,
+            CapabilityLevel::Weak,
+            "can-not process black-and-white must be a vision refusal: {result:?}"
+        );
         assert_eq!(result.score, 0.0);
         assert_eq!(result.details, "Cannot process images");
     }
