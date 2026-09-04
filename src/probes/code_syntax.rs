@@ -177,21 +177,30 @@ fn strip_python_string_literals(text: &str) -> String {
 }
 
 fn has_indented_merge_sorted_body(text: &str) -> bool {
-    let Some(idx) = text.find("def merge_sorted") else {
-        return false;
-    };
-    let after = &text[idx + "def merge_sorted".len()..];
-    let Some(colon_rel) = after.find(':') else {
-        return false;
-    };
-    if after[..colon_rel].contains('\n') {
-        return false;
-    }
-    for line in after[colon_rel + 1..].lines().skip(1) {
-        if line.trim().is_empty() {
-            continue;
+    let needle = "def merge_sorted";
+    let mut search = 0;
+    while let Some(rel) = text.get(search..).and_then(|s| s.find(needle)) {
+        let idx = search + rel;
+        let after = &text[idx + needle.len()..];
+        if let Some(colon_rel) = after.find(':') {
+            if !after[..colon_rel].contains('\n') {
+                let rest = &after[colon_rel + 1..];
+                if rest
+                    .lines()
+                    .next()
+                    .is_some_and(|line| !line.trim().is_empty())
+                {
+                    return true;
+                }
+                for line in rest.lines().skip(1) {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    return line.starts_with(' ') || line.starts_with('\t');
+                }
+            }
         }
-        return line.starts_with(' ') || line.starts_with('\t');
+        search = idx + needle.len();
     }
     false
 }
@@ -464,6 +473,34 @@ def merge_sorted(a, b):
             "tokens in a sentence are not a function: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_comment_then_real_unfenced_function_is_strong() {
+        let code = "# def merge_sorted merges lists\ndef merge_sorted(a, b):\n    return a + b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "comment naming the token must not hide a real function: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_one_line_function_is_strong() {
+        let code = "def merge_sorted(a, b): return a + b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "one-line def merge_sorted must stay Strong: {result:?}"
+        );
     }
 
     #[tokio::test]
