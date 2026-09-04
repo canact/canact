@@ -119,7 +119,7 @@ pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
     match provider {
         "openrouter.ai" | "openrouter" => "openrouter",
         "api.openai.com" | "openai" => "openai",
-        "localhost" | "127.0.0.1" | "::1" | "[::1]" => "ollama",
+        "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => "ollama",
         other => other,
     }
 }
@@ -250,7 +250,7 @@ mod tests {
             CapabilityLevel::Medium,
             CapabilityLevel::Weak,
         );
-        for host in ["localhost", "127.0.0.1", "::1", "[::1]"] {
+        for host in ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"] {
             p.provider = host.to_owned();
             assert_eq!(
                 overlay_model_name(&p),

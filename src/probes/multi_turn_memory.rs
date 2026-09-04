@@ -106,32 +106,45 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("do not remember")
         || lower.contains("can't remember")
         || lower.contains("cannot remember")
+        || lower.contains("can not remember")
         || lower.contains("don't recall")
         || lower.contains("do not recall")
         || lower.contains("can't recall")
         || lower.contains("cannot recall")
+        || lower.contains("can not recall")
         || lower.contains("can't repeat")
         || lower.contains("cannot repeat")
         || lower.contains("won't repeat")
         || lower.contains("will not repeat")
         || lower.contains("can't share")
         || lower.contains("cannot share")
+        || lower.contains("can not share")
         || lower.contains("won't share")
         || lower.contains("will not share")
         || lower.contains("can't disclose")
         || lower.contains("cannot disclose")
+        || lower.contains("can not disclose")
         || lower.contains("won't disclose")
         || lower.contains("will not disclose")
+        || lower.contains("can't reveal")
+        || lower.contains("cannot reveal")
+        || lower.contains("can not reveal")
+        || lower.contains("won't reveal")
+        || lower.contains("will not reveal")
         || lower.contains("unable to remember")
         || lower.contains("unable to recall")
         || lower.contains("unable to share")
         || lower.contains("unable to disclose")
+        || lower.contains("unable to reveal")
         || lower.contains("not allowed to share")
         || lower.contains("not allowed to disclose")
+        || lower.contains("not allowed to reveal")
         || lower.contains("couldn't remember")
         || lower.contains("couldn't recall")
         || lower.contains("could not remember")
         || lower.contains("could not recall")
+        || lower.contains("i've forgotten")
+        || lower.contains("i have forgotten")
 }
 
 #[cfg(test)]
@@ -178,6 +191,23 @@ mod tests {
             "share/disclose refusal that quotes the code must be Weak: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn refusal_can_not_remember_reveal_forgotten_quoted_code_is_weak() {
+        for text in [
+            "I can not remember ZEPHYR-4829",
+            "I cannot reveal ZEPHYR-4829",
+            "I've forgotten ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "refusal that quotes ZEPHYR-4829 must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
     }
 
     #[tokio::test]

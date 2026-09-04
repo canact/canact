@@ -155,6 +155,7 @@ fn vision_refused(lower: &str) -> bool {
         || lower.contains("don't")
         || lower.contains("no image")
         || lower.contains("no text")
+        || lower.contains("no readable")
         || lower.contains("no visible")
         || lower.contains("no letter")
         || lower.contains("no character")
@@ -180,6 +181,7 @@ fn vision_refused(lower: &str) -> bool {
 fn vision_negated_glyphs(lower: &str) -> bool {
     lower.contains("no letter")
         || lower.contains("no character")
+        || lower.contains("no readable")
         || lower.contains("no visible letter")
         || lower.contains("no visible character")
         || lower.contains("no discernible letter")
@@ -199,6 +201,9 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("unable to read")
         || lower.contains("unable to see")
         || lower.contains("unable to make out")
+        || lower.contains("not able to read")
+        || lower.contains("not able to see")
+        || lower.contains("not able to make out")
         || lower.contains("can not read")
         || lower.contains("can not see")
         || lower.contains("can not make out")
@@ -412,6 +417,35 @@ mod tests {
             result.level,
             CapabilityLevel::Strong,
             "cannot-read that names BL must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vision_no_readable_text_or_letters_is_weak() {
+        for text in ["no readable text", "no readable letters"] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "no-readable phrasing must not set supportsVision: {text:?} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_not_able_to_read_bl_is_not_strong() {
+        let llm = MockLlm {
+            response: text_response("I'm not able to read BL"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "not-able-to-read that names BL must not be Strong: {result:?}"
         );
     }
 
