@@ -80,9 +80,11 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     let refused = (vision_refused(&folded) || vision_refused(&stripped)) && !font_hedge;
     // Partial reads name glyphs. "no letters" is a refusal, not a read.
     // Do not gate on `refused`: "I see letters but cannot make them out"
-    // is still Medium.
+    // and "I see letters but cannot read them" are still Medium.
     let negated_glyphs = vision_negated_glyphs(&folded) || vision_negated_glyphs(&stripped);
     let make_out_negated = cannot_make_token_out(&folded) || cannot_make_token_out(&stripped);
+    let leftover_unread =
+        leftover_read_blocks_strong(&folded) || leftover_read_blocks_strong(&stripped);
     let saw_glyphs = !negated_glyphs
         && (has_surface_word(lower, "letter")
             || has_surface_word(lower, "letters")
@@ -100,25 +102,32 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
 
     // Strong is a read, not any "don't"/"cannot" hedge (font, typeface).
     // See-denial still blocks Strong via negated_glyphs ("I don't see BL").
-    let (score, details) = if identified_text && !negated_glyphs && !make_out_negated {
-        (1.0, "Can read text from images".to_string())
-    } else if echoed_question {
-        (0.0, "Did not use the image (generic reply)".to_string())
-    } else if saw_glyphs {
-        (
-            0.5,
-            "Processed the image but could not read the text clearly".to_string(),
-        )
-    } else if refused {
-        (0.0, "Cannot process images".to_string())
-    } else if processed_surface {
-        (
-            0.5,
-            "Processed the image but could not read the text clearly".to_string(),
-        )
-    } else {
-        (0.0, "Did not use the image (generic reply)".to_string())
-    };
+    // Infix leftover read verbs ("cannot quite read BL") are not Strong.
+    let (score, details) =
+        if identified_text && !negated_glyphs && !make_out_negated && !leftover_unread {
+            (1.0, "Can read text from images".to_string())
+        } else if echoed_question {
+            (0.0, "Did not use the image (generic reply)".to_string())
+        } else if saw_glyphs {
+            (
+                0.5,
+                "Processed the image but could not read the text clearly".to_string(),
+            )
+        } else if processed_surface && (make_out_negated || leftover_unread) && !negated_glyphs {
+            (
+                0.5,
+                "Processed the image but could not read the text clearly".to_string(),
+            )
+        } else if refused {
+            (0.0, "Cannot process images".to_string())
+        } else if processed_surface {
+            (
+                0.5,
+                "Processed the image but could not read the text clearly".to_string(),
+            )
+        } else {
+            (0.0, "Did not use the image (generic reply)".to_string())
+        };
 
     refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
@@ -207,10 +216,6 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("do not see")
         || lower.contains("can't see")
         || lower.contains("cannot see")
-        || lower.contains("can't read")
-        || lower.contains("cannot read")
-        || lower.contains("can't identify")
-        || lower.contains("cannot identify")
         || recognize_negates_glyphs(lower)
         || lower.contains("can't decipher")
         || lower.contains("cannot decipher")
@@ -300,8 +305,72 @@ fn rest_is_font_hedge(after: &str) -> bool {
         .or_else(|| after.strip_prefix("that "))
         .or_else(|| after.strip_prefix("these "))
         .or_else(|| after.strip_prefix("those "))
+        .or_else(|| after.strip_prefix("a "))
+        .or_else(|| after.strip_prefix("any "))
+        .or_else(|| after.strip_prefix("its "))
         .unwrap_or(after);
     after.starts_with("font") || after.starts_with("typeface")
+}
+
+/// Infix leftover read verbs plus BL are not a read.
+/// Font hedges (`cannot identify the font`) stay Strong.
+fn leftover_read_blocks_strong(lower: &str) -> bool {
+    if vision_font_hedge(lower) {
+        return false;
+    }
+    if lower.contains("not readable")
+        || lower.contains("isn't readable")
+        || lower.contains("is not readable")
+        || lower.contains("aren't readable")
+        || lower.contains("are not readable")
+        || lower.contains("unreadable")
+    {
+        return true;
+    }
+    if lower.contains("trouble reading")
+        || lower.contains("trouble identifying")
+        || lower.contains("trouble discerning")
+    {
+        return true;
+    }
+    cannot_plus_read_verb(lower)
+}
+
+fn cannot_plus_read_verb(lower: &str) -> bool {
+    const NEGS: &[&str] = &["cannot", "can't", "can not"];
+    const VERBS: &[&str] = &["read", "identify", "discern"];
+    const ADVERBS: &[&str] = &["quite", "clearly", "really", "fully", "easily"];
+    for neg in NEGS {
+        let mut search = 0;
+        while let Some(rel) = lower.get(search..).and_then(|s| s.find(neg)) {
+            let after = lower[search + rel + neg.len()..].trim_start();
+            let rest = skip_one_adverb(after, ADVERBS);
+            if VERBS.iter().any(|verb| starts_with_word(rest, verb)) {
+                return true;
+            }
+            search += rel + neg.len();
+        }
+    }
+    false
+}
+
+fn skip_one_adverb<'a>(s: &'a str, adverbs: &[&str]) -> &'a str {
+    for adv in adverbs {
+        if let Some(rest) = s.strip_prefix(adv) {
+            if rest.starts_with(|c: char| c.is_whitespace()) || rest.is_empty() {
+                return rest.trim_start();
+            }
+        }
+    }
+    s
+}
+
+fn starts_with_word(s: &str, word: &str) -> bool {
+    s.starts_with(word)
+        && s[word.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric())
 }
 
 fn vision_font_hedge(lower: &str) -> bool {
@@ -520,6 +589,46 @@ mod tests {
             "font hedge that uses recognize must stay Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn vision_cannot_identify_the_font_with_bl_is_strong() {
+        for text in [
+            "BL (I cannot identify the font)",
+            "BL (I don't recognize a font)",
+            "BL (I don't recognize any typeface)",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "identify/a/any font hedge with BL must stay Strong: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_cannot_quite_read_bl_is_not_strong() {
+        for text in [
+            "I cannot quite read BL",
+            "I cannot clearly identify BL",
+            "I cannot discern BL",
+            "BL is not readable",
+            "I'm having trouble reading BL",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "infix leftover read verb that names BL must not be Strong: {text:?} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -775,6 +884,27 @@ mod tests {
         let result = probe_vision(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn vision_letters_but_cannot_read_is_medium() {
+        for text in [
+            "I see letters but cannot read them",
+            "I see characters but cannot identify them",
+            "I see text but cannot read it",
+            "I see dark letters but cannot make them out",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Medium,
+                "letters/text plus cannot-read/identify must stay Medium: {text:?} {result:?}"
+            );
+            assert_eq!(result.score, 0.5, "{text:?}");
+        }
     }
 
     #[tokio::test]

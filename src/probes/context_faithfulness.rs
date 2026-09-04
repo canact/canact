@@ -114,10 +114,11 @@ fn recalls_timeout(lower: &str) -> bool {
 }
 
 fn integer_is_planted_ms(lower: &str) -> bool {
-    if has_milliseconds_unit(lower) || has_seconds_unit(lower) {
+    if has_milliseconds_unit(lower) {
         return true;
     }
-    if has_minutes_unit(lower) || has_hours_unit(lower) {
+    // 1750 seconds is 1000x the planted millisecond fact.
+    if has_seconds_unit(lower) || has_minutes_unit(lower) || has_hours_unit(lower) {
         return false;
     }
     true
@@ -349,8 +350,20 @@ mod tests {
             "1750 minutes must not count as 1750 ms"
         );
         assert!(
+            !recalls_timeout("1750 seconds"),
+            "1750 seconds is 1000x the planted ms fact"
+        );
+        assert!(
             recalls_timeout("1750"),
             "bare 1750 still counts; the question already asks for milliseconds"
+        );
+        assert!(
+            recalls_timeout("1.75s"),
+            "1.75s is the same timeout fact as 1750 ms"
+        );
+        assert!(
+            recalls_timeout("1.75 seconds"),
+            "1.75 seconds is the same timeout fact as 1750 ms"
         );
     }
 }

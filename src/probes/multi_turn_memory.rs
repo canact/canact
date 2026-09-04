@@ -216,6 +216,23 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("i'd forgotten")
         || lower.contains("i had forgotten")
         || lower.contains("i forgot")
+        || lower.contains("can't say")
+        || lower.contains("cannot say")
+        || lower.contains("can not say")
+        || lower.contains("won't say")
+        || lower.contains("will not say")
+        || lower.contains("unable to give")
+        || lower.contains("unable to say")
+        || lower.contains("wouldn't share")
+        || lower.contains("would not share")
+        || lower.contains("not permitted to share")
+        || lower.contains("not permitted to")
+        || lower.contains("can't retrieve")
+        || lower.contains("cannot retrieve")
+        || lower.contains("can not retrieve")
+        || lower.contains("no longer remember")
+        || lower.contains("couldn't repeat")
+        || lower.contains("could not repeat")
 }
 
 #[cfg(test)]
@@ -393,6 +410,28 @@ mod tests {
             assert_eq!(
                 result.score, 0.0,
                 "not-able/can-not-repeat/forgot that quotes the code must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refusal_cannot_say_give_wouldnt_permitted_retrieve_no_longer_is_weak() {
+        for text in [
+            "I cannot say ZEPHYR-4829",
+            "I won't say ZEPHYR-4829",
+            "I'm unable to give ZEPHYR-4829",
+            "I wouldn't share ZEPHYR-4829",
+            "I'm not permitted to share ZEPHYR-4829",
+            "I cannot retrieve ZEPHYR-4829",
+            "I no longer remember ZEPHYR-4829",
+            "I couldn't repeat ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "say/give/wouldn't/permitted/retrieve/no-longer that quotes the code must be Weak: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
         }

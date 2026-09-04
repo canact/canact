@@ -48,8 +48,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v92() {
-    assert_eq!(PROBE_SUITE_VERSION, 92);
+fn cache_key_format_is_model_provider_unset_v93() {
+    assert_eq!(PROBE_SUITE_VERSION, 93);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -57,7 +57,7 @@ fn cache_key_format_is_model_provider_unset_v92() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v92|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v93|full|novision|ctxnone");
 }
 
 #[test]

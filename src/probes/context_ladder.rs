@@ -173,10 +173,11 @@ fn recalls_heartbeat(lower: &str) -> bool {
 }
 
 fn integer_is_planted_ms(lower: &str) -> bool {
-    if has_milliseconds_unit(lower) || has_seconds_unit(lower) {
+    if has_milliseconds_unit(lower) {
         return true;
     }
-    if has_minutes_unit(lower) || has_hours_unit(lower) {
+    // 2840 seconds is 1000x the planted millisecond fact.
+    if has_seconds_unit(lower) || has_minutes_unit(lower) || has_hours_unit(lower) {
         return false;
     }
     true
@@ -418,8 +419,20 @@ mod tests {
             "2840 minutes must not count as 2840 ms"
         );
         assert!(
+            !recalls_heartbeat("2840 seconds"),
+            "2840 seconds is 1000x the planted ms fact"
+        );
+        assert!(
             recalls_heartbeat("2840"),
             "bare 2840 still counts; the question already asks for milliseconds"
+        );
+        assert!(
+            recalls_heartbeat("2.84s"),
+            "2.84s is the same heartbeat fact as 2840 ms"
+        );
+        assert!(
+            recalls_heartbeat("2.84 seconds"),
+            "2.84 seconds is the same heartbeat fact as 2840 ms"
         );
     }
 
