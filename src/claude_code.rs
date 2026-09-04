@@ -44,7 +44,10 @@ struct RefreshResponse {
 
 enum CredStore {
     File(PathBuf),
-    Keychain { account: String },
+    #[cfg(target_os = "macos")]
+    Keychain {
+        account: String,
+    },
 }
 
 /// Skip live keychain reads until this guard is dropped.
@@ -232,6 +235,7 @@ fn persist_refresh(
             refresh_token,
             expires_at_ms,
         ),
+        #[cfg(target_os = "macos")]
         CredStore::Keychain { account } => persist_keychain(
             account,
             current_raw,
@@ -262,6 +266,7 @@ fn persist_file(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn persist_keychain(
     account: &str,
     current_raw: &str,
@@ -272,38 +277,10 @@ fn persist_keychain(
     if KEYCHAIN_DISABLES.load(Ordering::SeqCst) > 0 {
         return Ok(());
     }
-    persist_keychain_os(
-        account,
-        current_raw,
-        access_token,
-        refresh_token,
-        expires_at_ms,
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn persist_keychain_os(
-    account: &str,
-    current_raw: &str,
-    access_token: &str,
-    refresh_token: Option<&str>,
-    expires_at_ms: u64,
-) -> Result<(), ()> {
     let mut doc: Value = serde_json::from_str(current_raw).map_err(|_| ())?;
     apply_refresh_to_json(&mut doc, access_token, refresh_token, expires_at_ms).map_err(|_| ())?;
     let updated = serde_json::to_string(&doc).map_err(|_| ())?;
     write_keychain_secret(account, &updated)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn persist_keychain_os(
-    _account: &str,
-    _current_raw: &str,
-    _access_token: &str,
-    _refresh_token: Option<&str>,
-    _expires_at_ms: u64,
-) -> Result<(), ()> {
-    Ok(())
 }
 
 fn token_urls() -> (String, Option<String>) {
