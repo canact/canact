@@ -48,8 +48,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v93() {
-    assert_eq!(PROBE_SUITE_VERSION, 93);
+fn cache_key_format_is_model_provider_unset_v94() {
+    assert_eq!(PROBE_SUITE_VERSION, 94);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -57,7 +57,7 @@ fn cache_key_format_is_model_provider_unset_v93() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v93|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v94|full|novision|ctxnone");
 }
 
 #[test]
@@ -285,6 +285,44 @@ fn find_profile_accepts_overlay_provider_aliases() {
     assert!(cache.find_profile("qwen", "ollama").is_some());
     assert!(cache.find_profile("qwen", "localhost").is_some());
     assert!(cache.find_profile("qwen", "::1").is_some());
+}
+
+#[test]
+fn find_profile_hits_across_ollama_and_default_port() {
+    let mut cache = ProbeCache::default();
+    let mut ollama = sample_profile();
+    ollama.model_id = "qwen".into();
+    ollama.provider = "ollama".into();
+    cache.put(ollama);
+    for requested in [
+        "127.0.0.1:11434",
+        "localhost:11434",
+        "[::1]:11434",
+        "::1:11434",
+    ] {
+        assert!(
+            cache.find_profile("qwen", requested).is_some(),
+            "probe --provider ollama must hit export --provider {requested}"
+        );
+    }
+
+    let mut ported = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "qwen".into();
+    stored.provider = "127.0.0.1:11434".into();
+    ported.put(stored);
+    assert!(
+        ported.find_profile("qwen", "ollama").is_some(),
+        "row stored as 127.0.0.1:11434 must hit --provider ollama"
+    );
+    assert!(
+        ported.find_profile("qwen", "localhost:11434").is_some(),
+        "127.0.0.1:11434 and localhost:11434 share the ollama family"
+    );
+    assert!(
+        ported.find_profile("qwen", "127.0.0.1:1234").is_none(),
+        "127.0.0.1:1234 must not share the ollama :11434 row"
+    );
 }
 
 #[test]

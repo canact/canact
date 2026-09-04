@@ -119,15 +119,24 @@ fn score_json_text(text: &str) -> (f32, String) {
     let primary_is_array =
         serde_json::from_str::<serde_json::Value>(primary).is_ok_and(|val| val.is_array());
     // Standalone objects win. A complete hello that only lives inside an
-    // array envelope stays Weak (needs_json_repair).
+    // array or JSON-string envelope stays Weak (needs_json_repair).
     let mut best: Option<(f32, String)> = None;
     let mut array_wrapped_hello = false;
-    consider_standalone_json(text, &mut best, &mut array_wrapped_hello);
+    let mut string_wrapped_hello = false;
+    consider_standalone_json(
+        text,
+        &mut best,
+        &mut array_wrapped_hello,
+        &mut string_wrapped_hello,
+    );
     if best.as_ref().is_some_and(|(s, _)| *s >= 1.0) {
         return best.expect("best is Some");
     }
     if array_wrapped_hello {
         return (0.0, "Response JSON is an array, not an object".to_string());
+    }
+    if string_wrapped_hello {
+        return (0.0, "Response JSON is a string, not an object".to_string());
     }
     if let Some(best) = best {
         return best;
@@ -142,9 +151,23 @@ fn consider_standalone_json(
     text: &str,
     best: &mut Option<(f32, String)>,
     array_wrapped_hello: &mut bool,
+    string_wrapped_hello: &mut bool,
 ) {
     let mut i = 0;
     while i < text.len() {
+        if text[i..].starts_with('"') {
+            if let Some((inner, end)) = next_json_string(text, i) {
+                if string_contains_complete_hello(&inner) {
+                    *string_wrapped_hello = true;
+                }
+                i = end;
+                continue;
+            }
+            if let Some((_, end)) = next_quoted_span(text, i) {
+                i = end;
+                continue;
+            }
+        }
         if text[i..].starts_with('[') {
             if let Some((val, end)) = next_json_array(text, i) {
                 if value_contains_complete_hello(&val) {
@@ -170,6 +193,46 @@ fn consider_standalone_json(
         }
         i += text[i..].chars().next().map_or(1, char::len_utf8);
     }
+}
+
+fn next_json_string(text: &str, start: usize) -> Option<(String, usize)> {
+    let (_, end) = next_quoted_span(text, start)?;
+    let val: serde_json::Value = serde_json::from_str(&text[start..end]).ok()?;
+    Some((val.as_str()?.to_owned(), end))
+}
+
+fn next_quoted_span(text: &str, start: usize) -> Option<(String, usize)> {
+    let slice = &text[start..];
+    if !slice.starts_with('"') {
+        return None;
+    }
+    let mut inner = String::new();
+    let mut escape = false;
+    for (off, c) in slice.char_indices().skip(1) {
+        if escape {
+            inner.push(c);
+            escape = false;
+            continue;
+        }
+        if c == '\\' {
+            escape = true;
+            continue;
+        }
+        if c == '"' {
+            return Some((inner, start + off + 1));
+        }
+        inner.push(c);
+    }
+    None
+}
+
+fn string_contains_complete_hello(s: &str) -> bool {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
+        if value_contains_complete_hello(&val) {
+            return true;
+        }
+    }
+    inner_has_complete_hello(s)
 }
 
 fn collect_nested_object_scores(val: &serde_json::Value, best: &mut Option<(f32, String)>) {
@@ -531,6 +594,24 @@ mod tests {
             "commented array wrap must stay Weak (needs_json_repair): {result:?}"
         );
         assert_eq!(result.score, 0.0, "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn json_string_wrapped_hello_is_not_strong() {
+        for body in [
+            r#""{\"word\":\"hello\",\"length\":5,\"reversed\":\"olleh\"}""#,
+            r#""{"word":"hello","length":5,"reversed":"olleh"}""#,
+        ] {
+            let llm = MockLlm {
+                response: text_response(body),
+            };
+            let result = probe_json_output(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "JSON string-wrapped hello must stay Weak (needs_json_repair): {body} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{body}");
+        }
     }
 
     #[tokio::test]

@@ -156,6 +156,87 @@ fn mcp_probe_model_returns_host_policy_from_cache() {
 }
 
 #[test]
+fn mcp_cached_weak_tools_is_not_error() {
+    let dir = tempfile::tempdir().expect("temp");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = sample();
+    profile.tool_calling = ProbeResult {
+        name: "tool_calling".to_owned(),
+        score: 0.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Weak,
+        details: "test".to_owned(),
+    };
+    profile.xml_tool_calling = ProbeResult {
+        name: "xml_tool_calling".to_owned(),
+        score: 0.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Weak,
+        details: "test".to_owned(),
+    };
+    let mut cache = ProbeCache::default();
+    cache.put(profile);
+    cache.save(&cache_path).expect("save");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn canact mcp");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "canact-test", "version": "0" }
+            }
+        }),
+    );
+    let _ = read_rpc(&mut stdout);
+
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "probe_model",
+                "arguments": {
+                    "model": "qwen2.5-coder",
+                    "provider": "ollama",
+                    "cache": cache_path.to_str().expect("utf8")
+                }
+            }
+        }),
+    );
+    let called = read_rpc(&mut stdout);
+    let is_error = called["result"].get("isError");
+    assert!(
+        is_error.is_none() || is_error == Some(&json!(false)),
+        "successful Weak-tools envelope must not be isError: {called}"
+    );
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    let envelope: Value = serde_json::from_str(text).expect("envelope");
+    assert_eq!(envelope["canUseTools"], false, "{envelope}");
+    assert_eq!(envelope["model"], "qwen2.5-coder", "{envelope}");
+
+    drop(stdin);
+    let _ = child.wait_timeout();
+}
+
+#[test]
 fn mcp_ndjson_initialize_gets_jsonrpc_reply() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
         .arg("mcp")

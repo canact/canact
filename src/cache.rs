@@ -233,7 +233,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      cannot-quite-read and not-readable are not Strong; memory
 ///      say/give/wouldn't/permitted/retrieve/no-longer; 1750/2840
 ///      seconds are not the planted ms fact.
-pub const PROBE_SUITE_VERSION: u32 = 93;
+/// v94: JSON string-wrapped hello stays Weak; loopback :11434
+///      shares the ollama cache family; MCP isError only on
+///      actual tool failures.
+pub const PROBE_SUITE_VERSION: u32 = 94;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -731,8 +734,20 @@ fn provider_family(provider: &str) -> &str {
         "openai" | "api.openai.com" => "openai",
         "openrouter" | "openrouter.ai" => "openrouter",
         "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => "ollama",
+        other if loopback_default_ollama_port(other) => "ollama",
         other => other,
     }
+}
+
+fn loopback_default_ollama_port(provider: &str) -> bool {
+    let Some(host) = provider.strip_suffix(":11434") else {
+        return false;
+    };
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    matches!(bare, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1")
 }
 
 fn key_knobs_match(key: &str, skip_expensive: bool, vision: bool, advertised: Option<u32>) -> bool {
