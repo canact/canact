@@ -6,9 +6,10 @@ use std::process::ExitCode;
 use canact::{
     ANTHROPIC_BASE_URL, CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta,
     OpenAiCompatClient, ProbeCache, ProbeError, ProbeRun, ProbeRunner, XAI_BASE_URL,
-    cloud_endpoint_requires_key, default_compat_base_url, is_anthropic_provider_label,
-    is_xai_provider_label, list_model_ids, looks_cheap, missing_model_message,
-    overlay_context_tokens, provider_from_base_url, resolve_host_catalog, run_mcp_stdio,
+    claude_code_access_token, cloud_endpoint_requires_key, default_compat_base_url,
+    is_anthropic_provider_label, is_xai_provider_label, list_model_ids, looks_cheap,
+    missing_model_message, overlay_context_tokens, provider_from_base_url, resolve_host_catalog,
+    run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -413,7 +414,8 @@ fn resolve_api_key(cli: Option<String>, provider: &str) -> KeyRoute {
             std::env::var("ANTHROPIC_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
-        });
+        })
+        .or_else(claude_code_access_token);
     resolve_api_key_from(
         cli,
         std::env::var("OPENAI_API_KEY")

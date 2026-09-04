@@ -63,6 +63,11 @@ pub use export::{
 };
 
 #[cfg(feature = "cli")]
+mod claude_code;
+#[cfg(feature = "cli")]
+pub use claude_code::{ClaudeCodeKeychainIsolation, claude_code_access_token};
+
+#[cfg(feature = "cli")]
 mod mcp;
 #[cfg(feature = "cli")]
 pub use mcp::run_mcp_stdio;
