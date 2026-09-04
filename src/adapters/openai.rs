@@ -144,10 +144,7 @@ impl ProbeClient for OpenAiCompatClient {
                 .await
                 .map_err(map_transport)?;
             let resp = ensure_success(resp).await?;
-            let raw = resp.bytes().await.map_err(map_transport)?;
-            if raw.len() > MAX_RESPONSE_BYTES {
-                return Err(ProbeError::Transient("response too large".into()));
-            }
+            let raw = read_success_body(resp).await?;
             let value: Value = serde_json::from_slice(&raw)?;
             if let Some(err) = value.get("error") {
                 return Err(ProbeError::Llm(error_message(err)));
@@ -201,10 +198,7 @@ pub async fn list_model_ids(
         return Ok(Vec::new());
     }
     let resp = ensure_success(resp).await?;
-    let raw = resp.bytes().await.map_err(map_transport)?;
-    if raw.len() > MAX_RESPONSE_BYTES {
-        return Err(ProbeError::Transient("response too large".into()));
-    }
+    let raw = read_success_body(resp).await?;
     let value: Value = serde_json::from_slice(&raw)?;
     if let Some(err) = value.get("error") {
         return Err(ProbeError::Llm(error_message(err)));
@@ -259,6 +253,31 @@ async fn ensure_success(resp: reqwest::Response) -> Result<reqwest::Response, Pr
     let code = status.as_u16();
     let body = read_capped_text(resp, MAX_ERROR_BODY_BYTES).await;
     Err(map_status(code, retry_after, &body))
+}
+
+fn push_response_chunk(buf: &mut Vec<u8>, chunk: &[u8], max: usize) -> Result<(), ProbeError> {
+    if buf.len().saturating_add(chunk.len()) > max {
+        return Err(ProbeError::Transient("response too large".into()));
+    }
+    buf.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn read_success_body(resp: reqwest::Response) -> Result<Vec<u8>, ProbeError> {
+    use futures::StreamExt;
+    if resp
+        .content_length()
+        .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(ProbeError::Transient("response too large".into()));
+    }
+    let mut buf = Vec::new();
+    let mut bytes = resp.bytes_stream();
+    while let Some(item) = bytes.next().await {
+        let chunk = item.map_err(map_transport)?;
+        push_response_chunk(&mut buf, &chunk, MAX_RESPONSE_BYTES)?;
+    }
+    Ok(buf)
 }
 
 async fn read_capped_text(resp: reqwest::Response, max: usize) -> String {
@@ -732,11 +751,7 @@ fn parse_tool_calls(value: &Value) -> Vec<ProbeToolCall> {
     };
     arr.iter()
         .filter_map(|tc| {
-            let id = tc
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
+            let id = json_id(tc.get("id")).unwrap_or_default();
             let func = tc.get("function")?;
             let name = func
                 .get("name")
@@ -1393,6 +1408,38 @@ mod tests {
         let resp = parse_chat_response(&value).expect("parse");
         assert_eq!(resp.tool_calls[0].name, "list_dir");
         assert_eq!(resp.finish, ProbeFinish::ToolCalls);
+    }
+
+    #[test]
+    fn parse_chat_response_numeric_tool_id_is_kept() {
+        let value = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "id": 42,
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{\"path\":\"/tmp/a\"}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let resp = parse_chat_response(&value).expect("parse");
+        assert_eq!(
+            resp.tool_calls[0].id, "42",
+            "numeric chat tool id must stringify: {resp:?}"
+        );
+    }
+
+    #[test]
+    fn push_response_chunk_rejects_over_cap() {
+        let mut buf = vec![0u8; 10];
+        let err = push_response_chunk(&mut buf, &[1, 2, 3, 4, 5, 6], 15).unwrap_err();
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("too large")),
+            "{err:?}"
+        );
+        assert_eq!(buf.len(), 10);
     }
 
     #[test]
