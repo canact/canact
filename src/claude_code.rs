@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use serde_json::Value;
 
 const DEFAULT_AUTH_FILE: &str = ".claude/.credentials.json";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+#[cfg(any(target_os = "macos", test))]
 const KEYCHAIN_ACCOUNTS: &[&str] = &["Claude Code", "credentials"];
 
 static KEYCHAIN_DISABLES: AtomicU32 = AtomicU32::new(0);
@@ -83,21 +85,25 @@ fn load_from_keychain() -> Option<String> {
     if KEYCHAIN_DISABLES.load(Ordering::SeqCst) > 0 {
         return None;
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        return None;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        for account in keychain_accounts() {
-            if let Some(token) = keychain_token(&account) {
-                return Some(token);
-            }
-        }
-        None
-    }
+    load_from_keychain_os()
 }
 
+#[cfg(target_os = "macos")]
+fn load_from_keychain_os() -> Option<String> {
+    for account in keychain_accounts() {
+        if let Some(token) = keychain_token(&account) {
+            return Some(token);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_from_keychain_os() -> Option<String> {
+    None
+}
+
+#[cfg(any(target_os = "macos", test))]
 fn keychain_accounts() -> Vec<String> {
     let mut accounts = Vec::new();
     for key in ["USER", "LOGNAME"] {
