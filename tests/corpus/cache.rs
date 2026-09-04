@@ -47,8 +47,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v85() {
-    assert_eq!(PROBE_SUITE_VERSION, 85);
+fn cache_key_format_is_model_provider_unset_v86() {
+    assert_eq!(PROBE_SUITE_VERSION, 86);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -56,7 +56,7 @@ fn cache_key_format_is_model_provider_unset_v85() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v85|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v86|full|novision|ctxnone");
 }
 
 #[test]
@@ -284,6 +284,77 @@ fn find_profile_accepts_overlay_provider_aliases() {
     assert!(cache.find_profile("qwen", "ollama").is_some());
     assert!(cache.find_profile("qwen", "localhost").is_some());
     assert!(cache.find_profile("qwen", "::1").is_some());
+}
+
+#[test]
+fn find_profile_treats_all_zeros_as_ollama() {
+    let mut cache = ProbeCache::default();
+    let mut zeros = sample_profile();
+    zeros.model_id = "qwen".into();
+    zeros.provider = "0.0.0.0".into();
+    cache.put(zeros);
+    assert!(
+        cache.find_profile("qwen", "ollama").is_some(),
+        "--provider ollama must find a row stored as 0.0.0.0"
+    );
+}
+
+#[test]
+fn find_profile_strips_normalized_provider_prefix() {
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.model_id = "anthropic/claude-3.5-sonnet".into();
+    profile.provider = "openrouter".into();
+    cache.put(profile);
+    assert!(
+        cache
+            .find_profile("openrouter/anthropic/claude-3.5-sonnet", "openrouter")
+            .is_some(),
+        "export openrouter/anthropic/claude-3.5-sonnet must hit probed anthropic/claude-3.5-sonnet"
+    );
+    assert!(
+        cache
+            .get_with_knobs(
+                "openrouter/anthropic/claude-3.5-sonnet",
+                "openrouter",
+                false,
+                false,
+                None,
+            )
+            .is_some(),
+        "MCP exact-knob lookup must retry after stripping openrouter/"
+    );
+}
+
+#[test]
+fn get_with_knobs_accepts_provider_aliases_without_cheap_fallback() {
+    let mut cache = ProbeCache::default();
+    let mut vision = sample_profile();
+    vision.model_id = "gpt-4o".into();
+    vision.provider = "api.openai.com".into();
+    vision.effective_context_tokens = Some(128000);
+    cache.put_with_knobs(vision, false, true, None);
+
+    let mut cheap = sample_profile();
+    cheap.model_id = "gpt-4o".into();
+    cheap.provider = "api.openai.com".into();
+    cheap.effective_context_tokens = Some(4096);
+    cache.put_with_knobs(cheap, true, false, None);
+
+    let hit = cache
+        .get_with_knobs("gpt-4o", "openai", false, true, None)
+        .expect("--vision must find api.openai.com via openai alias");
+    assert_eq!(
+        hit.effective_context_tokens,
+        Some(128000),
+        "alias-aware knob lookup must not fall through to the cheap/novision row"
+    );
+    assert!(
+        cache
+            .get_with_knobs("gpt-4o", "openai", false, false, None)
+            .is_none(),
+        "full/novision must not hit a vision or cheap row"
+    );
 }
 
 #[test]

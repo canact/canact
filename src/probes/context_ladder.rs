@@ -150,7 +150,21 @@ fn recalls_heartbeat(lower: &str) -> bool {
     compact.contains(FACT_HEARTBEAT)
         || compact.contains("2.84s")
         || compact.contains("2.84sec")
-        || (lower.contains("2.84") && (lower.contains("second") || lower.contains("heartbeat")))
+        || (lower.contains("2.84")
+            && (has_seconds_unit(lower)
+                || (lower.contains("heartbeat") && !has_milliseconds_unit(lower))))
+}
+
+fn has_seconds_unit(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .any(|w| matches!(w, "second" | "seconds" | "sec"))
+}
+
+fn has_milliseconds_unit(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .any(|w| matches!(w, "millisecond" | "milliseconds" | "ms"))
 }
 
 fn estimate_tokens(chars: usize) -> u32 {
@@ -327,6 +341,11 @@ mod tests {
         assert!(recalls_all_facts(&seconds));
         let miss = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2000");
         assert!(!recalls_all_facts(&miss));
+        let milli = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2.84 milliseconds");
+        assert!(
+            !recalls_all_facts(&milli),
+            "2.84 milliseconds must not count as 2840 ms / 2.84 seconds"
+        );
     }
 
     #[test]

@@ -37,7 +37,9 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let response = llm.chat(request).await?;
     let text = &response.text;
 
-    let code = extract_code_block(text).unwrap_or(text);
+    let fenced = extract_code_block(text);
+    let from_fence = fenced.is_some();
+    let code = fenced.unwrap_or(text);
     let trimmed = code.trim();
 
     if trimmed.is_empty() {
@@ -52,7 +54,10 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     }
 
     let code_body = strip_python_string_literals(&strip_hash_comments(trimmed));
-    let has_def = code_body.contains("def merge_sorted");
+    // Unfenced prose can name `def merge_sorted` and `return` as tokens.
+    // Strong needs a real function (colon + indented body) or a fence.
+    let has_def = code_body.contains("def merge_sorted")
+        && (from_fence || has_indented_merge_sorted_body(trimmed));
     let has_return = code_body.contains("return ") || code_body.contains("return(");
 
     let parens_balanced = count_char(trimmed, '(') == count_char(trimmed, ')');
@@ -169,6 +174,35 @@ fn strip_python_string_literals(text: &str) -> String {
         i += ch.len_utf8();
     }
     out
+}
+
+fn has_indented_merge_sorted_body(text: &str) -> bool {
+    let needle = "def merge_sorted";
+    let mut search = 0;
+    while let Some(rel) = text.get(search..).and_then(|s| s.find(needle)) {
+        let idx = search + rel;
+        let after = &text[idx + needle.len()..];
+        if let Some(colon_rel) = after.find(':') {
+            if !after[..colon_rel].contains('\n') {
+                let rest = &after[colon_rel + 1..];
+                if rest
+                    .lines()
+                    .next()
+                    .is_some_and(|line| !line.trim().is_empty())
+                {
+                    return true;
+                }
+                for line in rest.lines().skip(1) {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    return line.starts_with(' ') || line.starts_with('\t');
+                }
+            }
+        }
+        search = idx + needle.len();
+    }
+    false
 }
 
 fn extract_code_block(text: &str) -> Option<&str> {
@@ -418,6 +452,55 @@ def merge_sorted(a, b):
         let result = probe_code_syntax(&llm).await.unwrap();
         assert_eq!(result.score, 0.0);
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_unfenced_prose_tokens_are_not_strong() {
+        let llm = MockLlm {
+            response: text_response(
+                "I would write a function def merge_sorted that takes two lists \
+                 and return a single sorted list.",
+            ),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "unfenced prose that only names def/return tokens must not be Strong: {result:?}"
+        );
+        assert_eq!(
+            result.score, 0.0,
+            "tokens in a sentence are not a function: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_comment_then_real_unfenced_function_is_strong() {
+        let code = "# def merge_sorted merges lists\ndef merge_sorted(a, b):\n    return a + b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "comment naming the token must not hide a real function: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_one_line_function_is_strong() {
+        let code = "def merge_sorted(a, b): return a + b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "one-line def merge_sorted must stay Strong: {result:?}"
+        );
     }
 
     #[tokio::test]

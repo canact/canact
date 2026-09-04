@@ -194,7 +194,10 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      export provider aliases; overlay prefixes slash models;
 ///      looks_cheap uses host hint; code_syntax strips quotes;
 ///      nested_arguments pick-best; memory ZWSP refusals.
-pub const PROBE_SUITE_VERSION: u32 = 85;
+/// v86: code_syntax unfenced prose; memory can-not/reveal/forgotten;
+///      vision no-readable / not-able-to-read; second != milliseconds;
+///      0.0.0.0 is ollama; export strips provider prefix; knob aliases.
+pub const PROBE_SUITE_VERSION: u32 = 86;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -339,7 +342,7 @@ impl ProbeCache {
             .filter(|(_, entry)| {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
-                    && entry.profile.model_id == model_id
+                    && models_equivalent(&entry.profile.model_id, model_id, provider)
                     && providers_equivalent(&entry.profile.provider, provider)
             })
             .max_by_key(|(_, entry)| entry.cached_at)
@@ -370,7 +373,7 @@ impl ProbeCache {
             .filter(|(key, entry)| {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
-                    && entry.profile.model_id == model_id
+                    && models_equivalent(&entry.profile.model_id, model_id, provider)
                     && providers_equivalent(&entry.profile.provider, provider)
                     && key_advertised(key) == advertised
             })
@@ -430,13 +433,29 @@ impl ProbeCache {
             vision,
             advertised,
         );
-        self.profiles.get(&key).and_then(|entry| {
+        if let Some(profile) = self.profiles.get(&key).and_then(|entry| {
             if Self::is_valid(entry) {
                 Some(&entry.profile)
             } else {
                 None
             }
-        })
+        }) {
+            return Some(profile);
+        }
+        // Alias-aware (openai ≡ api.openai.com) and provider-prefix retry
+        // without falling through to a different cheap/vision/ctx row.
+        self.profiles
+            .iter()
+            .filter(|(stored_key, entry)| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == suite_version
+                    && entry.reasoning_effort == reasoning_effort
+                    && models_equivalent(&entry.profile.model_id, model_id, provider)
+                    && providers_equivalent(&entry.profile.provider, provider)
+                    && key_knobs_match(stored_key, skip_expensive, vision, advertised)
+            })
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(_, entry)| &entry.profile)
     }
 
     /// Look up the full cache entry (for doctor/probe display metadata).
@@ -468,7 +487,21 @@ impl ProbeCache {
             vision,
             advertised,
         );
-        self.profiles.get(&key).filter(|e| Self::is_valid(e))
+        if let Some(entry) = self.profiles.get(&key).filter(|e| Self::is_valid(e)) {
+            return Some(entry);
+        }
+        self.profiles
+            .iter()
+            .filter(|(stored_key, entry)| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == PROBE_SUITE_VERSION
+                    && entry.reasoning_effort == DEFAULT_PROBE_EFFORT
+                    && models_equivalent(&entry.profile.model_id, model_id, provider)
+                    && providers_equivalent(&entry.profile.provider, provider)
+                    && key_knobs_match(stored_key, skip_expensive, vision, advertised)
+            })
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(_, entry)| entry)
     }
 
     /// Store a profile under the current suite, default effort, and default knobs.
@@ -601,13 +634,55 @@ fn providers_equivalent(stored: &str, requested: &str) -> bool {
     provider_family(&a) == provider_family(&b)
 }
 
+fn models_equivalent(stored: &str, requested: &str, provider: &str) -> bool {
+    if stored == requested {
+        return true;
+    }
+    match strip_normalized_provider_prefix(requested, provider) {
+        Some(stripped) => stored == stripped,
+        None => false,
+    }
+}
+
+fn strip_normalized_provider_prefix<'a>(model_id: &'a str, provider: &str) -> Option<&'a str> {
+    let lower_model = model_id.to_ascii_lowercase();
+    let provider_l = provider.to_ascii_lowercase();
+    let family = provider_family(&provider_l);
+    for prefix in [provider_l.as_str(), family] {
+        let with_slash = format!("{prefix}/");
+        if let Some(rest) = lower_model
+            .strip_prefix(&with_slash)
+            .and_then(|_| model_id.get(with_slash.len()..))
+        {
+            if !rest.is_empty() {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
 fn provider_family(provider: &str) -> &str {
     match provider {
         "openai" | "api.openai.com" => "openai",
         "openrouter" | "openrouter.ai" => "openrouter",
-        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" => "ollama",
+        "ollama" | "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0" => "ollama",
         other => other,
     }
+}
+
+fn key_knobs_match(key: &str, skip_expensive: bool, vision: bool, advertised: Option<u32>) -> bool {
+    let mut parts = key.rsplit('|');
+    let ctx = parts.next().unwrap_or("");
+    let vis = parts.next().unwrap_or("");
+    let cost = parts.next().unwrap_or("");
+    let want_cost = if skip_expensive { "cheap" } else { "full" };
+    let want_vis = if vision { "vision" } else { "novision" };
+    let want_ctx = match advertised {
+        Some(n) => format!("ctx{n}"),
+        None => "ctxnone".to_owned(),
+    };
+    cost == want_cost && vis == want_vis && ctx == want_ctx
 }
 
 fn key_advertised(key: &str) -> Option<u32> {
