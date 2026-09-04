@@ -208,7 +208,12 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      repeat/I forgot; vision identify/make-BL-out/can-not; msec
 ///      unit; file_path on sequencing edit, one-shot, and selection
 ///      tasks.
-pub const PROBE_SUITE_VERSION: u32 = 88;
+/// v89: typed merge_sorted signatures and defaults; extract picks
+///      complete fence over stub; return must be in merge_sorted body;
+///      lecture-line return is Weak; JSON nested objects and object
+///      before fenced array; memory provide/tell/should-not refusals;
+///      vision cannot-recognize.
+pub const PROBE_SUITE_VERSION: u32 = 89;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -353,7 +358,12 @@ impl ProbeCache {
             .filter(|(_, entry)| {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
-                    && models_equivalent(&entry.profile.model_id, model_id, provider)
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
                     && providers_equivalent(&entry.profile.provider, provider)
             })
             .max_by_key(|(_, entry)| entry.cached_at)
@@ -384,7 +394,12 @@ impl ProbeCache {
             .filter(|(key, entry)| {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
-                    && models_equivalent(&entry.profile.model_id, model_id, provider)
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
                     && providers_equivalent(&entry.profile.provider, provider)
                     && key_advertised(key) == advertised
             })
@@ -461,7 +476,12 @@ impl ProbeCache {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == suite_version
                     && entry.reasoning_effort == reasoning_effort
-                    && models_equivalent(&entry.profile.model_id, model_id, provider)
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
                     && providers_equivalent(&entry.profile.provider, provider)
                     && key_knobs_match(stored_key, skip_expensive, vision, advertised)
             })
@@ -507,7 +527,12 @@ impl ProbeCache {
                 Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
                     && entry.reasoning_effort == DEFAULT_PROBE_EFFORT
-                    && models_equivalent(&entry.profile.model_id, model_id, provider)
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
                     && providers_equivalent(&entry.profile.provider, provider)
                     && key_knobs_match(stored_key, skip_expensive, vision, advertised)
             })
@@ -645,12 +670,21 @@ fn providers_equivalent(stored: &str, requested: &str) -> bool {
     provider_family(&a) == provider_family(&b)
 }
 
-fn models_equivalent(stored: &str, requested: &str, provider: &str) -> bool {
+fn models_equivalent(
+    stored: &str,
+    requested: &str,
+    requested_provider: &str,
+    stored_provider: &str,
+) -> bool {
     if stored == requested {
         return true;
     }
-    let stored_n = strip_normalized_provider_prefix(stored, provider).unwrap_or(stored);
-    let requested_n = strip_normalized_provider_prefix(requested, provider).unwrap_or(requested);
+    let stored_n = strip_normalized_provider_prefix(stored, requested_provider)
+        .or_else(|| strip_normalized_provider_prefix(stored, stored_provider))
+        .unwrap_or(stored);
+    let requested_n = strip_normalized_provider_prefix(requested, requested_provider)
+        .or_else(|| strip_normalized_provider_prefix(requested, stored_provider))
+        .unwrap_or(requested);
     stored_n == requested_n
 }
 

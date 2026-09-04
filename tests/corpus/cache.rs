@@ -47,8 +47,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v88() {
-    assert_eq!(PROBE_SUITE_VERSION, 88);
+fn cache_key_format_is_model_provider_unset_v89() {
+    assert_eq!(PROBE_SUITE_VERSION, 89);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -56,7 +56,7 @@ fn cache_key_format_is_model_provider_unset_v88() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v88|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v89|full|novision|ctxnone");
 }
 
 #[test]
@@ -323,6 +323,28 @@ fn find_profile_strips_normalized_provider_prefix() {
             )
             .is_some(),
         "MCP exact-knob lookup must retry after stripping openrouter/"
+    );
+}
+
+#[test]
+fn find_profile_strips_stored_host_prefix_via_stored_family() {
+    let mut cache = ProbeCache::default();
+    let mut ollama = sample_profile();
+    ollama.model_id = "localhost/qwen".into();
+    ollama.provider = "localhost".into();
+    cache.put(ollama);
+    assert!(
+        cache.find_profile("qwen", "ollama").is_some(),
+        "stored localhost/qwen under localhost must hit --model qwen --provider ollama"
+    );
+
+    let mut openai = sample_profile();
+    openai.model_id = "api.openai.com/gpt-4o".into();
+    openai.provider = "api.openai.com".into();
+    cache.put(openai);
+    assert!(
+        cache.find_profile("gpt-4o", "openai").is_some(),
+        "stored api.openai.com/gpt-4o under api.openai.com must hit --model gpt-4o --provider openai"
     );
 }
 

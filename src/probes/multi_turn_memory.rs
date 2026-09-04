@@ -121,6 +121,14 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("can not share")
         || lower.contains("won't share")
         || lower.contains("will not share")
+        || lower.contains("shouldn't share")
+        || lower.contains("should not share")
+        || lower.contains("can't provide")
+        || lower.contains("cannot provide")
+        || lower.contains("can not provide")
+        || lower.contains("can't tell")
+        || lower.contains("cannot tell")
+        || lower.contains("can not tell")
         || lower.contains("can't disclose")
         || lower.contains("cannot disclose")
         || lower.contains("can not disclose")
@@ -137,6 +145,8 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("unable to disclose")
         || lower.contains("unable to reveal")
         || lower.contains("unable to repeat")
+        || lower.contains("unable to provide")
+        || lower.contains("unable to tell")
         || lower.contains("not able to remember")
         || lower.contains("not able to recall")
         || lower.contains("not able to share")
@@ -147,6 +157,7 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("not allowed to share")
         || lower.contains("not allowed to disclose")
         || lower.contains("not allowed to reveal")
+        || lower.contains("not allowed to repeat")
         || lower.contains("couldn't remember")
         || lower.contains("couldn't recall")
         || lower.contains("could not remember")
@@ -215,6 +226,27 @@ mod tests {
             assert_eq!(
                 result.score, 0.0,
                 "refusal that quotes ZEPHYR-4829 must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refusal_cannot_provide_tell_not_allowed_repeat_shouldnt_share_is_weak() {
+        for text in [
+            "I cannot provide ZEPHYR-4829",
+            "I can't tell you ZEPHYR-4829",
+            "I'm not allowed to repeat ZEPHYR-4829",
+            "I shouldn't share ZEPHYR-4829",
+            "I am unable to provide ZEPHYR-4829",
+            "I can not provide ZEPHYR-4829",
+            "I should not share ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "provide/tell/not-allowed-repeat/should-not-share that quotes the code must be Weak: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
         }
