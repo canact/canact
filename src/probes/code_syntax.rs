@@ -227,7 +227,22 @@ fn looks_like_same_line_body(line: &str) -> bool {
         return false;
     }
     if let Some(after) = t.strip_prefix("return") {
-        return after.is_empty() || after.starts_with(|c: char| c.is_whitespace() || c == '(');
+        // `return`, `return(`, and `return [` stay real. Two or more
+        // space-separated bare words with no operator is English.
+        if after.is_empty() || after.starts_with('(') || after.starts_with('[') {
+            return true;
+        }
+        if !after.starts_with(|c: char| c.is_whitespace()) {
+            return false;
+        }
+        let rest = after.trim_start();
+        if rest.is_empty() || rest.starts_with('(') || rest.starts_with('[') {
+            return true;
+        }
+        if rest.contains(['+', '-', '*', '/', '%', ',', '(', '[', '<', '>', '=', '!']) {
+            return true;
+        }
+        return rest.split_whitespace().nth(1).is_none();
     }
     if t == "pass"
         || t.starts_with("pass ")
@@ -691,6 +706,40 @@ def merge_sorted(a, b):
         assert_eq!(
             result.score, 0.0,
             "English after a no-paren signature colon is not a body: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_english_return_phrase_is_not_strong() {
+        for text in [
+            "def merge_sorted(a, b): return a single sorted list",
+            "```\ndef merge_sorted(a, b): return a single sorted list\n```",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "English return phrase is not a body: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_sentence_colon_return_phrase_is_not_strong() {
+        let text = "I would write def merge_sorted(a, b): return a single sorted list.";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(text),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "sentence with colon plus English return phrase must not be Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
     }
