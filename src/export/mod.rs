@@ -143,6 +143,7 @@ pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
         "openrouter.ai" | "openrouter" => "openrouter",
         "api.openai.com" | "openai" => "openai",
         "api.x.ai" | "x.ai" | "xai" | "grok" => "xai",
+        "api.anthropic.com" | "anthropic" | "claude" => "anthropic",
         p if overlay_loopback_host(p) => "ollama",
         _ => provider,
     }

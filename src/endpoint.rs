@@ -8,6 +8,8 @@ pub const LMSTUDIO_BASE_URL: &str = "http://127.0.0.1:1234/v1";
 pub const VLLM_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 /// xAI OpenAI-compatible listener (`--provider xai` / `grok`).
 pub const XAI_BASE_URL: &str = "https://api.x.ai/v1";
+/// Anthropic OpenAI-compatible listener (`--provider claude` / `anthropic`).
+pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 
 /// Local-provider default when the user omitted `--base-url`.
 pub fn local_provider_base_url(provider: &str) -> Option<String> {
@@ -30,6 +32,8 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
     let provider = provider.to_ascii_lowercase();
     if is_xai_provider_label(&provider) {
         XAI_BASE_URL.to_owned()
+    } else if is_anthropic_provider_label(&provider) {
+        ANTHROPIC_BASE_URL.to_owned()
     } else if from_openrouter || provider == "openrouter" || provider == "openrouter.ai" {
         "https://openrouter.ai/api/v1".to_owned()
     } else {
@@ -45,6 +49,21 @@ pub fn is_xai_provider_label(provider: &str) -> bool {
     )
 }
 
+/// `--provider claude` / `anthropic` / `api.anthropic.com`.
+pub fn is_anthropic_provider_label(provider: &str) -> bool {
+    matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "claude" | "anthropic" | "api.anthropic.com"
+    )
+}
+
+/// True when extra Anthropic headers are required (OAuth + version).
+pub fn is_anthropic_cloud_host(base_url: &str) -> bool {
+    let host = url_host_hint(base_url);
+    let host = host.trim_end_matches('.');
+    host == "api.anthropic.com" || host.ends_with(".anthropic.com")
+}
+
 /// Cloud hosts that must not be called without an API key.
 pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
     let host = url_host_hint(base_url);
@@ -58,6 +77,8 @@ pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
         || host == "api.x.ai"
         || host == "x.ai"
         || host.ends_with(".x.ai")
+        || host == "api.anthropic.com"
+        || host.ends_with(".anthropic.com")
 }
 
 /// True when the host or model looks local/free so the cheap suite is enough.
@@ -350,5 +371,36 @@ mod tests {
         );
         assert!(!cloud_endpoint_requires_key("https://notx.ai.internal/v1"));
         assert_eq!(provider_from_base_url(XAI_BASE_URL), "api.x.ai");
+    }
+
+    #[test]
+    fn claude_provider_defaults_to_anthropic_and_requires_key() {
+        for provider in ["claude", "anthropic", "api.anthropic.com", "Claude"] {
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                ANTHROPIC_BASE_URL,
+                "provider {provider} must not default to OpenAI"
+            );
+            assert_eq!(
+                default_compat_base_url(provider, true),
+                ANTHROPIC_BASE_URL,
+                "provider {provider} must stay on Anthropic even when OpenRouter env is set"
+            );
+        }
+        assert!(cloud_endpoint_requires_key(ANTHROPIC_BASE_URL));
+        assert!(
+            cloud_endpoint_requires_key("https://api.anthropic.com./v1"),
+            "trailing-dot api.anthropic.com. must still require a key"
+        );
+        assert!(is_anthropic_cloud_host(ANTHROPIC_BASE_URL));
+        assert!(
+            is_anthropic_cloud_host("https://api.anthropic.com./v1"),
+            "trailing-dot api.anthropic.com. still needs Anthropic OAuth headers"
+        );
+        assert!(!is_anthropic_cloud_host(XAI_BASE_URL));
+        assert_eq!(
+            provider_from_base_url(ANTHROPIC_BASE_URL),
+            "api.anthropic.com"
+        );
     }
 }
