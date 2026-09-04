@@ -184,6 +184,63 @@ fn needs_json_repair_false_for_strong() {
 }
 
 #[test]
+fn transient_json_does_not_collapse_overall_or_force_repair() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.json_output = ProbeResult {
+        name: "json_output".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: transient error: Upstream error from Nvidia: \
+                  Service temporarily overloaded"
+            .to_string(),
+    };
+    assert_eq!(profile.overall_level(), CapabilityLevel::Strong);
+    assert!(!profile.needs_json_repair());
+    assert!(profile.can_use_tools());
+}
+
+#[test]
+fn skipped_json_does_not_collapse_overall_or_force_repair() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.json_output = ProbeResult {
+        name: "json_output".to_string(),
+        score: 0.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Weak,
+        details: "Skipped: expensive probe".to_string(),
+    };
+    assert_eq!(profile.overall_level(), CapabilityLevel::Strong);
+    assert!(!profile.needs_json_repair());
+}
+
+#[test]
+fn all_core_transients_overall_is_weak() {
+    let mut profile = make_profile(
+        CapabilityLevel::Medium,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Medium,
+    );
+    for probe in [
+        &mut profile.tool_calling,
+        &mut profile.json_output,
+        &mut profile.instruction_following,
+    ] {
+        probe.details = "Probe failed: timeout".to_string();
+    }
+    assert_eq!(profile.overall_level(), CapabilityLevel::Weak);
+    assert!(!profile.needs_json_repair());
+}
+
+#[test]
 fn can_use_tools_true_when_native_strong() {
     let profile = make_profile(
         CapabilityLevel::Strong,
@@ -260,8 +317,15 @@ fn synthesized_medium_does_not_open_host_policy() {
     };
     assert!(!profile.supports_vision());
     assert!(profile.needs_xml_fallback());
-    assert!(profile.needs_json_repair());
-    assert_eq!(profile.overall_level(), CapabilityLevel::Weak);
+    assert!(
+        !profile.needs_json_repair(),
+        "transient JSON must not turn repair on"
+    );
+    assert_eq!(
+        profile.overall_level(),
+        CapabilityLevel::Strong,
+        "transient cores must not collapse a completed Strong instruction card"
+    );
     assert_eq!(profile.max_tools(), Some(10));
     assert_eq!(
         profile.best_edit_format(),
