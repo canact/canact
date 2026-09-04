@@ -1,6 +1,7 @@
 use canact::{
     CACHE_TTL_SECS, CacheEntry, CapabilityLevel, CapabilityProfile, DEFAULT_PROBE_EFFORT,
     DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, PROBE_SUITE_VERSION, ProbeCache, ProbeResult, classify,
+    provider_from_base_url,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -284,6 +285,44 @@ fn find_profile_accepts_overlay_provider_aliases() {
     assert!(cache.find_profile("qwen", "ollama").is_some());
     assert!(cache.find_profile("qwen", "localhost").is_some());
     assert!(cache.find_profile("qwen", "::1").is_some());
+}
+
+#[test]
+fn loopback_url_port_does_not_share_ollama_row() {
+    let mut cache = ProbeCache::default();
+    let mut ollama = sample_profile();
+    ollama.model_id = "qwen".into();
+    ollama.provider = "ollama".into();
+    cache.put(ollama);
+
+    let derived = provider_from_base_url("http://127.0.0.1:1234/v1");
+    assert_eq!(
+        derived, "127.0.0.1:1234",
+        "URL-derived identity must keep host:port"
+    );
+    assert!(
+        cache.find_profile("qwen", &derived).is_none(),
+        "127.0.0.1:1234 must miss the ollama card for the same model"
+    );
+    assert!(
+        cache
+            .get_with_knobs("qwen", &derived, false, false, None)
+            .is_none(),
+        "exact-knob lookup must also miss the ollama row"
+    );
+
+    let mut lmstudio = sample_profile();
+    lmstudio.model_id = "qwen".into();
+    lmstudio.provider = "lmstudio".into();
+    cache.put(lmstudio);
+    assert!(
+        cache.find_profile("qwen", "lmstudio").is_some(),
+        "--provider lmstudio isolation stays"
+    );
+    assert!(
+        cache.find_profile("qwen", &derived).is_none(),
+        "URL 127.0.0.1:1234 must not share the lmstudio row"
+    );
 }
 
 #[test]
