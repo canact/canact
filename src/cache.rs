@@ -213,7 +213,13 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      lecture-line return is Weak; JSON nested objects and object
 ///      before fenced array; memory provide/tell/should-not refusals;
 ///      vision cannot-recognize.
-pub const PROBE_SUITE_VERSION: u32 = 89;
+/// v90: wrapped typed merge_sorted, trailing commas, and *args are
+///      real defs; ellipsis assignment is not Strong; lecture
+///      `fn greet(` is not SearchReplace; TOOL_NAME plus a real path
+///      is Medium; vision don't/do not/recognise and curly apostrophes;
+///      memory not-able/not-allowed/won't/should-not on provide/tell/repeat
+///      (including won't tell); recognize-the-font hedge stays Strong.
+pub const PROBE_SUITE_VERSION: u32 = 90;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";

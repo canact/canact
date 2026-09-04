@@ -130,6 +130,7 @@ fn fold_format_marks(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}' => ' ',
+            '\u{2019}' => '\'',
             _ => c,
         })
         .collect::<String>()
@@ -146,6 +147,7 @@ fn strip_format_marks(s: &str) -> String {
                 '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
             )
         })
+        .map(|c| if c == '\u{2019}' { '\'' } else { c })
         .collect()
 }
 
@@ -201,8 +203,7 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("cannot read")
         || lower.contains("can't identify")
         || lower.contains("cannot identify")
-        || lower.contains("can't recognize")
-        || lower.contains("cannot recognize")
+        || recognize_negates_glyphs(lower)
         || lower.contains("can't decipher")
         || lower.contains("cannot decipher")
         || lower.contains("can't make out")
@@ -210,25 +211,57 @@ fn vision_negated_glyphs(lower: &str) -> bool {
         || lower.contains("unable to read")
         || lower.contains("unable to see")
         || lower.contains("unable to identify")
-        || lower.contains("unable to recognize")
         || lower.contains("unable to decipher")
         || lower.contains("unable to make out")
         || lower.contains("not able to read")
         || lower.contains("not able to see")
         || lower.contains("not able to identify")
-        || lower.contains("not able to recognize")
         || lower.contains("not able to decipher")
         || lower.contains("not able to make out")
         || lower.contains("can not read")
         || lower.contains("can not see")
         || lower.contains("can not identify")
-        || lower.contains("can not recognize")
         || lower.contains("can not decipher")
         || lower.contains("can not make out")
         || lower.contains("doesn't contain letter")
         || lower.contains("does not contain letter")
         || lower.contains("aren't any letter")
         || lower.contains("are not any letter")
+}
+
+fn recognize_negates_glyphs(lower: &str) -> bool {
+    const STEMS: &[&str] = &[
+        "don't recognize",
+        "do not recognize",
+        "can't recognize",
+        "cannot recognize",
+        "can not recognize",
+        "unable to recognize",
+        "not able to recognize",
+        "don't recognise",
+        "do not recognise",
+        "can't recognise",
+        "cannot recognise",
+        "can not recognise",
+        "unable to recognise",
+        "not able to recognise",
+    ];
+    for stem in STEMS {
+        let mut search = 0;
+        while let Some(rel) = lower.get(search..).and_then(|s| s.find(stem)) {
+            let after = lower[search + rel + stem.len()..].trim_start();
+            if after.starts_with("the font")
+                || after.starts_with("the typeface")
+                || after.starts_with("font")
+                || after.starts_with("typeface")
+            {
+                search += rel + stem.len();
+                continue;
+            }
+            return true;
+        }
+    }
+    false
 }
 
 fn cannot_make_token_out(lower: &str) -> bool {
@@ -422,6 +455,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vision_dont_recognize_the_font_with_bl_is_strong() {
+        let llm = MockLlm {
+            response: text_response("BL (I don't recognize the font)"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "font hedge that uses recognize must stay Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn vision_dont_see_bl_is_not_strong() {
         let llm = MockLlm {
             response: text_response("I don't see BL"),
@@ -471,6 +517,27 @@ mod tests {
             CapabilityLevel::Strong,
             "cannot-recognize that names BL must not be Strong: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn vision_dont_recognize_bl_is_not_strong() {
+        for text in [
+            "I don't recognize BL",
+            "I do not recognize BL",
+            "I cannot recognise BL",
+            "I don\u{2019}t recognize BL",
+            "I can\u{2019}t recognise BL",
+        ] {
+            let llm = MockLlm {
+                response: text_response(text),
+            };
+            let result = probe_vision(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "recognize/recognise refusal that names BL must not be Strong: {text:?} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]

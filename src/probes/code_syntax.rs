@@ -71,6 +71,8 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
             || t == "return..."
             || t.starts_with("return ...")
             || t.starts_with("return...")
+            || t.contains("= ...")
+            || t.contains("=...")
     });
     let has_pass_only = code_body.lines().any(|l| l.trim() == "pass")
         && !code_body.contains("return")
@@ -180,12 +182,11 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
     while let Some(rel) = text.get(search..).and_then(|s| s.find(needle)) {
         let idx = search + rel;
         let after = &text[idx + needle.len()..];
-        let same_line_end = after.find('\n').unwrap_or(after.len());
-        let same_line = &after[..same_line_end];
         // Type-hint colons sit inside the parameter list. The def colon
-        // is the last `:` after balanced parens (and optional `-> type`).
-        if let Some(colon_abs) = signature_colon_offset(same_line) {
-            if looks_like_parameter_list(&same_line[..colon_abs]) {
+        // is the first `:` after balanced parens (and optional `-> type`),
+        // including when params wrap across lines.
+        if let Some(colon_abs) = signature_colon_offset(after) {
+            if looks_like_parameter_list(&after[..colon_abs]) {
                 let rest = &after[colon_abs + 1..];
                 if rest.lines().next().is_some_and(looks_like_same_line_body) {
                     return true;
@@ -210,21 +211,28 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
     false
 }
 
-fn signature_colon_offset(same_line: &str) -> Option<usize> {
+/// Offset of the def colon after `def merge_sorted`.
+/// Scans through balanced parens so wrapped parameter lists still count.
+/// A no-paren signature must put its colon on the first line.
+fn signature_colon_offset(after: &str) -> Option<usize> {
     let mut paren = 0i32;
     let mut brack = 0i32;
-    let mut last = None;
-    for (i, c) in same_line.char_indices() {
+    let mut seen_paren = false;
+    for (i, c) in after.char_indices() {
         match c {
-            '(' => paren += 1,
+            '(' => {
+                paren += 1;
+                seen_paren = true;
+            }
             ')' => paren -= 1,
             '[' => brack += 1,
             ']' => brack -= 1,
-            ':' if paren <= 0 && brack <= 0 => last = Some(i),
+            ':' if paren <= 0 && brack <= 0 => return Some(i),
+            '\n' if !seen_paren && paren <= 0 => return None,
             _ => {}
         }
     }
-    last
+    None
 }
 
 fn looks_like_parameter_list(between: &str) -> bool {
@@ -237,9 +245,15 @@ fn looks_like_parameter_list(between: &str) -> bool {
         if inner.is_empty() {
             return true;
         }
-        return split_top_level_commas(inner).into_iter().all(is_parameter);
+        return split_top_level_commas(inner)
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .all(is_parameter);
     }
-    let parts = split_top_level_commas(s);
+    let parts: Vec<&str> = split_top_level_commas(s)
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
     parts.len() >= 2 && parts.iter().all(|p| is_parameter(p))
 }
 
@@ -310,6 +324,10 @@ fn is_parameter(s: &str) -> bool {
             None => s,
         },
     };
+    let name = name
+        .strip_prefix("**")
+        .or_else(|| name.strip_prefix('*'))
+        .unwrap_or(name);
     is_simple_ident(name)
 }
 
@@ -381,10 +399,8 @@ fn merge_sorted_body_has_return(text: &str) -> bool {
     while let Some(rel) = text.get(search..).and_then(|s| s.find(needle)) {
         let idx = search + rel;
         let after = &text[idx + needle.len()..];
-        let same_line_end = after.find('\n').unwrap_or(after.len());
-        let same_line = &after[..same_line_end];
-        if let Some(colon_abs) = signature_colon_offset(same_line) {
-            if looks_like_parameter_list(&same_line[..colon_abs]) {
+        if let Some(colon_abs) = signature_colon_offset(after) {
+            if looks_like_parameter_list(&after[..colon_abs]) {
                 let rest = &after[colon_abs + 1..];
                 if rest.lines().next().is_some_and(line_has_return_token) {
                     return true;
@@ -1009,6 +1025,73 @@ def merge_sorted(a, b):
             );
             assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_wrapped_typed_signature_is_strong() {
+        let code = "\
+def merge_sorted(
+    a: list[int],
+    b: list[int],
+) -> list[int]:
+    return a + b
+";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "wrapped typed merge_sorted must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_trailing_comma_signature_is_strong() {
+        let code =
+            "def merge_sorted(a: list[int], b: list[int],) -> list[int]:\n    return a + b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "trailing-comma typed merge_sorted must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_star_args_signature_is_strong() {
+        let code = "def merge_sorted(*lists):\n    return list(lists)\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "*lists merge_sorted must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_ellipsis_assignment_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    result = ...\n    return result\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "ellipsis assignment stub must not be Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
