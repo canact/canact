@@ -97,10 +97,12 @@ impl OpenAiCompatClient {
         use futures::StreamExt;
         let mut bytes = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
+        let mut received = 0usize;
         let mut open_tools: HashMap<u64, OpenTool> = HashMap::new();
         while let Some(item) = bytes.next().await {
             let chunk = item.map_err(map_transport)?;
-            if buf.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            received = received.saturating_add(chunk.len());
+            if received > MAX_RESPONSE_BYTES {
                 return Err(ProbeError::Transient("response too large".into()));
             }
             buf.extend_from_slice(&chunk);
@@ -837,6 +839,9 @@ fn emit_sse_line(
         return Ok(());
     }
     let Ok(value) = serde_json::from_str::<Value>(data) else {
+        if data.starts_with('{') || data.starts_with('[') {
+            return Err(ProbeError::Transient("malformed stream JSON".into()));
+        }
         return Ok(());
     };
     if let Some(err) = value.get("error") {
@@ -1899,6 +1904,18 @@ mod tests {
             .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
             .count();
         assert_eq!(ends, 2, "{chunks:?}");
+    }
+
+    #[test]
+    fn emit_sse_line_malformed_json_object_is_transient() {
+        let (tx, _rx) = futures::channel::mpsc::unbounded();
+        let mut open = HashMap::new();
+        let err = emit_sse_line("data: {", &mut open, &tx).expect_err("object");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
+            "{err:?}"
+        );
+        emit_sse_line("data: ping", &mut open, &tx).expect("keepalive");
     }
 
     #[test]

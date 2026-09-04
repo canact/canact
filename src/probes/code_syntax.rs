@@ -51,7 +51,7 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
         });
     }
 
-    let code_body = strip_hash_comments(trimmed);
+    let code_body = strip_python_string_literals(&strip_hash_comments(trimmed));
     let has_def = code_body.contains("def merge_sorted");
     let has_return = code_body.contains("return ") || code_body.contains("return(");
 
@@ -123,6 +123,33 @@ fn strip_hash_comments(text: &str) -> String {
         .join("\n")
 }
 
+fn strip_python_string_literals(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let delim = if rest.starts_with("\"\"\"") {
+            Some("\"\"\"")
+        } else if rest.starts_with("'''") {
+            Some("'''")
+        } else {
+            None
+        };
+        if let Some(quote) = delim {
+            i += quote.len();
+            match text[i..].find(quote) {
+                Some(rel) => i += rel + quote.len(),
+                None => break,
+            }
+            continue;
+        }
+        let ch = rest.chars().next().expect("char");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
 fn extract_code_block(text: &str) -> Option<&str> {
     let mut search = 0;
     let mut first = None;
@@ -140,7 +167,7 @@ fn extract_code_block(text: &str) -> Option<&str> {
         if first.is_none() {
             first = Some(body);
         }
-        if body.contains("def merge_sorted") || body.contains("def merge") {
+        if body.contains("def merge_sorted") {
             return Some(body);
         }
         search = code_start + end_rel + 3;
@@ -239,6 +266,43 @@ def merge_sorted(a, b):
             result.level,
             CapabilityLevel::Strong,
             "return only in a comment must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_return_in_docstring_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    \"\"\"Merge two sorted lists and return a single sorted list.\"\"\"\n    pass\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "return only in a docstring must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_prefers_merge_sorted_fence_after_sketch() {
+        let text = "\
+```python
+def merge(left, right):
+    return left + right
+```
+
+```python
+def merge_sorted(a, b):
+    return a + b
+```
+";
+        let llm = MockLlm {
+            response: text_response(text),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "later def merge_sorted fence must win over a def merge sketch: {result:?}"
         );
     }
 
