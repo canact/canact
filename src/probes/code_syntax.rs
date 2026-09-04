@@ -237,9 +237,7 @@ fn looks_like_parameter_list(between: &str) -> bool {
         if inner.is_empty() {
             return true;
         }
-        return split_top_level_commas(inner)
-            .into_iter()
-            .all(|p| is_parameter(p));
+        return split_top_level_commas(inner).into_iter().all(is_parameter);
     }
     let parts = split_top_level_commas(s);
     parts.len() >= 2 && parts.iter().all(|p| is_parameter(p))
@@ -388,11 +386,7 @@ fn merge_sorted_body_has_return(text: &str) -> bool {
         if let Some(colon_abs) = signature_colon_offset(same_line) {
             if looks_like_parameter_list(&same_line[..colon_abs]) {
                 let rest = &after[colon_abs + 1..];
-                if rest
-                    .lines()
-                    .next()
-                    .is_some_and(|line| line_has_return_token(line))
-                {
+                if rest.lines().next().is_some_and(line_has_return_token) {
                     return true;
                 }
                 for line in rest.lines().skip(1) {
