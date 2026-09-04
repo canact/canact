@@ -14,7 +14,7 @@ use crate::client::{
     CatalogPriors, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage,
     ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall, ProbeUsage,
 };
-use crate::endpoint::is_anthropic_cloud_host;
+use crate::endpoint::{is_anthropic_cloud_host, is_ollama_compat_base};
 use crate::error::ProbeError;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -190,6 +190,17 @@ pub struct ListedModel {
     pub id: String,
     /// Catalog window when the host sent one.
     pub advertised_context_tokens: Option<u32>,
+    /// `Some(true)` when the host lists image input. Absence stays `None`.
+    pub supports_vision: Option<bool>,
+}
+
+/// Catalog hints from `/models` and, on Ollama, native `/api/show`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostCatalogHints {
+    /// Catalog window when the host sent one.
+    pub advertised_context_tokens: Option<u32>,
+    /// `Some(true)` only when the host lists image input.
+    pub supports_vision: Option<bool>,
 }
 
 /// Catalog window from a `/models` object.
@@ -199,6 +210,63 @@ pub struct ListedModel {
 pub fn advertised_context_from_model_object(model: &Value) -> Option<u32> {
     json_positive_u32(model.get("context_length"))
         .or_else(|| json_positive_u32(model.get("max_input_tokens")))
+}
+
+/// `Some(true)` when `/models` lists image input. Never `Some(false)`.
+pub fn vision_from_model_object(model: &Value) -> Option<bool> {
+    if let Some(arr) = model
+        .pointer("/architecture/input_modalities")
+        .and_then(Value::as_array)
+    {
+        if arr.iter().any(|item| item.as_str() == Some("image")) {
+            return Some(true);
+        }
+    }
+    if model
+        .pointer("/capabilities/image_input/supported")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Some(true);
+    }
+    if let Some(arr) = model.get("capabilities").and_then(Value::as_array) {
+        if arr.iter().any(|item| item.as_str() == Some("vision")) {
+            return Some(true);
+        }
+    }
+    None
+}
+
+/// Catalog window from Ollama `POST /api/show` `model_info`.
+pub fn advertised_context_from_ollama_show(show: &Value) -> Option<u32> {
+    let info = show.get("model_info")?.as_object()?;
+    let mut best: Option<u32> = None;
+    for (key, value) in info {
+        if key == "context_length" || key.ends_with(".context_length") {
+            if let Some(n) = json_positive_u32(Some(value)) {
+                best = Some(best.map_or(n, |cur| cur.max(n)));
+            }
+        }
+    }
+    best
+}
+
+/// `Some(true)` when Ollama lists a `vision` capability.
+pub fn vision_from_ollama_show(show: &Value) -> Option<bool> {
+    let caps = show.get("capabilities")?.as_array()?;
+    if caps.iter().any(|item| item.as_str() == Some("vision")) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// Caller `--vision` / `--no-vision` wins. Catalog only promotes `true`.
+pub fn merge_vision_catalog(flag: Option<bool>, catalog: Option<bool>) -> Option<bool> {
+    if flag.is_some() {
+        return flag;
+    }
+    catalog.filter(|yes| *yes)
 }
 
 /// Match a listed row to the probe model id.
@@ -248,8 +316,45 @@ pub async fn lookup_advertised_context(
     api_key: Option<&str>,
     model_id: &str,
 ) -> Result<Option<u32>, ProbeError> {
+    Ok(lookup_host_catalog(base_url, api_key, model_id)
+        .await?
+        .advertised_context_tokens)
+}
+
+/// `/models` row plus Ollama `/api/show` when the OpenAI-compat list
+/// omitted a window or vision flag.
+pub async fn lookup_host_catalog(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_id: &str,
+) -> Result<HostCatalogHints, ProbeError> {
+    lookup_host_catalog_inner(base_url, api_key, model_id, is_ollama_compat_base(base_url)).await
+}
+
+async fn lookup_host_catalog_inner(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_id: &str,
+    fetch_show: bool,
+) -> Result<HostCatalogHints, ProbeError> {
     let models = list_models(base_url, api_key).await?;
-    Ok(advertised_context_for_model(&models, model_id))
+    let listed = models.iter().find(|model| model.id == model_id);
+    let mut advertised = listed.and_then(|model| model.advertised_context_tokens);
+    let mut vision = listed.and_then(|model| model.supports_vision);
+    if (advertised.is_none() || vision.is_none()) && fetch_show {
+        if let Ok(show) = fetch_ollama_show(base_url, model_id).await {
+            if advertised.is_none() {
+                advertised = advertised_context_from_ollama_show(&show);
+            }
+            if vision.is_none() {
+                vision = vision_from_ollama_show(&show);
+            }
+        }
+    }
+    Ok(HostCatalogHints {
+        advertised_context_tokens: advertised,
+        supports_vision: vision,
+    })
 }
 
 /// Caller flag wins. Catalog `Err` or a missing row stays `None`.
@@ -279,6 +384,34 @@ pub async fn resolve_advertised_context(
     )
 }
 
+/// Fill advertised context and vision from the host catalog when flags
+/// are unset. Catalog errors stay `None`; `--advertised-context` and
+/// `--vision` / `--no-vision` win.
+pub async fn resolve_host_catalog(
+    advertised_flag: Option<u32>,
+    vision_flag: Option<bool>,
+    base_url: &str,
+    api_key: Option<&str>,
+    model_id: &str,
+) -> HostCatalogHints {
+    if advertised_flag.is_some() && vision_flag.is_some() {
+        return HostCatalogHints {
+            advertised_context_tokens: advertised_flag,
+            supports_vision: vision_flag,
+        };
+    }
+    let catalog = lookup_host_catalog(base_url, api_key, model_id)
+        .await
+        .unwrap_or_default();
+    HostCatalogHints {
+        advertised_context_tokens: merge_advertised_context(
+            advertised_flag,
+            Ok(catalog.advertised_context_tokens),
+        ),
+        supports_vision: merge_vision_catalog(vision_flag, catalog.supports_vision),
+    }
+}
+
 fn parse_listed_models(value: &Value) -> Vec<ListedModel> {
     value
         .get("data")
@@ -293,11 +426,28 @@ fn parse_listed_models(value: &Value) -> Vec<ListedModel> {
                     Some(ListedModel {
                         id,
                         advertised_context_tokens: advertised_context_from_model_object(model),
+                        supports_vision: vision_from_model_object(model),
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+async fn fetch_ollama_show(openai_base: &str, model_id: &str) -> Result<Value, ProbeError> {
+    let root = trim_slash(openai_base.to_owned());
+    let root = root.strip_suffix("/v1").unwrap_or(&root);
+    let url = join_url(&trim_slash(root.to_owned()), "api/show");
+    let http = default_http_client()?;
+    let resp = http
+        .post(url)
+        .json(&serde_json::json!({ "name": model_id }))
+        .send()
+        .await
+        .map_err(map_transport)?;
+    let resp = ensure_success(resp).await?;
+    let raw = read_success_body(resp).await?;
+    Ok(serde_json::from_slice(&raw)?)
 }
 
 fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
@@ -1317,10 +1467,12 @@ mod tests {
     use futures::StreamExt;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
     const SECRET: &str = "sk-test-secret-key";
+    type HttpReply = (u16, &'static str, Vec<(String, String)>, Vec<u8>);
 
     fn empty_req() -> ProbeRequest {
         ProbeRequest {
@@ -1371,6 +1523,40 @@ mod tests {
             }
         });
         format!("http://{addr}")
+    }
+
+    fn spawn_http_seq_record(replies: Vec<HttpReply>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = Arc::clone(&seen);
+        thread::spawn(move || {
+            for (status, reason, headers, body) in replies {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let req = read_http(&mut stream);
+                    if let Ok(mut log) = seen_thread.lock() {
+                        let line = req.lines().next().unwrap_or("").to_owned();
+                        log.push(line);
+                    }
+                    let mut head = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
+                        body.len()
+                    );
+                    for (k, v) in &headers {
+                        head.push_str(&format!("{k}: {v}\r\n"));
+                    }
+                    head.push_str("\r\n");
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body);
+                    let _ = stream.flush();
+                }
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    fn json_headers() -> Vec<(String, String)> {
+        vec![("Content-Type".into(), "application/json".into())]
     }
 
     fn spawn_http_chunked_split(
@@ -2676,6 +2862,7 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "grok-4.20-0309-non-reasoning");
         assert_eq!(models[0].advertised_context_tokens, Some(1_000_000));
+        assert_eq!(models[0].supports_vision, None);
         assert_eq!(
             advertised_context_for_model(&models, "grok-4.20-0309-non-reasoning"),
             Some(1_000_000)
@@ -2712,6 +2899,176 @@ mod tests {
         assert_eq!(
             resolve_advertised_context(None, &base, Some(SECRET), "nemo").await,
             None
+        );
+    }
+
+    #[test]
+    fn vision_from_openrouter_input_modalities() {
+        let model = serde_json::json!({
+            "id": "x",
+            "architecture": { "input_modalities": ["text", "image"] }
+        });
+        assert_eq!(vision_from_model_object(&model), Some(true));
+    }
+
+    #[test]
+    fn vision_from_anthropic_image_input() {
+        let model = serde_json::json!({
+            "id": "claude-haiku-4-5-20251001",
+            "capabilities": { "image_input": { "supported": true } }
+        });
+        assert_eq!(vision_from_model_object(&model), Some(true));
+    }
+
+    #[test]
+    fn vision_from_capabilities_array() {
+        let model = serde_json::json!({
+            "id": "x",
+            "capabilities": ["completion", "vision"]
+        });
+        assert_eq!(vision_from_model_object(&model), Some(true));
+    }
+
+    #[test]
+    fn vision_from_model_object_never_false() {
+        let model = serde_json::json!({
+            "id": "x",
+            "capabilities": { "image_input": { "supported": false } },
+            "architecture": { "input_modalities": ["text"] }
+        });
+        assert_eq!(vision_from_model_object(&model), None);
+    }
+
+    #[test]
+    fn advertised_from_ollama_show_context_length() {
+        let show = serde_json::json!({
+            "model_info": {
+                "general.parameter_count": 3_212_749_888u64,
+                "llama.context_length": 131_072
+            }
+        });
+        assert_eq!(advertised_context_from_ollama_show(&show), Some(131_072));
+    }
+
+    #[test]
+    fn advertised_from_ollama_show_takes_max() {
+        let show = serde_json::json!({
+            "model_info": {
+                "llama.context_length": 8192,
+                "context_length": 131_072
+            }
+        });
+        assert_eq!(advertised_context_from_ollama_show(&show), Some(131_072));
+    }
+
+    #[test]
+    fn vision_from_ollama_show_only_promotes_true() {
+        let yes = serde_json::json!({ "capabilities": ["completion", "vision"] });
+        assert_eq!(vision_from_ollama_show(&yes), Some(true));
+        let no = serde_json::json!({ "capabilities": ["completion", "tools"] });
+        assert_eq!(vision_from_ollama_show(&no), None);
+    }
+
+    #[test]
+    fn merge_vision_flag_wins() {
+        assert_eq!(merge_vision_catalog(Some(false), Some(true)), Some(false));
+        assert_eq!(merge_vision_catalog(Some(true), None), Some(true));
+    }
+
+    #[test]
+    fn merge_vision_catalog_only_promotes_true() {
+        assert_eq!(merge_vision_catalog(None, Some(true)), Some(true));
+        assert_eq!(merge_vision_catalog(None, Some(false)), None);
+        assert_eq!(merge_vision_catalog(None, None), None);
+    }
+
+    #[tokio::test]
+    async fn list_models_keeps_vision_from_image_input() {
+        let body = br#"{"data":[{"id":"claude-haiku-4-5-20251001","max_input_tokens":200000,"capabilities":{"image_input":{"supported":true}}}]}"#;
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            body.to_vec(),
+        );
+        let models = list_models(&base, Some(SECRET)).await.expect("200");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "claude-haiku-4-5-20251001");
+        assert_eq!(models[0].advertised_context_tokens, Some(200_000));
+        assert_eq!(models[0].supports_vision, Some(true));
+    }
+
+    #[tokio::test]
+    async fn resolve_host_catalog_fills_vision_when_flag_unset() {
+        let body = br#"{"data":[{"id":"haiku","max_input_tokens":200000,"capabilities":{"image_input":{"supported":true}}}]}"#;
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            body.to_vec(),
+        );
+        let hints = resolve_host_catalog(None, None, &base, Some(SECRET), "haiku").await;
+        assert_eq!(hints.advertised_context_tokens, Some(200_000));
+        assert_eq!(hints.supports_vision, Some(true));
+    }
+
+    #[tokio::test]
+    async fn resolve_host_catalog_no_vision_flag_wins() {
+        let body = br#"{"data":[{"id":"haiku","max_input_tokens":200000,"capabilities":{"image_input":{"supported":true}}}]}"#;
+        let base = spawn_http(
+            200,
+            "OK",
+            vec![("Content-Type".into(), "application/json".into())],
+            body.to_vec(),
+        );
+        let hints = resolve_host_catalog(None, Some(false), &base, Some(SECRET), "haiku").await;
+        assert_eq!(hints.advertised_context_tokens, Some(200_000));
+        assert_eq!(hints.supports_vision, Some(false));
+    }
+
+    #[tokio::test]
+    async fn resolve_host_catalog_skips_http_when_both_flags_set() {
+        let base = spawn_http(500, "ERR", Vec::new(), b"nope".to_vec());
+        let hints = resolve_host_catalog(Some(8192), Some(false), &base, Some(SECRET), "x").await;
+        assert_eq!(hints.advertised_context_tokens, Some(8192));
+        assert_eq!(hints.supports_vision, Some(false));
+    }
+
+    #[tokio::test]
+    async fn lookup_host_catalog_fills_from_ollama_show_when_models_omit_window() {
+        let models = br#"{"data":[{"id":"llama3.2:3b","object":"model"}]}"#;
+        let show = br#"{"model_info":{"llama.context_length":131072},"capabilities":["completion","tools"]}"#;
+        let (base, seen) = spawn_http_seq_record(vec![
+            (200, "OK", json_headers(), models.to_vec()),
+            (200, "OK", json_headers(), show.to_vec()),
+        ]);
+        let hints = lookup_host_catalog_inner(&base, None, "llama3.2:3b", true)
+            .await
+            .expect("show");
+        assert_eq!(hints.advertised_context_tokens, Some(131_072));
+        assert_eq!(hints.supports_vision, None);
+        let seen = seen.lock().expect("seen").clone();
+        assert!(
+            seen.iter()
+                .any(|line| line.starts_with("POST ") && line.contains("/api/show")),
+            "expected POST /api/show, got {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_host_catalog_skips_show_off_11434() {
+        let models = br#"{"data":[{"id":"llama3.2:3b","object":"model"}]}"#;
+        let (base, seen) =
+            spawn_http_seq_record(vec![(200, "OK", json_headers(), models.to_vec())]);
+        let hints = lookup_host_catalog(&base, None, "llama3.2:3b")
+            .await
+            .expect("models");
+        assert_eq!(hints.advertised_context_tokens, None);
+        assert_eq!(hints.supports_vision, None);
+        let seen = seen.lock().expect("seen").clone();
+        assert!(
+            seen.iter().all(|line| !line.contains("/api/show")),
+            "non-11434 must not POST /api/show, got {seen:?}"
         );
     }
 }

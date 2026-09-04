@@ -8,7 +8,7 @@ use canact::{
     OpenAiCompatClient, ProbeCache, ProbeError, ProbeRun, ProbeRunner, XAI_BASE_URL,
     cloud_endpoint_requires_key, default_compat_base_url, is_anthropic_provider_label,
     is_xai_provider_label, list_model_ids, looks_cheap, missing_model_message,
-    overlay_context_tokens, provider_from_base_url, resolve_advertised_context, run_mcp_stdio,
+    overlay_context_tokens, provider_from_base_url, resolve_host_catalog, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -204,13 +204,16 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         return Err(1);
     }
     let model = resolve_model(&args, &base_url, api_key.as_deref()).await?;
-    let advertised = resolve_advertised_context(
+    let hints = resolve_host_catalog(
         args.advertised_context,
+        vision_catalog_flag(&args),
         &base_url,
         api_key.as_deref(),
         &model,
     )
     .await;
+    let advertised = hints.advertised_context_tokens;
+    let vision = hints.supports_vision == Some(true);
     let cheap = if args.full {
         false
     } else if args.cheap {
@@ -236,13 +239,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     }
     let catalog = CatalogPriors {
         advertised_context_tokens: advertised,
-        supports_vision: if args.vision {
-            Some(true)
-        } else if args.no_vision {
-            Some(false)
-        } else {
-            None
-        },
+        supports_vision: hints.supports_vision,
         supports_tools: None,
     };
 
@@ -538,6 +535,16 @@ fn default_cache_path() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
         .join("canact")
         .join("probes.json")
+}
+
+fn vision_catalog_flag(args: &ProbeArgs) -> Option<bool> {
+    if args.vision {
+        Some(true)
+    } else if args.no_vision {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn cached_probe(

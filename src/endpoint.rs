@@ -64,6 +64,18 @@ pub fn is_anthropic_cloud_host(base_url: &str) -> bool {
     host == "api.anthropic.com" || host.ends_with(".anthropic.com")
 }
 
+/// True when `{base}` is an Ollama OpenAI-compat listener (`*:11434`).
+///
+/// Native `/api/show` is only safe on this family. Do not POST that
+/// path to cloud OpenAI-compat hosts.
+pub fn is_ollama_compat_base(base_url: &str) -> bool {
+    let hostport = url_host_port_hint(base_url);
+    let host = host_without_port(&hostport);
+    let host = host.trim_matches(|c| c == '[' || c == ']');
+    let loopback = matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1");
+    loopback && hostport.ends_with(":11434")
+}
+
 /// Cloud hosts that must not be called without an API key.
 pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
     let host = url_host_hint(base_url);
@@ -207,6 +219,20 @@ mod tests {
             "llama3",
             "http://127.0.0.1:11434/v1"
         ));
+    }
+
+    #[test]
+    fn ollama_compat_base_is_loopback_11434_only() {
+        assert!(is_ollama_compat_base(OLLAMA_BASE_URL));
+        assert!(is_ollama_compat_base("http://localhost:11434/v1"));
+        assert!(is_ollama_compat_base("http://[::1]:11434/v1"));
+        assert!(is_ollama_compat_base("http://0.0.0.0:11434/v1"));
+        assert!(!is_ollama_compat_base(LMSTUDIO_BASE_URL));
+        assert!(!is_ollama_compat_base(VLLM_BASE_URL));
+        assert!(!is_ollama_compat_base("https://api.openai.com/v1"));
+        assert!(!is_ollama_compat_base("https://openrouter.ai/api/v1"));
+        assert!(!is_ollama_compat_base(XAI_BASE_URL));
+        assert!(!is_ollama_compat_base(ANTHROPIC_BASE_URL));
     }
 
     #[test]
