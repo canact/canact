@@ -101,10 +101,7 @@ impl OpenAiCompatClient {
         let mut open_tools: HashMap<u64, OpenTool> = HashMap::new();
         while let Some(item) = bytes.next().await {
             let chunk = item.map_err(map_transport)?;
-            received = received.saturating_add(chunk.len());
-            if received > MAX_RESPONSE_BYTES {
-                return Err(ProbeError::Transient("response too large".into()));
-            }
+            accumulate_stream_bytes(&mut received, chunk.len())?;
             buf.extend_from_slice(&chunk);
             for line in drain_complete_sse_lines(&mut buf) {
                 if let Err(err) = emit_sse_line(&line, &mut open_tools, tx) {
@@ -821,6 +818,15 @@ fn sse_tail_is_truncated(line: &str) -> bool {
         return false;
     };
     !data.is_empty() && data != "[DONE]" && serde_json::from_str::<Value>(data).is_err()
+}
+
+fn accumulate_stream_bytes(received: &mut usize, chunk_len: usize) -> Result<(), ProbeError> {
+    let next = received.saturating_add(chunk_len);
+    if next > MAX_RESPONSE_BYTES {
+        return Err(ProbeError::Transient("response too large".into()));
+    }
+    *received = next;
+    Ok(())
 }
 
 fn emit_sse_line(
@@ -1916,6 +1922,28 @@ mod tests {
             "{err:?}"
         );
         emit_sse_line("data: ping", &mut open, &tx).expect("keepalive");
+        let err = emit_sse_line("data: [", &mut open, &tx).expect_err("array");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn accumulate_stream_bytes_counts_after_sse_drain() {
+        let line = b"data: {\"ok\":true}\n";
+        let mut buf = line.to_vec();
+        let mut received = 0usize;
+        accumulate_stream_bytes(&mut received, line.len()).expect("under cap");
+        let _ = drain_complete_sse_lines(&mut buf);
+        assert!(buf.is_empty(), "complete SSE line must drain");
+        assert_eq!(received, line.len(), "budget must not reset on drain");
+        let err = accumulate_stream_bytes(&mut received, MAX_RESPONSE_BYTES).unwrap_err();
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg.contains("too large")),
+            "{err:?}"
+        );
+        assert_eq!(received, line.len());
     }
 
     #[test]

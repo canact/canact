@@ -284,6 +284,20 @@ def merge_sorted(a, b):
     }
 
     #[tokio::test]
+    async fn code_syntax_return_in_single_quote_docstring_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    '''Merge two sorted lists and return a single sorted list.'''\n    pass\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "return only in a ''' docstring must not be Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn code_syntax_prefers_merge_sorted_fence_after_sketch() {
         let text = "\
 ```python
