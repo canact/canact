@@ -552,7 +552,7 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     };
 
     let t1_precise = |c: &ProbeToolCall| {
-        nonempty_string_arg(&c.arguments, "path")
+        nonempty_string_arg_any(&c.arguments, &["path", "file_path"])
             && nonempty_string_arg(&c.arguments, "selector")
             && c.arguments.get("value").is_some_and(usable_doc_set_value)
     };
@@ -573,11 +573,24 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
     points += t2_score;
     task_details.push(format!("task2={t2_score}"));
 
-    let t3_score = preferred(
-        "md_replace_section",
-        &["path", "heading", "content"],
-        "edit_file",
-    );
+    let t3_precise = |c: &ProbeToolCall| {
+        nonempty_string_arg_any(&c.arguments, &["path", "file_path"])
+            && nonempty_string_arg(&c.arguments, "heading")
+            && nonempty_string_arg(&c.arguments, "content")
+    };
+    let t3_score = if calls
+        .iter()
+        .any(|c| c.name == "md_replace_section" && t3_precise(c))
+    {
+        1.0
+    } else if calls
+        .iter()
+        .any(|c| c.name == "md_replace_section" || c.name == "edit_file")
+    {
+        0.5
+    } else {
+        0.0
+    };
     points += t3_score;
     task_details.push(format!("task3={t3_score}"));
 
@@ -1391,6 +1404,47 @@ mod tests {
         let result = probe_tool_selection(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn tool_selection_strong_when_path_alias_is_file_path() {
+        let response = multi_tool_call_response(vec![
+            call(
+                "call_1",
+                "doc_set",
+                serde_json::json!({
+                    "file_path": "config.toml",
+                    "selector": "port",
+                    "value": 8080
+                }),
+            ),
+            call(
+                "call_2",
+                "search",
+                serde_json::json!({"pattern": "deprecated", "directory": "src/"}),
+            ),
+            call(
+                "call_3",
+                "md_replace_section",
+                serde_json::json!({
+                    "file_path": "README.md",
+                    "heading": "Installation",
+                    "content": "new instructions"
+                }),
+            ),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_tool_selection(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "file_path alias on doc_set/md_replace_section must stay precise: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert!(
+            result.details.contains("task1=1") && result.details.contains("task3=1"),
+            "all_precise must stay true with file_path: {}",
+            result.details
+        );
     }
 
     #[tokio::test]

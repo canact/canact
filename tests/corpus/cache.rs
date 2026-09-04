@@ -47,8 +47,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v87() {
-    assert_eq!(PROBE_SUITE_VERSION, 87);
+fn cache_key_format_is_model_provider_unset_v88() {
+    assert_eq!(PROBE_SUITE_VERSION, 88);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -56,7 +56,7 @@ fn cache_key_format_is_model_provider_unset_v87() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v87|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v88|full|novision|ctxnone");
 }
 
 #[test]
@@ -323,6 +323,33 @@ fn find_profile_strips_normalized_provider_prefix() {
             )
             .is_some(),
         "MCP exact-knob lookup must retry after stripping openrouter/"
+    );
+}
+
+#[test]
+fn find_profile_matches_when_stored_has_provider_prefix() {
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.model_id = "openrouter/anthropic/claude-3.5-sonnet".into();
+    profile.provider = "openrouter".into();
+    cache.put(profile);
+    assert!(
+        cache
+            .find_profile("anthropic/claude-3.5-sonnet", "openrouter")
+            .is_some(),
+        "export anthropic/claude-3.5-sonnet must hit probed openrouter/anthropic/claude-3.5-sonnet"
+    );
+    assert!(
+        cache
+            .get_with_knobs(
+                "anthropic/claude-3.5-sonnet",
+                "openrouter",
+                false,
+                false,
+                None,
+            )
+            .is_some(),
+        "MCP exact-knob lookup must match after stripping stored openrouter/"
     );
 }
 

@@ -107,12 +107,32 @@ pub fn aider_edit_format(rec: EditFormatRecommendation) -> &'static str {
 pub fn overlay_model_name(profile: &CapabilityProfile) -> String {
     let lowered = profile.provider.to_ascii_lowercase();
     let provider = normalize_overlay_provider(&lowered);
-    let prefix = format!("{provider}/");
-    if profile.model_id.starts_with(&prefix) {
-        profile.model_id.clone()
+    if let Some(rest) = strip_overlay_model_prefix(&profile.model_id, provider, &lowered) {
+        format!("{provider}/{rest}")
     } else {
-        format!("{prefix}{}", profile.model_id)
+        format!("{provider}/{}", profile.model_id)
     }
+}
+
+fn strip_overlay_model_prefix<'a>(
+    model_id: &'a str,
+    normalized: &str,
+    raw_lower: &str,
+) -> Option<&'a str> {
+    let model_lower = model_id.to_ascii_lowercase();
+    for prefix in [normalized, raw_lower, "openai", "openrouter"] {
+        if prefix.is_empty() {
+            continue;
+        }
+        let with_slash = format!("{prefix}/");
+        if model_lower.starts_with(&with_slash) {
+            let rest = model_id.get(with_slash.len()..).unwrap_or("");
+            if !rest.is_empty() {
+                return Some(rest);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
@@ -295,6 +315,22 @@ mod tests {
         p.provider = "openai".to_owned();
         p.model_id = "openai/gpt-4o".to_owned();
         assert_eq!(overlay_model_name(&p), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn overlay_name_strips_mixed_case_provider_prefix() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.provider = "openai".to_owned();
+        p.model_id = "OpenAI/gpt-4o".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "openai/gpt-4o",
+            "mixed-case OpenAI/ prefix must not become openai/OpenAI/gpt-4o"
+        );
     }
 
     #[test]

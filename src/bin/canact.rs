@@ -139,8 +139,8 @@ fn main() -> ExitCode {
 }
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
-    let (api_key, from_openrouter) = resolve_api_key(args.api_key.clone());
     let provider_hint = args.provider.clone().unwrap_or_default();
+    let (api_key, from_openrouter) = resolve_api_key(args.api_key.clone(), &provider_hint);
     let base_url = args
         .base_url
         .clone()
@@ -285,16 +285,21 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
     })?;
-    let profile = cache
-        .find_profile(&args.model, &args.provider)
-        .cloned()
-        .ok_or_else(|| {
-            eprintln!(
-                "error: no cached probe for {} / {} (run `canact probe` first)",
-                args.model, args.provider
-            );
-            1u8
-        })?;
+    let profile = match args.advertised_context {
+        Some(n) => cache
+            .find_profile_with_cost_and_advertised(&args.model, &args.provider, Some(n))
+            .map(|(p, _)| p)
+            .or_else(|| cache.find_profile(&args.model, &args.provider)),
+        None => cache.find_profile(&args.model, &args.provider),
+    }
+    .cloned()
+    .ok_or_else(|| {
+        eprintln!(
+            "error: no cached probe for {} / {} (run `canact probe` first)",
+            args.model, args.provider
+        );
+        1u8
+    })?;
     let overlay = if args.aider {
         HostOverlay::aider(&profile, args.advertised_context)
     } else {
@@ -387,7 +392,7 @@ fn emit_envelope(
     }
 }
 
-fn resolve_api_key(cli: Option<String>) -> (Option<String>, bool) {
+fn resolve_api_key(cli: Option<String>, provider: &str) -> (Option<String>, bool) {
     resolve_api_key_from(
         cli,
         std::env::var("OPENAI_API_KEY")
@@ -396,15 +401,23 @@ fn resolve_api_key(cli: Option<String>) -> (Option<String>, bool) {
         std::env::var("OPENROUTER_API_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
+        provider,
     )
+}
+
+fn openrouter_default_ok(provider: &str) -> bool {
+    let p = provider.to_ascii_lowercase();
+    p.is_empty() || p == "openrouter" || p == "openrouter.ai"
 }
 
 fn resolve_api_key_from(
     cli: Option<String>,
     openai: Option<String>,
     openrouter: Option<String>,
+    provider: &str,
 ) -> (Option<String>, bool) {
-    let from_openrouter = openrouter.is_some() && openai.is_none();
+    let from_openrouter =
+        openrouter.is_some() && openai.is_none() && openrouter_default_ok(provider);
     if let Some(key) = cli {
         if !key.is_empty() {
             return (Some(key), from_openrouter);
@@ -414,7 +427,7 @@ fn resolve_api_key_from(
         return (Some(key), false);
     }
     if let Some(key) = openrouter {
-        return (Some(key), true);
+        return (Some(key), from_openrouter);
     }
     (None, false)
 }
@@ -507,6 +520,7 @@ mod tests {
             Some("sk-or-cli".to_owned()),
             None,
             Some("sk-or-env".to_owned()),
+            "",
         );
         assert_eq!(key.as_deref(), Some("sk-or-cli"));
         assert!(
@@ -516,6 +530,45 @@ mod tests {
         assert_eq!(
             canact::default_compat_base_url("", from_openrouter),
             "https://openrouter.ai/api/v1"
+        );
+    }
+
+    #[test]
+    fn api_key_flag_plus_openai_provider_stays_on_openai() {
+        let (key, from_openrouter) = resolve_api_key_from(
+            Some("sk-proj-cli".to_owned()),
+            None,
+            Some("sk-or-env".to_owned()),
+            "openai",
+        );
+        assert_eq!(key.as_deref(), Some("sk-proj-cli"));
+        assert!(
+            !from_openrouter,
+            "--provider openai plus a CLI key must not select OpenRouter"
+        );
+        assert_eq!(
+            canact::default_compat_base_url("openai", from_openrouter),
+            "https://api.openai.com/v1",
+            "--provider openai plus a CLI key must not hit OpenRouter"
+        );
+        let (_, from_host) = resolve_api_key_from(
+            Some("sk-proj-cli".to_owned()),
+            None,
+            Some("sk-or-env".to_owned()),
+            "api.openai.com",
+        );
+        assert!(!from_host);
+        assert_eq!(
+            canact::default_compat_base_url("api.openai.com", from_host),
+            "https://api.openai.com/v1",
+            "--provider api.openai.com plus a CLI key must not hit OpenRouter"
+        );
+        let (env_key, from_env) =
+            resolve_api_key_from(None, None, Some("sk-or-env".to_owned()), "openai");
+        assert_eq!(env_key.as_deref(), Some("sk-or-env"));
+        assert!(
+            !from_env,
+            "OPENROUTER_API_KEY alone must not reroute --provider openai"
         );
     }
 

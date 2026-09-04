@@ -136,6 +136,14 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("unable to share")
         || lower.contains("unable to disclose")
         || lower.contains("unable to reveal")
+        || lower.contains("unable to repeat")
+        || lower.contains("not able to remember")
+        || lower.contains("not able to recall")
+        || lower.contains("not able to share")
+        || lower.contains("not able to disclose")
+        || lower.contains("not able to reveal")
+        || lower.contains("not able to repeat")
+        || lower.contains("can not repeat")
         || lower.contains("not allowed to share")
         || lower.contains("not allowed to disclose")
         || lower.contains("not allowed to reveal")
@@ -145,6 +153,8 @@ fn memory_refused(text: &str) -> bool {
         || lower.contains("could not recall")
         || lower.contains("i've forgotten")
         || lower.contains("i have forgotten")
+        || lower.contains("i forgot")
+        || lower.contains("i had forgotten")
 }
 
 #[cfg(test)]
@@ -221,6 +231,24 @@ mod tests {
             assert_eq!(
                 result.score, 0.0,
                 "unable/not-allowed refusal that quotes the code must be Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refusal_not_able_can_not_repeat_forgot_quoted_code_is_weak() {
+        for text in [
+            "I'm not able to recall ZEPHYR-4829",
+            "I can not repeat ZEPHYR-4829",
+            "I forgot ZEPHYR-4829",
+            "I had forgotten ZEPHYR-4829",
+        ] {
+            let llm = SequentialMock::new(vec![text_response("Au"), text_response(text)]);
+            let result = probe_multi_turn_memory(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "not-able/can-not-repeat/forgot that quotes the code must be Weak: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
         }

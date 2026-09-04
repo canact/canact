@@ -162,9 +162,12 @@ fn has_seconds_unit(lower: &str) -> bool {
 }
 
 fn has_milliseconds_unit(lower: &str) -> bool {
-    lower
-        .split(|c: char| !c.is_ascii_alphabetic())
-        .any(|w| matches!(w, "millisecond" | "milliseconds" | "ms"))
+    lower.split(|c: char| !c.is_ascii_alphabetic()).any(|w| {
+        matches!(
+            w,
+            "millisecond" | "milliseconds" | "ms" | "msec" | "msecs" | "millis"
+        )
+    })
 }
 
 fn estimate_tokens(chars: usize) -> u32 {
@@ -345,6 +348,23 @@ mod tests {
         assert!(
             !recalls_all_facts(&milli),
             "2.84 milliseconds must not count as 2840 ms / 2.84 seconds"
+        );
+        let msec = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n2.84 msec");
+        assert!(
+            !recalls_all_facts(&msec),
+            "2.84 msec must not count as 2840 ms / 2.84 seconds"
+        );
+        assert!(
+            !recalls_heartbeat("heartbeat is 2.84 msec"),
+            "heartbeat + 2.84 msec must not count as the asked second value"
+        );
+        assert!(
+            !recalls_heartbeat("heartbeat is 2.84 msecs"),
+            "heartbeat + 2.84 msecs must not count as the asked second value"
+        );
+        assert!(
+            !recalls_heartbeat("heartbeat is 2.84 millis"),
+            "heartbeat + 2.84 millis must not count as the asked second value"
         );
     }
 

@@ -97,11 +97,12 @@ pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeRe
     let calls = &response.tool_calls;
     let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
 
-    let is_precise_read =
-        |c: &ProbeToolCall| c.name == "read_file" && nonempty_string_arg(&c.arguments, "path");
+    let is_precise_read = |c: &ProbeToolCall| {
+        c.name == "read_file" && nonempty_string_arg_any(&c.arguments, &["path", "file_path"])
+    };
     let is_precise_edit = |c: &ProbeToolCall| {
         c.name == "edit_file"
-            && nonempty_string_arg(&c.arguments, "path")
+            && nonempty_string_arg_any(&c.arguments, &["path", "file_path"])
             && nonempty_string_arg_any(&c.arguments, &["old_text", "old_string"])
             && nonempty_string_arg_any(&c.arguments, &["new_text", "new_string"])
     };
@@ -212,6 +213,38 @@ mod tests {
         let llm = MockLlm { response };
         let result = probe_one_shot_tool_plan(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn reasoning_strong_when_path_alias_is_file_path() {
+        let response = multi_tool_call_response(vec![
+            call(
+                "1",
+                "read_file",
+                serde_json::json!({"file_path": "src/parser.rs"}),
+            ),
+            call(
+                "2",
+                "edit_file",
+                serde_json::json!({
+                    "file_path": "src/parser.rs",
+                    "old_text": "<",
+                    "new_text": "<="
+                }),
+            ),
+            call(
+                "3",
+                "run_command",
+                serde_json::json!({"command": "cargo test"}),
+            ),
+        ]);
+        let llm = MockLlm { response };
+        let result = probe_one_shot_tool_plan(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "file_path alias on read/edit must be precise: {result:?}"
+        );
         assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
