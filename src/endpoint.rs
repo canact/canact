@@ -36,6 +36,7 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
 /// Cloud hosts that must not be called without an API key.
 pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
     let host = url_host_hint(base_url);
+    let host = host.trim_end_matches('.');
     host == "api.openai.com"
         || host.ends_with(".openai.com")
         || host == "openrouter.ai"
@@ -298,6 +299,18 @@ mod tests {
         assert_eq!(
             provider_from_base_url("https://user:pass@api.openai.com/v1"),
             "api.openai.com"
+        );
+    }
+
+    #[test]
+    fn trailing_dot_fqdn_still_requires_cloud_key() {
+        assert!(
+            cloud_endpoint_requires_key("https://api.openai.com./v1"),
+            "trailing-dot api.openai.com. must still require a key"
+        );
+        assert!(
+            cloud_endpoint_requires_key("https://openrouter.ai./api/v1"),
+            "trailing-dot openrouter.ai. must still require a key"
         );
     }
 }
