@@ -447,7 +447,7 @@ pub fn resolve_probe(
 ) -> Result<(ProbeResult, bool), ProbeError> {
     match result {
         Ok(pr) => Ok((pr, true)),
-        Err(err @ ProbeError::Auth(_)) => Err(err),
+        Err(err @ ProbeError::Auth(_)) | Err(err @ ProbeError::NotFound(_)) => Err(err),
         Err(err) if is_unreachable_host(&err) => Err(err),
         Err(err) => {
             let err_msg = err.to_string();

@@ -6,6 +6,9 @@ pub enum ProbeError {
     /// Authentication failed. Suite abort; do not synthesize a score.
     #[error("authentication error: {0}")]
     Auth(String),
+    /// Host says the model or chat route does not exist. Suite abort.
+    #[error("not found: {0}")]
+    NotFound(String),
     /// Provider or model error (including "does not support tools").
     #[error("LLM error: {0}")]
     Llm(String),

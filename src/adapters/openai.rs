@@ -428,6 +428,7 @@ fn map_status(code: u16, retry_after: Option<u64>, body: &str) -> ProbeError {
     match code {
         401 => ProbeError::Auth(body_or_status(code, body)),
         400 | 403 if body_looks_like_auth(body) => ProbeError::Auth(body_or_status(code, body)),
+        404 => ProbeError::NotFound(body_or_status(code, body)),
         403 => ProbeError::Llm(body_or_status(code, body)),
         429 => ProbeError::RateLimit { retry_after },
         408 | 500..=599 => ProbeError::Transient(body_or_status(code, body)),
@@ -471,10 +472,34 @@ fn classify_provider_error(err: &Value) -> ProbeError {
     if let Some(code) = provider_error_status(err) {
         return map_status(code, None, &msg);
     }
+    if body_looks_like_missing_model(&msg) || error_type_is_not_found(err) {
+        return ProbeError::NotFound(msg);
+    }
     if body_looks_like_upstream_overload(&msg) {
         return ProbeError::Transient(msg);
     }
     ProbeError::Llm(msg)
+}
+
+fn error_type_is_not_found(err: &Value) -> bool {
+    match err.get("type").and_then(Value::as_str) {
+        Some(t) => {
+            let t = t.to_ascii_lowercase();
+            t == "not_found_error" || t == "not_found" || t.contains("model_not_found")
+        }
+        None => err
+            .get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|c| c.eq_ignore_ascii_case("model_not_found")),
+    }
+}
+
+fn body_looks_like_missing_model(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    (b.contains("model") && b.contains("not found"))
+        || (b.contains("model") && b.contains("does not exist"))
+        || b.contains("unknown model")
+        || b.contains("model_not_found")
 }
 
 fn provider_error_status(err: &Value) -> Option<u16> {
@@ -1455,6 +1480,34 @@ mod tests {
         );
         let err = client(&base).chat(empty_req()).await.expect_err("400");
         assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn chat_404_missing_model_is_not_found() {
+        let base = spawn_http(
+            404,
+            "Not Found",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"model 'does-not-exist' not found","type":"not_found_error","param":null,"code":null}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("404");
+        assert!(matches!(err, ProbeError::NotFound(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("does-not-exist"), "{text}");
+        assert!(!text.contains("LLM error"), "{text}");
+    }
+
+    #[test]
+    fn classify_200_wrapped_model_not_found() {
+        let err = serde_json::json!({
+            "message": "The model `foo` does not exist",
+            "type": "invalid_request_error",
+            "code": "model_not_found"
+        });
+        assert!(matches!(
+            classify_provider_error(&err),
+            ProbeError::NotFound(_)
+        ));
     }
 
     #[tokio::test]

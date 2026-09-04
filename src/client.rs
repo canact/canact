@@ -191,6 +191,7 @@ impl MockLlm {
 fn clone_probe_error(err: &ProbeError) -> ProbeError {
     match err {
         ProbeError::Auth(s) => ProbeError::Auth(s.clone()),
+        ProbeError::NotFound(s) => ProbeError::NotFound(s.clone()),
         ProbeError::Llm(s) => ProbeError::Llm(s.clone()),
         ProbeError::Transient(s) => ProbeError::Transient(s.clone()),
         ProbeError::RateLimit { retry_after } => ProbeError::RateLimit {

@@ -337,7 +337,9 @@ fn mcp_full_does_not_return_cheap_cache() {
         .expect("text");
     assert_eq!(called["result"]["isError"], true, "{called}");
     assert!(
-        text.contains("failed to connect") || text.contains("api_key"),
+        text.contains("failed to connect")
+            || text.contains("api_key")
+            || text.contains("not found"),
         "full must miss cheap cache and go live: {text}"
     );
     drop(stdin);
