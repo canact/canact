@@ -130,10 +130,9 @@ fn handle_tools_call(params: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     let envelope = rt.block_on(probe_model_args(&args))?;
     let text = serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())?;
-    let is_error = envelope.get("canUseTools").and_then(Value::as_bool) == Some(false);
     Ok(json!({
         "content": [{ "type": "text", "text": text }],
-        "isError": is_error
+        "isError": false
     }))
 }
 
