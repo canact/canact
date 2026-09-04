@@ -246,15 +246,14 @@ Rename the function `greet` to `welcome` and change the greeting from \
 fn has_code_fn_token(text: &str, token: &str) -> bool {
     text.lines().any(|line| {
         let t = line.trim_start();
-        let after = if t.starts_with(token) {
-            &t[token.len()..]
+        let after = if let Some(rest) = t.strip_prefix(token) {
+            rest
         } else if let Some(rest) = t.strip_prefix("pub ") {
             let rest = rest.trim_start();
-            if rest.starts_with(token) {
-                &rest[token.len()..]
-            } else {
+            let Some(rest) = rest.strip_prefix(token) else {
                 return false;
-            }
+            };
+            rest
         } else {
             return false;
         };
