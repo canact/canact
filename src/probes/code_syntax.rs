@@ -181,9 +181,14 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
     while let Some(rel) = text.get(search..).and_then(|s| s.find(needle)) {
         let idx = search + rel;
         let after = &text[idx + needle.len()..];
-        if let Some(colon_rel) = after.find(':') {
-            if !after[..colon_rel].contains('\n') {
-                let rest = &after[colon_rel + 1..];
+        let same_line_end = after.find('\n').unwrap_or(after.len());
+        let same_line = &after[..same_line_end];
+        let mut colon_search = 0;
+        while let Some(colon_rel) = same_line.get(colon_search..).and_then(|s| s.find(':')) {
+            let colon_abs = colon_search + colon_rel;
+            // English "lists:" after the name is not a signature colon.
+            if looks_like_parameter_list(&same_line[..colon_abs]) {
+                let rest = &after[colon_abs + 1..];
                 if rest
                     .lines()
                     .next()
@@ -198,10 +203,29 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
                     return line.starts_with(' ') || line.starts_with('\t');
                 }
             }
+            colon_search = colon_abs + 1;
         }
         search = idx + needle.len();
     }
     false
+}
+
+fn looks_like_parameter_list(between: &str) -> bool {
+    let s = between.trim();
+    if s.starts_with('(') && s.ends_with(')') {
+        return count_char(s, '(') == count_char(s, ')');
+    }
+    let parts: Vec<&str> = s.split(',').map(str::trim).collect();
+    parts.len() >= 2 && parts.iter().all(|p| is_simple_ident(p))
+}
+
+fn is_simple_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn is_real_merge_sorted(body: &str) -> bool {
@@ -485,6 +509,62 @@ and return a single sorted list.
     }
 
     #[tokio::test]
+    async fn code_syntax_fenced_sentence_with_english_colon_is_not_strong() {
+        let text = "\
+```
+I would write def merge_sorted that takes two lists: a and b and return a list
+```";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(text),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "fenced English colon after def merge_sorted must not be Strong: {result:?}"
+        );
+        assert_eq!(
+            result.score, 0.0,
+            "English colon name-drop is not a function: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_prefers_def_paren_fence_after_english_colon_mention() {
+        let text = "\
+```
+I would write def merge_sorted that takes two lists: a and b and return a list
+```
+
+```python
+def merge_sorted(a, b):
+    return a + b
+```
+";
+        let code = extract_code_block(text).unwrap();
+        assert!(
+            code.contains("def merge_sorted("),
+            "must prefer the fence with def merge_sorted(: {code:?}"
+        );
+        assert!(
+            !code.contains("I would write"),
+            "must not pick the English-colon name-drop fence: {code:?}"
+        );
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(text),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "later def merge_sorted( fence must win over an English-colon mention: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
     async fn code_syntax_prefers_def_paren_fence_after_name_mention() {
         let text = "\
 ```
@@ -555,6 +635,21 @@ def merge_sorted(a, b):
             result.score, 1.0,
             "one-line def merge_sorted must stay Strong: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_indented_no_paren_signature_is_strong() {
+        let code = "def merge_sorted a, b:\n    return a + b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "no-paren comma params plus indented body must stay Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
