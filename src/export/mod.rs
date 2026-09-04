@@ -105,13 +105,13 @@ pub fn aider_edit_format(rec: EditFormatRecommendation) -> &'static str {
 
 /// Aider / LiteLLM style `provider/model` name.
 pub fn overlay_model_name(profile: &CapabilityProfile) -> String {
-    let provider = normalize_overlay_provider(&profile.provider);
-    if provider == "openrouter" && !profile.model_id.starts_with("openrouter/") {
-        format!("openrouter/{}", profile.model_id)
-    } else if profile.model_id.contains('/') {
+    let lowered = profile.provider.to_ascii_lowercase();
+    let provider = normalize_overlay_provider(&lowered);
+    let prefix = format!("{provider}/");
+    if profile.model_id.starts_with(&prefix) {
         profile.model_id.clone()
     } else {
-        format!("{provider}/{}", profile.model_id)
+        format!("{prefix}{}", profile.model_id)
     }
 }
 
@@ -292,8 +292,24 @@ mod tests {
             CapabilityLevel::Medium,
             CapabilityLevel::Weak,
         );
+        p.provider = "openai".to_owned();
         p.model_id = "openai/gpt-4o".to_owned();
         assert_eq!(overlay_model_name(&p), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn overlay_name_prefixes_slash_model_unless_already_prefixed() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.model_id = "library/qwen".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "ollama/library/qwen",
+            "ollama + library/qwen must keep the provider prefix"
+        );
     }
 
     #[test]

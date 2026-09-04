@@ -132,14 +132,35 @@ fn strip_python_string_literals(text: &str) -> String {
             Some("\"\"\"")
         } else if rest.starts_with("'''") {
             Some("'''")
+        } else if rest.starts_with('"') {
+            Some("\"")
+        } else if rest.starts_with('\'') {
+            Some("'")
         } else {
             None
         };
         if let Some(quote) = delim {
             i += quote.len();
-            match text[i..].find(quote) {
-                Some(rel) => i += rel + quote.len(),
-                None => break,
+            if quote.len() == 1 {
+                let closer = quote.as_bytes()[0];
+                while i < text.len() {
+                    let b = text.as_bytes()[i];
+                    i += 1;
+                    if b == b'\\' {
+                        if i < text.len() {
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    if b == closer {
+                        break;
+                    }
+                }
+            } else {
+                match text[i..].find(quote) {
+                    Some(rel) => i += rel + quote.len(),
+                    None => break,
+                }
             }
             continue;
         }
@@ -281,6 +302,39 @@ def merge_sorted(a, b):
             CapabilityLevel::Strong,
             "return only in a docstring must not be Strong: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_return_in_regular_quotes_is_not_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    \"return a merged list\"\n    pass\n",
+            "def merge_sorted(a, b):\n    'return a merged list'\n    pass\n",
+        ] {
+            let llm = MockLlm {
+                response: text_response(code),
+            };
+            let result = probe_code_syntax(&llm).await.unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "return only inside regular quotes must not be Strong: {code:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_real_return_with_quoted_string_stays_strong() {
+        let code =
+            "def merge_sorted(a, b):\n    note = \"return a merged list\"\n    return a + b\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "real return a + b must stay Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

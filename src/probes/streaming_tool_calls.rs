@@ -9,7 +9,7 @@ use crate::client::{ProbeClient, ProbeFinish, ProbeRequest, ProbeStreamChunk};
 use crate::types::{ProbeResult, classify};
 use futures::StreamExt;
 
-use super::{nonempty_string_arg, refuse_truncated_incomplete, tool, user_text};
+use super::{nonempty_string_arg_any, refuse_truncated_incomplete, tool, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -163,7 +163,7 @@ fn parsed_string_path(args: &str) -> Result<bool, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(args)?;
     Ok(value
         .as_object()
-        .is_some_and(|o| nonempty_string_arg(o, "path")))
+        .is_some_and(|o| nonempty_string_arg_any(o, &["path", "file_path"])))
 }
 
 fn flush_read_file_args(
@@ -337,6 +337,26 @@ mod tests {
             assert_eq!(result.score, 0.5, "path args={args}");
             assert_eq!(result.level, CapabilityLevel::Medium, "path args={args}");
         }
+    }
+
+    #[tokio::test]
+    async fn streaming_file_path_alias_is_strong() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: "{\"file_path\":\"/tmp/test.txt\"}".to_string(),
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "JSON file_path alias must score Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

@@ -92,7 +92,16 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
 }
 
 fn memory_refused(text: &str) -> bool {
-    let lower = text.to_lowercase();
+    let folded: String = text
+        .chars()
+        .filter(|c| {
+            !matches!(
+                c,
+                '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
+            )
+        })
+        .collect();
+    let lower = folded.to_lowercase();
     lower.contains("don't remember")
         || lower.contains("do not remember")
         || lower.contains("can't remember")
@@ -131,6 +140,20 @@ mod tests {
     use crate::error::ProbeError;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn refusal_zwsp_dont_remember_is_weak() {
+        let llm = SequentialMock::new(vec![
+            text_response("Au"),
+            text_response("I don\u{200B}'t remember ZEPHYR-4829"),
+        ]);
+        let result = probe_multi_turn_memory(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "ZWSP in don't remember must be a refusal, not Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
 
     #[tokio::test]
     async fn refusal_that_quotes_code_is_weak() {

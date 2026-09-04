@@ -63,13 +63,22 @@ Rename the function `greet` to `welcome` and change the greeting from \
 
     let (score, details) = if has_search && has_separator && has_replace {
         let mut best = 0.4_f64;
+        let mut any_greet = false;
+        let mut old_fn = false;
+        let mut old_hello = false;
+        let mut new_fn = false;
+        let mut new_welcome = false;
         for block in parse_search_replace_blocks(&text) {
             let has_file_ref = block.path.contains("greet.rs");
             let search = strip_comments(block.search);
             let replace = strip_comments(block.replace);
             // Strong requires the function signatures in code, not comments.
-            let has_old_content = search.contains("fn greet(") && search.contains("Hello");
-            let has_new_content = replace.contains("fn welcome(") && replace.contains("Welcome");
+            let block_old_fn = search.contains("fn greet(");
+            let block_old_hello = search.contains("Hello");
+            let block_new_fn = replace.contains("fn welcome(");
+            let block_new_welcome = replace.contains("Welcome");
+            let has_old_content = block_old_fn && block_old_hello;
+            let has_new_content = block_new_fn && block_new_welcome;
             let block_score = if has_file_ref && has_old_content && has_new_content {
                 1.0
             } else if has_old_content || has_new_content {
@@ -80,6 +89,16 @@ Rename the function `greet` to `welcome` and change the greeting from \
             if block_score > best {
                 best = block_score;
             }
+            if has_file_ref {
+                any_greet = true;
+                old_fn |= block_old_fn;
+                old_hello |= block_old_hello;
+                new_fn |= block_new_fn;
+                new_welcome |= block_new_welcome;
+            }
+        }
+        if any_greet && old_fn && old_hello && new_fn && new_welcome {
+            best = 1.0;
         }
         if (best - 1.0).abs() < f64::EPSILON {
             (
@@ -591,6 +610,32 @@ Rename welcome Welcome
             CapabilityLevel::Strong,
             "prose stuffing greet/Hello/welcome/Welcome must not set SearchReplace: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn search_replace_two_one_edit_blocks_are_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+fn greet(name: &str) -> String {
+=======
+fn welcome(name: &str) -> String {
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+src/greet.rs
+    format!(\"Hello, {}\", name)
+=======
+    format!(\"Welcome, {}\", name)
+>>>>>>> REPLACE";
+        let llm = MockLlm {
+            response: text_response(response_text),
+        };
+        let result = probe_search_replace(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "two correct one-block-per-edit SEARCH/REPLACE blocks must be Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

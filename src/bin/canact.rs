@@ -478,7 +478,7 @@ fn cached_probe(
         return None;
     }
     cache
-        .find_profile_with_cost(model, provider)
+        .find_profile_with_cost_and_advertised(model, provider, advertised)
         .map(|(profile, cheap_row)| (profile.clone(), cheap_row))
 }
 

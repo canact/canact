@@ -211,7 +211,9 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             }));
         }
         if !full && !vision {
-            if let Some((profile, cheap_row)) = cache.find_profile_with_cost(&model, &provider) {
+            if let Some((profile, cheap_row)) =
+                cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
+            {
                 return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
                     cacheable: true,
                     skip_expensive: cheap_row,
