@@ -35,13 +35,13 @@ mkdir -p "$out"
 echo "DO: org avatar 1024"
 "$rsvg" -w 1024 -h 1024 "$src" -o "$out/org-avatar-1024.png"
 
-echo "DO: social preview 1280x640"
-"$rsvg" -w 480 -h 480 "$src" -o "$out/mark-480.png"
+echo "DO: social preview 1280x640 (mark fills most of the 640 height)"
+"$rsvg" -w 600 -h 600 "$src" -o "$out/mark-600.png"
 magick -size 1280x640 xc:'#0B1220' \
-  \( "$out/mark-480.png" \) \
+  \( "$out/mark-600.png" \) \
   -gravity center -compose over -composite \
   PNG24:"$out/social-preview.png"
-rm -f "$out/mark-480.png"
+rm -f "$out/mark-600.png"
 
 echo "OK: $out/org-avatar-1024.png"
 echo "OK: $out/social-preview.png"
