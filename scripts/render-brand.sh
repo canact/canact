@@ -35,13 +35,19 @@ mkdir -p "$out"
 echo "DO: org avatar 1024"
 "$rsvg" -w 1024 -h 1024 "$src" -o "$out/org-avatar-1024.png"
 
-echo "DO: social preview 1280x640 (mark fills most of the 640 height)"
-"$rsvg" -w 600 -h 600 "$src" -o "$out/mark-600.png"
+# The SVG is a 512 square with unused navy above and below the
+# wide mark. Scaling that whole square onto the 2:1 banner leaves
+# the graphic tiny. Crop to the painted bounds, then fill most of
+# the 640 height (20px navy above and below).
+echo "DO: social preview 1280x640 (artwork fills most of the height)"
+"$rsvg" -w 2048 -h 2048 "$src" -o "$out/mark-2048.png"
+magick "$out/mark-2048.png" -crop 1840x1120+96+464 +repage \
+  "$out/mark-art.png"
 magick -size 1280x640 xc:'#0B1220' \
-  \( "$out/mark-600.png" \) \
+  \( "$out/mark-art.png" -resize x600 \) \
   -gravity center -compose over -composite \
   PNG24:"$out/social-preview.png"
-rm -f "$out/mark-600.png"
+rm -f "$out/mark-2048.png" "$out/mark-art.png"
 
 echo "OK: $out/org-avatar-1024.png"
 echo "OK: $out/social-preview.png"
