@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Source mark. Rasterize with scripts/render-brand.sh. Do not edit PNG. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#0B1220"/>
+  <circle cx="156" cy="256" r="54" fill="none" stroke="#148A80" stroke-width="10"/>
+  <circle cx="156" cy="256" r="22" fill="#2DD4BF"/>
+  <circle cx="156" cy="256" r="8" fill="#F5C14A"/>
+  <path d="M214 256 H292" stroke="#2DD4BF" stroke-width="14" stroke-linecap="round"/>
+  <path d="M268 240 L292 256 L268 272" fill="none" stroke="#2DD4BF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="308" y="188" width="128" height="136" rx="16" fill="#1C2740" stroke="#2DD4BF" stroke-width="10"/>
+  <rect x="330" y="220" width="84" height="12" rx="6" fill="#2DD4BF"/>
+  <rect x="330" y="248" width="64" height="12" rx="6" fill="#148A80"/>
+  <rect x="330" y="276" width="48" height="12" rx="6" fill="#F5C14A"/>
+</svg>
