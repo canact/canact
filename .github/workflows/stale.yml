@@ -1,0 +1,43 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: stale
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stale:
+    name: Close stale issues and PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2
+        with:
+          egress-policy: audit
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          stale-issue-message: >
+            This issue has been marked stale because it had no activity
+            for 60 days. It will close in 14 days unless someone comments.
+          stale-pr-message: >
+            This pull request has been marked stale because it had no
+            activity for 60 days. It will close in 14 days unless someone
+            comments or pushes an update.
+          close-issue-message: Closed as stale. Reopen if this is still relevant.
+          close-pr-message: Closed as stale. Reopen if this is still relevant.
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: "pinned,security,tech-debt,enhancement,good first issue,help wanted"
+          exempt-pr-labels: "pinned,security"
