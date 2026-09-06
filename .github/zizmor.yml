@@ -1,0 +1,8 @@
+# zizmor configuration
+# https://docs.zizmor.sh/configuration/
+
+rules:
+  dangerous-triggers:
+    ignore:
+      # Reads the event payload only. No checkout of PR head.
+      - pr-title.yml
