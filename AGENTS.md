@@ -1,5 +1,8 @@
 # AGENTS
 
+> **Human contributors:** This file is for AI coding assistants.
+> You can safely ignore it. See README.md and CONTRIBUTING.md instead.
+
 Local gate: `make check`
 
 Targeted probe tests:
