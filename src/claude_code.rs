@@ -511,8 +511,12 @@ mod tests {
     #[test]
     fn keychain_accounts_prefer_user_then_known_names() {
         let accounts = keychain_accounts();
-        assert!(accounts.iter().any(|a| a == "Claude Code"), "{accounts:?}");
-        assert!(accounts.iter().any(|a| a == "credentials"), "{accounts:?}");
+        for expected in KEYCHAIN_ACCOUNTS {
+            assert!(
+                accounts.iter().any(|a| a == expected),
+                "missing expected keychain account name"
+            );
+        }
     }
 
     #[test]

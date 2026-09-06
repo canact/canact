@@ -66,6 +66,9 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: write
     env:
       CARGO_TARGET_DIR: target/ci-test
     steps:
@@ -78,13 +81,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: "1.85"
+      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2
+        with:
+          tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' }}
-      - run: cargo test --locked
-      - run: cargo test --locked --features runtime
-      - run: cargo test --locked --features cli
+      - name: Unit and integration tests
+        run: |
+          set -euo pipefail
+          out="${CARGO_TARGET_DIR}/junit"
+          mkdir -p "$out"
+          # nextest writes junit.xml under workspace target/nextest, not CARGO_TARGET_DIR
+          cargo nextest run --locked --profile ci
+          cp target/nextest/ci/junit.xml "${out}/default.xml"
+          cargo nextest run --locked --features runtime --profile ci
+          cp target/nextest/ci/junit.xml "${out}/runtime.xml"
+          cargo nextest run --locked --features cli --profile ci
+          cp target/nextest/ci/junit.xml "${out}/cli.xml"
       - run: cargo test --locked --doc
+      - name: Test summary
+        if: always()
+        uses: test-summary/action@31493c76ec9e7aa675f1585d3ed6f1da69269a86 # v2.4
+        with:
+          paths: target/ci-test/junit/*.xml
+          show: all
 
   workflow-sanity:
     name: Workflow sanity

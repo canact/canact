@@ -11,7 +11,8 @@ straight to a pull request.
 ## Local gate
 
 The commands in `AGENTS.md` must pass on your workspace before you
-open a pull request. In short:
+open a pull request. Put user-visible changes under Unreleased in
+`CHANGELOG.md`. In short:
 
 ```bash
 make check
