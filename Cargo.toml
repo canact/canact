@@ -62,3 +62,8 @@ required-features = ["cli"]
 name = "mcp_stdio"
 path = "tests/mcp_stdio.rs"
 required-features = ["cli"]
+
+[[example]]
+name = "export_overlays"
+path = "examples/export_overlays.rs"
+required-features = ["cli"]

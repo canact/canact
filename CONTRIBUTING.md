@@ -18,6 +18,8 @@ open a pull request. Put user-visible changes under Unreleased in
 make check
 ```
 
+Copy-paste runs that do not call a model live in `examples/`.
+
 Every commit needs a Developer Certificate of Origin trailer:
 
 ```bash
