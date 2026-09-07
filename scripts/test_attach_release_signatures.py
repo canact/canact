@@ -42,15 +42,26 @@ class AttachReleaseSignaturesTests(unittest.TestCase):
             (artifacts / "canact-x86_64-unknown-linux-gnu.tar.xz.sig").write_text(
                 "sig\n", encoding="utf-8"
             )
-            r = run_script(
-                {
+            (artifacts / "canact-x86_64-unknown-linux-gnu.tar.xz.sigstore.jsonl").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            # Relative ARTIFACTS must still resolve when cwd is the parent.
+            r = subprocess.run(
+                ["bash", str(SCRIPT)],
+                capture_output=True,
+                text=True,
+                cwd=td,
+                env={
+                    **os.environ,
                     "DRY_RUN": "1",
-                    "ARTIFACTS": str(artifacts),
+                    "ARTIFACTS": "artifacts",
                     "TAG": "v0.1.1",
                     "REPO": "canact/canact",
-                }
+                },
+                check=False,
             )
             self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(f"from {artifacts.resolve()}", r.stdout)
             subjects = [
                 line.removeprefix("SUBJECT: ")
                 for line in r.stdout.splitlines()

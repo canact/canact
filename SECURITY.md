@@ -42,7 +42,7 @@ gh attestation verify ./canact-x86_64-unknown-linux-gnu.tar.xz \
 cosign verify-blob \
   --bundle ./canact-x86_64-unknown-linux-gnu.tar.xz.sigstore.json \
   --certificate-identity-regexp \
-    'https://github.com/canact/canact/.github/workflows/(release|sign-release)\.yml' \
+    '^https://github.com/canact/canact/.github/workflows/(release|sign-release)\.yml@refs/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ./canact-x86_64-unknown-linux-gnu.tar.xz
 ```

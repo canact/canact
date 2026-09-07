@@ -16,7 +16,7 @@ set -euo pipefail
 
 is_signature_name() {
   case "$1" in
-    *.sigstore.json | *.intoto.jsonl | *.sig | *.asc) return 0 ;;
+    *.sigstore.json | *.sigstore.jsonl | *.intoto.jsonl | *.sig | *.asc) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -42,6 +42,9 @@ if [ ! -d "$ARTIFACTS" ]; then
   echo "FAIL: ARTIFACTS is not a directory: ${ARTIFACTS}" >&2
   exit 1
 fi
+# Later we `cd` into a temp dir for `gh attestation download`.
+# Resolve now so those paths stay valid.
+ARTIFACTS=$(cd "$ARTIFACTS" && pwd)
 
 subjects=()
 while IFS= read -r -d '' path; do
@@ -66,7 +69,7 @@ if [ "${#subjects[@]}" -eq 0 ]; then
   exit 1
 fi
 
-echo "PLAN: sign ${#subjects[@]} assets for ${TAG} in ${REPO}"
+echo "PLAN: sign ${#subjects[@]} assets for ${TAG} in ${REPO} from ${ARTIFACTS}"
 for path in "${subjects[@]}"; do
   echo "SUBJECT: $(basename "$path")"
 done
@@ -102,26 +105,35 @@ echo "DO: download attestation bundles"
 for path in "${subjects[@]}"; do
   name=$(basename "$path")
   tmpdir=$(mktemp -d)
-  (
-    cd "$tmpdir"
-    if ! gh attestation download "$path" --repo "$REPO"; then
-      echo "FAIL: gh attestation download ${name}" >&2
-      exit 1
+  download_ok=0
+  pushd "$tmpdir" >/dev/null
+  for _attempt in 1 2 3 4 5; do
+    if gh attestation download "$path" --repo "$REPO"; then
+      download_ok=1
+      break
     fi
-    found=0
-    for bundle in *.jsonl; do
-      if [ -f "$bundle" ]; then
-        cp "$bundle" "${workdir}/bundles/${name}.intoto.jsonl"
-        found=1
-        break
-      fi
-    done
-    if [ "$found" -eq 0 ]; then
-      echo "FAIL: no .jsonl from gh attestation download for ${name}" >&2
-      exit 1
+    sleep 2
+  done
+  if [ "$download_ok" -eq 0 ]; then
+    popd >/dev/null
+    rm -rf "$tmpdir"
+    echo "FAIL: gh attestation download ${name}" >&2
+    exit 1
+  fi
+  found=0
+  for bundle in *.jsonl; do
+    if [ -f "$bundle" ]; then
+      cp "$bundle" "${workdir}/bundles/${name}.intoto.jsonl"
+      found=1
+      break
     fi
-  )
+  done
+  popd >/dev/null
   rm -rf "$tmpdir"
+  if [ "$found" -eq 0 ]; then
+    echo "FAIL: no .jsonl from gh attestation download for ${name}" >&2
+    exit 1
+  fi
 done
 
 echo "DO: upload signature assets to ${TAG}"
