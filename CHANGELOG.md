@@ -3,9 +3,11 @@
 Record user-visible changes here. Add a dated version heading when a
 release ships. Until then, put work under Unreleased.
 
-No crates.io package yet (`publish = false`).
-
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-07
+
+First crates.io release.
 
 - Launch README, `llms.txt`, GitHub About, and crate keywords.
 - `canact` with no subcommand prints help instead of `Not ready.`

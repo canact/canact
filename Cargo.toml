@@ -1,11 +1,14 @@
 [package]
 name = "canact"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
-publish = false
+publish = true
 description = "Probe an LLM and return host policy: max tools, edit format, XML fallback, JSON repair"
+readme = "README.md"
+homepage = "https://github.com/canact/canact"
+documentation = "https://docs.rs/canact"
 keywords = ["llm", "probe", "cli", "agents"]
 categories = ["command-line-utilities", "development-tools"]
 repository = "https://github.com/canact/canact"
