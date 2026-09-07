@@ -669,7 +669,7 @@ fn body_looks_like_upstream_overload(body: &str) -> bool {
         || b.contains("timed out")
 }
 
-/// Strip Bearer tokens, `sk-` keys, and values after Authorization / api-key / api_key.
+/// Strip Bearer tokens, `sk-` / `gsk_` / `ghp_` / `xai-` keys, and values after Authorization / api-key / api_key.
 fn redact_secrets(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let lower = input.to_ascii_lowercase();
@@ -711,6 +711,11 @@ fn redact_secrets(input: &str) -> String {
         }
         if input[i..].starts_with("ghp_") {
             out.push_str("ghp_[REDACTED]");
+            i = skip_secret_key(input, i + 4);
+            continue;
+        }
+        if input[i..].starts_with("xai-") {
+            out.push_str("xai-[REDACTED]");
             i = skip_secret_key(input, i + 4);
             continue;
         }
@@ -1842,6 +1847,10 @@ mod tests {
         assert!(!groq.contains("gsk_live_secret"), "{groq}");
         assert!(groq.contains("gsk_[REDACTED]"), "{groq}");
         assert!(redacted.contains("sk-[REDACTED]"), "{redacted}");
+        let xai = redact_secrets("Invalid API key: xai-fake-test-key-not-real");
+        assert!(!xai.contains("xai-fake-test-key-not-real"), "{xai}");
+        assert!(!xai.contains("fake-test-key-not-real"), "{xai}");
+        assert!(xai.contains("xai-[REDACTED]"), "{xai}");
     }
 
     #[test]
@@ -2151,6 +2160,23 @@ mod tests {
         assert!(!text.contains("SECRET"), "{text}");
         assert!(!text.contains("sk-live-secret"), "{text}");
         assert!(!text.contains("live-secret"), "{text}");
+        assert!(text.matches("authentication error:").count() == 1, "{text}");
+    }
+
+    #[tokio::test]
+    async fn chat_401_redacts_xai_key_from_body() {
+        let base = spawn_http(
+            401,
+            "Unauthorized",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"Invalid API key: xai-fake-test-key-not-real"}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("401");
+        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(!text.contains("xai-fake-test-key-not-real"), "{text}");
+        assert!(!text.contains("fake-test-key-not-real"), "{text}");
+        assert!(text.contains("xai-[REDACTED]"), "{text}");
         assert!(text.matches("authentication error:").count() == 1, "{text}");
     }
 
