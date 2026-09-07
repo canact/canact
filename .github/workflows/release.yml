@@ -343,14 +343,122 @@ jobs:
             --notes-file "$RUNNER_TEMP/notes.txt" \
             artifacts/*
 
+  publish-homebrew-formula:
+    needs:
+      - plan
+      - host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PLAN: ${{ needs.plan.outputs.val }}
+      GITHUB_USER: "axo bot"
+      GITHUB_EMAIL: "admin+bot@axo.dev"
+    if: ${{ always() && !cancelled() && needs.host.result == 'success' && !github.event.repository.private && (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+          repository: canact/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: Fetch homebrew formulae
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: artifacts-*
+          path: Formula/
+          merge-multiple: true
+      - name: Commit formula files
+        run: |
+          set -euo pipefail
+          git config --global user.name "${GITHUB_USER}"
+          git config --global user.email "${GITHUB_EMAIL}"
+          for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith(".rb")] | any)'); do
+            filename=$(echo "$release" | jq '.artifacts[] | select(endswith(".rb"))' --raw-output)
+            name="${filename%.rb}"
+            version=$(echo "$release" | jq .app_version --raw-output)
+            export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+            if command -v brew >/dev/null 2>&1; then
+              brew update
+              brew style --except-cops FormulaAudit/Homepage,FormulaAudit/Desc,FormulaAuditStrict --fix "Formula/${filename}" || true
+            else
+              echo "brew not on PATH; committing formula without brew style"
+            fi
+            git add "Formula/${filename}"
+            git commit -m "${name} ${version}"
+          done
+          git push
+
+  publish-scoop-bucket:
+    needs:
+      - plan
+      - host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PLAN: ${{ needs.plan.outputs.val }}
+      GITHUB_USER: "axo bot"
+      GITHUB_EMAIL: "admin+bot@axo.dev"
+    if: ${{ always() && !cancelled() && needs.host.result == 'success' && !github.event.repository.private && (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
+      - name: Checkout canact
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: canact
+      - name: Checkout scoop-bucket
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: canact/scoop-bucket
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          persist-credentials: true
+          path: scoop-bucket
+      - name: Fetch release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: artifacts-*
+          path: artifacts/
+          merge-multiple: true
+      - name: Update and push Scoop manifest
+        working-directory: scoop-bucket
+        run: |
+          set -euo pipefail
+          version=$(echo "$PLAN" | jq -r '.releases[0].app_version // empty')
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "PLAN had no releases[0].app_version" >&2
+            exit 1
+          fi
+          python3 ../canact/scripts/update-scoop-manifest.py \
+            --version "$version" \
+            --artifacts-dir ../artifacts \
+            --output bucket/canact.json
+          git config user.name "${GITHUB_USER}"
+          git config user.email "${GITHUB_EMAIL}"
+          git add bucket/canact.json
+          if git diff --cached --quiet; then
+            echo "Scoop manifest already at ${version}; nothing to commit"
+            exit 0
+          fi
+          git commit -m "canact ${version}"
+          git push
+
   announce:
     needs:
       - plan
       - host
+      - publish-homebrew-formula
+      - publish-scoop-bucket
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') && (needs.publish-scoop-bucket.result == 'skipped' || needs.publish-scoop-bucket.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:

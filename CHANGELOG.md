@@ -5,12 +5,17 @@ release ships. Until then, put work under Unreleased.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-07
+
+- cargo-dist GitHub Release archives for macOS, Linux, and Windows x64.
+- Shell and PowerShell installers from the GitHub Release.
+- Homebrew formula push to `canact/homebrew-tap` after those archives exist.
+- Scoop bucket rewrite in `canact/scoop-bucket` (Windows x64 zip).
 - crates.io and docs.rs README badges.
 - `llms.txt` install line: `cargo install canact --locked --features cli`.
 - OpenSSF Best Practices listing and README badge.
 - FOSSA license scan workflow and filter script.
 - cargo-fuzz targets plus a CI smoke job.
-- cargo-dist GitHub Release archives and shell/PowerShell installers.
 
 ## [0.1.0] - 2026-09-07
 

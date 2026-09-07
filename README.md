@@ -25,6 +25,25 @@ CLI:
 cargo install canact --locked --features cli
 ```
 
+Prebuilt archives ship on GitHub Releases (macOS, Linux, Windows x64).
+After `v0.1.1`:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/canact/canact/releases/latest/download/canact-installer.sh | sh
+```
+
+```bash
+brew install canact/tap/canact
+```
+
+Windows (Scoop, x64):
+
+```powershell
+scoop bucket add canact https://github.com/canact/scoop-bucket
+scoop install canact/canact
+```
+
 Library (runtime only, no CLI):
 
 ```toml

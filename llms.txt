@@ -12,7 +12,9 @@ cargo install canact --locked --features cli
 ```
 
 The `canact` binary needs `--features cli`. Default features stay empty so
-a library pin does not pull clap.
+a library pin does not pull clap. GitHub Releases also ship archives and
+a shell installer. Extra taps (`brew install canact/tap/canact`, Scoop
+`canact/scoop-bucket`) update after those zips exist.
 
 ## Docs
 

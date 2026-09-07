@@ -61,6 +61,8 @@ jobs:
       - run: cargo clippy --locked --all-targets --features runtime -- -D warnings
       - run: cargo clippy --locked --all-targets --features cli -- -D warnings
       - run: bash scripts/deny-check.sh
+      - run: python3 scripts/test_fossa_filter.py
+      - run: python3 scripts/test_update_scoop_manifest.py
 
   test:
     name: Test

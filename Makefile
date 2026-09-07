@@ -1,4 +1,4 @@
-.PHONY: help check brand python-test
+.PHONY: help check brand python-test scoop-manifest-test
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -7,8 +7,12 @@ help: ## Show this help
 brand: ## Rasterize docs/brand/canact.svg into /tmp/canact-brand
 	bash scripts/render-brand.sh
 
-python-test: ## FOSSA filter unit tests
+python-test: ## FOSSA filter and Scoop generator tests
 	python3 scripts/test_fossa_filter.py
+	python3 scripts/test_update_scoop_manifest.py
+
+scoop-manifest-test: ## Scoop manifest generator tests
+	python3 scripts/test_update_scoop_manifest.py
 
 check: ## fmt, clippy, test, deny (same as CI lint+test)
 	cargo fmt --check
@@ -20,3 +24,4 @@ check: ## fmt, clippy, test, deny (same as CI lint+test)
 	RUSTFLAGS="-D warnings" cargo test --locked --features cli
 	bash scripts/deny-check.sh
 	python3 scripts/test_fossa_filter.py
+	python3 scripts/test_update_scoop_manifest.py
