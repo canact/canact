@@ -73,3 +73,8 @@ required-features = ["cli"]
 name = "export_overlays"
 path = "examples/export_overlays.rs"
 required-features = ["cli"]
+
+# cargo-dist builds release archives with this profile.
+[profile.dist]
+inherits = "release"
+lto = "thin"
