@@ -45,6 +45,7 @@ class UpdateScoopManifestTests(unittest.TestCase):
             self.assertEqual(data["architecture"]["64bit"]["hash"], HASH_X64)
             self.assertNotIn("arm64", data["architecture"])
             self.assertIn("v$version", data["autoupdate"]["architecture"]["64bit"]["url"])
+            self.assertEqual(data["checkver"]["regex"], r"v([\d.]+)")
 
     def test_strips_v_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as td:
