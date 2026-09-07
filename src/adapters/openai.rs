@@ -1464,6 +1464,7 @@ fn end_open_tools(
 mod tests {
     use super::*;
     use crate::client::{ProbeFinish, ProbeRequest, ProbeStreamChunk, ProbeTool};
+    use crate::resolve_probe;
     use futures::StreamExt;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1643,6 +1644,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_closed_port_is_connect_abort() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        drop(listener);
+        let err = client(&format!("http://{addr}"))
+            .chat(empty_req())
+            .await
+            .expect_err("closed port");
+        match &err {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    msg.starts_with("failed to connect:"),
+                    "connect refuse must keep the abort prefix: {msg}"
+                );
+            }
+            other => panic!("expected Transient connect, got {other:?}"),
+        }
+        match resolve_probe(Err(err), "tool_calling") {
+            Err(ProbeError::Transient(msg)) => {
+                assert!(
+                    msg.starts_with("failed to connect:"),
+                    "suite must abort on live connect refuse: {msg}"
+                );
+            }
+            Ok((result, cacheable)) => {
+                panic!("connect refuse must abort, not Medium cacheable={cacheable}: {result:?}")
+            }
+            other => panic!("expected Transient abort, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn chat_401_is_auth() {
         let base = spawn_http(
             401,
@@ -1681,6 +1714,42 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("does-not-exist"), "{text}");
         assert!(!text.contains("LLM error"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn stream_chat_401_is_auth() {
+        let base = spawn_http(
+            401,
+            "Unauthorized",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"bad key"}}"#.to_vec(),
+        );
+        let first = client(&base)
+            .stream_chat(empty_req())
+            .next()
+            .await
+            .expect("item")
+            .expect_err("401");
+        assert!(matches!(first, ProbeError::Auth(_)), "{first:?}");
+    }
+
+    #[tokio::test]
+    async fn stream_chat_404_is_not_found() {
+        // Generic 404 body: a model-not-found payload would still classify
+        // as NotFound from the SSE JSON, even without ensure_success.
+        let base = spawn_http(
+            404,
+            "Not Found",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"route missing"}}"#.to_vec(),
+        );
+        let first = client(&base)
+            .stream_chat(empty_req())
+            .next()
+            .await
+            .expect("item")
+            .expect_err("404");
+        assert!(matches!(first, ProbeError::NotFound(_)), "{first:?}");
     }
 
     #[test]
@@ -2772,6 +2841,21 @@ mod tests {
         let base = spawn_http(404, "Not Found", Vec::new(), b"missing".to_vec());
         let ids = list_model_ids(&base, Some(SECRET)).await.expect("404");
         assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_models_401_is_auth() {
+        let base = spawn_http(
+            401,
+            "Unauthorized",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"bad key"}}"#.to_vec(),
+        );
+        match list_models(&base, Some(SECRET)).await {
+            Err(ProbeError::Auth(_)) => {}
+            Ok(models) => panic!("401 must stay Auth, not empty catalog: {models:?}"),
+            other => panic!("expected Auth, got {other:?}"),
+        }
     }
 
     #[test]
