@@ -378,7 +378,7 @@ jobs:
           git config --global user.email "${GITHUB_EMAIL}"
           for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith(".rb")] | any)'); do
             filename=$(echo "$release" | jq '.artifacts[] | select(endswith(".rb"))' --raw-output)
-            name=$(echo "$filename" | sed "s/\.rb$//")
+            name="${filename%.rb}"
             version=$(echo "$release" | jq .app_version --raw-output)
             export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
             if command -v brew >/dev/null 2>&1; then
