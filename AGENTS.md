@@ -11,8 +11,8 @@ Targeted probe tests:
 
 DCO: `git commit -s`
 
-Do not add GitHub topics, a repo description, README badges, or
-crates.io keywords. README stays "Not ready." until a human says launch.
+Keep GitHub About, topics, and README in sync with the launched
+product. Do not publish to crates.io until the maintainer publishes.
 
 Do not depend on `bline-llm`, `bline-types`, `bline-probe`, or other
 `bline-*` crates.

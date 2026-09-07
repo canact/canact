@@ -38,9 +38,7 @@ PR titles must be a conventional type (`feat`, `fix`, `docs`, `ci`,
 `chore`, `test`, `refactor`, `perf`, `build`, `style`, `revert`).
 The Semantic PR Title check enforces that.
 
-This repository stays quiet until a maintainer says launch. Do not
-add GitHub topics, a repo description, README badges, or a product
-pitch in the README.
+Do not publish to crates.io until the maintainer publishes.
 
 ## License
 

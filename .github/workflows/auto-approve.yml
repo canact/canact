@@ -59,8 +59,9 @@ jobs:
           set -euo pipefail
           paths=$(gh pr diff --name-only "$PR" --repo "$REPO")
           if echo "$paths" | grep -qx 'CONSTITUTION.md' \
-            || echo "$paths" | grep -qx 'scripts/assert-stealth.sh'; then
-            echo "Skip auto-merge: constitution or stealth script in diff"
+            || echo "$paths" | grep -qx 'scripts/assert-stealth.sh' \
+            || echo "$paths" | grep -qx 'scripts/assert-launch.sh'; then
+            echo "Skip auto-merge: constitution or launch-surface script in diff"
             exit 0
           fi
           gh pr merge --auto --squash "$PR" --repo "$REPO" \
