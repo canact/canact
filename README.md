@@ -34,6 +34,7 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 ```
 
 ```bash
+brew trust canact/tap
 brew install canact/tap/canact
 ```
 
