@@ -5,6 +5,15 @@
 canact is a Rust crate plus a `canact` CLI. A host that already has this
 URL should read this file, then the linked pages that match the task.
 
+## Install
+
+```bash
+cargo install canact --locked --features cli
+```
+
+The `canact` binary needs `--features cli`. Default features stay empty so
+a library pin does not pull clap.
+
 ## Docs
 
 - [README](https://github.com/canact/canact/blob/main/README.md): install, `canact probe`, library sketch

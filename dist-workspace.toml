@@ -1,0 +1,28 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.31.0"
+ci = "github"
+installers = ["shell", "powershell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+hosting = "github"
+pr-run-mode = "plan"
+allow-dirty = ["ci"]
+github-release = "host"
+install-path = "CARGO_HOME"
+install-updater = false
+
+# Current GitHub-hosted images (stable, not preview).
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+x86_64-apple-darwin = "macos-15-intel"
+x86_64-unknown-linux-gnu = "ubuntu-24.04"
+aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
+x86_64-pc-windows-msvc = "windows-2025"

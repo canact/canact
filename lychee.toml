@@ -6,4 +6,5 @@ exclude = [
   "github\\.com/.*/compare/.*v.*\\.\\.\\..*v",
   "github\\.com/.*/releases/tag/.*v\\d",
   "github\\.com/.*/security/advisories/new",
+  "app\\.fossa\\.com/api/projects/.*\\.svg",
 ]
