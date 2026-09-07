@@ -5,6 +5,7 @@ release ships. Until then, put work under Unreleased.
 
 ## [Unreleased]
 
+- Dual-licensed as MIT OR Apache-2.0 (`LICENSE` plus `LICENSE-APACHE`).
 - GitHub Release archives include Cosign `.sigstore.json` bundles and
   SLSA `.intoto.jsonl` provenance.
 

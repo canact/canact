@@ -3,7 +3,7 @@
 [![CI](https://github.com/canact/canact/actions/workflows/ci.yml/badge.svg)](https://github.com/canact/canact/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/canact?logo=rust)](https://crates.io/crates/canact)
 [![docs.rs](https://img.shields.io/docsrs/canact?logo=docs.rs)](https://docs.rs/canact)
-[![License](https://img.shields.io/github/license/canact/canact)](https://github.com/canact/canact/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/canact/canact/badge)](https://securityscorecards.dev/viewer/?uri=github.com/canact/canact)
 
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14503/badge)](https://www.bestpractices.dev/projects/14503)
@@ -117,4 +117,9 @@ Agents that only have the repo URL should start at [`llms.txt`](llms.txt).
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Licensed under either of:
+
+- MIT license ([LICENSE](LICENSE))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+
+at your option.
