@@ -5,6 +5,10 @@ release ships. Until then, put work under Unreleased.
 
 ## [Unreleased]
 
+- `canact mcp` `probe_model` picks the API key from `provider`, not from
+  whichever `*_API_KEY` is set first.
+- MCP `api_key_env` that is unset or empty names that variable in the
+  error instead of listing unused fallbacks.
 - Dual-licensed as MIT OR Apache-2.0 (`LICENSE` plus `LICENSE-APACHE`).
 - GitHub Release archives include Cosign `.sigstore.json` bundles and
   SLSA `.intoto.jsonl` provenance.

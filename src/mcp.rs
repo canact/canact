@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::{
-    ANTHROPIC_BASE_URL, CatalogPriors, HostPolicyMeta, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRunner, XAI_BASE_URL, claude_code_access_token, cloud_endpoint_requires_key,
-    default_compat_base_url, looks_cheap, provider_from_base_url, resolve_host_catalog,
+    CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
+    ProbeRunner, claude_code_access_token, cloud_endpoint_requires_key, looks_cheap,
+    provider_from_base_url, resolve_api_key_from, resolve_host_catalog,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -162,54 +162,36 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     let mut cache = ProbeCache::load(&cache_path)
         .map_err(|e| format!("failed to load cache {}: {e}", cache_path.display()))?;
 
-    let (api_key, from_openrouter, from_xai, from_anthropic) = match args
-        .get("api_key_env")
-        .and_then(Value::as_str)
-    {
-        Some(var) if !var.is_empty() => (
-            std::env::var(var).ok().filter(|s| !s.is_empty()),
-            var == "OPENROUTER_API_KEY",
-            var == "XAI_API_KEY",
-            var == "ANTHROPIC_AUTH_TOKEN" || var == "ANTHROPIC_API_KEY",
-        ),
-        _ => {
-            if let Some(key) = std::env::var("OPENAI_API_KEY")
-                .ok()
-                .filter(|s| !s.is_empty())
-            {
-                (Some(key), false, false, false)
-            } else if let Some(key) = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()) {
-                (Some(key), false, true, false)
-            } else if let Some(key) = anthropic_env_key() {
-                (Some(key), false, false, true)
-            } else if let Some(key) = std::env::var("OPENROUTER_API_KEY")
-                .ok()
-                .filter(|s| !s.is_empty())
-            {
-                (Some(key), true, false, false)
-            } else {
-                (None, false, false, false)
-            }
-        }
-    };
     let provider_given = args
         .get("provider")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
+    let api_key_env = args.get("api_key_env").and_then(Value::as_str);
+    let named_key = match api_key_env {
+        Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
+        _ => None,
+    };
+    let route = mcp_resolve_key_route(
+        api_key_env,
+        named_key,
+        std::env::var("OPENAI_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        std::env::var("OPENROUTER_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
+        anthropic_env_key(),
+        provider_given.as_deref().unwrap_or(""),
+    );
+    let api_key = route.key.clone();
     let base_url = args
         .get("base_url")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| {
-            mcp_default_base_url(
-                provider_given.as_deref().unwrap_or(""),
-                from_openrouter,
-                from_xai,
-                from_anthropic,
-            )
-        });
+        .unwrap_or_else(|| route.default_base_url(provider_given.as_deref().unwrap_or("")));
     let provider = provider_given.unwrap_or_else(|| provider_from_base_url(&base_url));
     let skip_expensive = if full {
         false
@@ -277,10 +259,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         }
     }
     if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
-        return Err(
-            "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
-                .to_owned(),
-        );
+        return Err(mcp_missing_key_error(api_key_env));
     }
     let catalog = CatalogPriors {
         advertised_context_tokens: advertised,
@@ -304,22 +283,34 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     Ok(run.host_policy_envelope())
 }
 
-fn mcp_default_base_url(
+/// Injected-key MCP route. Tests pass values so they do not race on env.
+fn mcp_resolve_key_route(
+    api_key_env: Option<&str>,
+    named_key: Option<String>,
+    openai: Option<String>,
+    openrouter: Option<String>,
+    xai: Option<String>,
+    anthropic: Option<String>,
     provider: &str,
-    from_openrouter: bool,
-    from_xai: bool,
-    from_anthropic: bool,
-) -> String {
-    let p = provider.to_ascii_lowercase();
-    if from_xai && p.is_empty() {
-        return XAI_BASE_URL.to_owned();
+) -> KeyRoute {
+    match api_key_env {
+        Some(var) if !var.is_empty() => KeyRoute {
+            key: named_key,
+            from_openrouter: var == "OPENROUTER_API_KEY",
+            from_xai: var == "XAI_API_KEY",
+            from_anthropic: var == "ANTHROPIC_AUTH_TOKEN" || var == "ANTHROPIC_API_KEY",
+        },
+        _ => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
     }
-    if from_anthropic && p.is_empty() {
-        return ANTHROPIC_BASE_URL.to_owned();
+}
+
+/// Named `api_key_env` does not fall back to OPENAI_API_KEY / XAI_API_KEY.
+fn mcp_missing_key_error(api_key_env: Option<&str>) -> String {
+    match api_key_env {
+        Some(var) if !var.is_empty() => format!("{var} is unset or empty"),
+        _ => "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
+            .to_owned(),
     }
-    let from_openrouter =
-        from_openrouter && (p.is_empty() || p == "openrouter" || p == "openrouter.ai");
-    default_compat_base_url(provider, from_openrouter)
 }
 
 fn anthropic_env_key() -> Option<String> {
@@ -455,53 +446,131 @@ fn write_message(writer: &mut impl Write, value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ANTHROPIC_BASE_URL, XAI_BASE_URL};
     use std::io::Cursor;
+
+    #[test]
+    fn mcp_openrouter_provider_uses_openrouter_key_when_xai_also_set() {
+        let route = mcp_resolve_key_route(
+            None,
+            None,
+            None,
+            Some("sk-or-env".to_owned()),
+            Some("xai-env".to_owned()),
+            None,
+            "openrouter",
+        );
+        assert_eq!(
+            route.key.as_deref(),
+            Some("sk-or-env"),
+            "MCP provider=openrouter must not send XAI_API_KEY to OpenRouter"
+        );
+        assert!(route.from_openrouter);
+        assert!(!route.from_xai);
+        assert_eq!(
+            route.default_base_url("openrouter"),
+            "https://openrouter.ai/api/v1"
+        );
+    }
+
+    #[test]
+    fn mcp_anthropic_provider_uses_anthropic_key_when_xai_also_set() {
+        let route = mcp_resolve_key_route(
+            None,
+            None,
+            None,
+            None,
+            Some("xai-env".to_owned()),
+            Some("sk-ant-env".to_owned()),
+            "anthropic",
+        );
+        assert_eq!(
+            route.key.as_deref(),
+            Some("sk-ant-env"),
+            "MCP provider=anthropic must not send XAI_API_KEY to Anthropic"
+        );
+        assert!(route.from_anthropic);
+        assert!(!route.from_xai);
+        assert_eq!(route.default_base_url("anthropic"), ANTHROPIC_BASE_URL);
+    }
+
+    #[test]
+    fn mcp_named_api_key_env_unset_names_the_var() {
+        let route = mcp_resolve_key_route(
+            Some("FOO_KEY"),
+            None,
+            Some("sk-openai".to_owned()),
+            Some("sk-or".to_owned()),
+            Some("xai-env".to_owned()),
+            Some("sk-ant".to_owned()),
+            "openai",
+        );
+        assert_eq!(
+            route.key, None,
+            "named api_key_env must not fall back to OPENAI_API_KEY / XAI_API_KEY"
+        );
+        let err = mcp_missing_key_error(Some("FOO_KEY"));
+        assert_eq!(err, "FOO_KEY is unset or empty");
+        assert!(
+            !err.contains("OPENAI_API_KEY") && !err.contains("XAI_API_KEY"),
+            "named api_key_env error must not list fallback env vars: {err}"
+        );
+    }
+
+    fn route_url(
+        provider: &str,
+        from_openrouter: bool,
+        from_xai: bool,
+        from_anthropic: bool,
+    ) -> String {
+        KeyRoute {
+            key: None,
+            from_openrouter,
+            from_xai,
+            from_anthropic,
+        }
+        .default_base_url(provider)
+    }
 
     #[test]
     fn openai_provider_stays_on_openai_when_only_openrouter_env() {
         assert_eq!(
-            mcp_default_base_url("openai", true, false, false),
+            route_url("openai", true, false, false),
             "https://api.openai.com/v1",
             "MCP provider openai must not use OpenRouter when only OPENROUTER_API_KEY is set"
         );
         assert_eq!(
-            mcp_default_base_url("api.openai.com", true, false, false),
+            route_url("api.openai.com", true, false, false),
             "https://api.openai.com/v1"
         );
         assert_eq!(
-            mcp_default_base_url("", true, false, false),
+            route_url("", true, false, false),
             "https://openrouter.ai/api/v1",
             "empty provider plus OpenRouter env must keep #116 OpenRouter default"
         );
         assert_eq!(
-            mcp_default_base_url("127.0.0.1:1234", false, false, false),
+            route_url("127.0.0.1:1234", false, false, false),
             "http://127.0.0.1:1234/v1",
             "MCP provider 127.0.0.1:1234 without base_url must stay on loopback"
         );
         assert_eq!(
-            mcp_default_base_url("localhost:11434", true, false, false),
+            route_url("localhost:11434", true, false, false),
             "http://localhost:11434/v1"
         );
+        assert_eq!(route_url("xai", false, false, false), XAI_BASE_URL);
         assert_eq!(
-            mcp_default_base_url("xai", false, false, false),
-            XAI_BASE_URL
-        );
-        assert_eq!(
-            mcp_default_base_url("", false, true, false),
+            route_url("", false, true, false),
             XAI_BASE_URL,
             "empty provider plus XAI_API_KEY must default to api.x.ai"
         );
+        assert_eq!(route_url("claude", false, false, false), ANTHROPIC_BASE_URL);
         assert_eq!(
-            mcp_default_base_url("claude", false, false, false),
-            ANTHROPIC_BASE_URL
-        );
-        assert_eq!(
-            mcp_default_base_url("", false, false, true),
+            route_url("", false, false, true),
             ANTHROPIC_BASE_URL,
             "empty provider plus ANTHROPIC_* must default to api.anthropic.com"
         );
         assert_eq!(
-            mcp_default_base_url("", false, true, true),
+            route_url("", false, true, true),
             XAI_BASE_URL,
             "empty provider plus both XAI and Anthropic keys must keep the xAI default"
         );

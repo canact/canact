@@ -4,12 +4,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    ANTHROPIC_BASE_URL, CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta,
-    OpenAiCompatClient, ProbeCache, ProbeError, ProbeRun, ProbeRunner, XAI_BASE_URL,
-    claude_code_access_token, cloud_endpoint_requires_key, default_compat_base_url,
-    is_anthropic_provider_label, is_xai_provider_label, list_model_ids, looks_cheap,
-    missing_model_message, overlay_context_tokens, provider_from_base_url, resolve_host_catalog,
-    run_mcp_stdio,
+    CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
+    ProbeError, ProbeRun, ProbeRunner, claude_code_access_token, cloud_endpoint_requires_key,
+    list_model_ids, looks_cheap, missing_model_message, overlay_context_tokens,
+    provider_from_base_url, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -145,16 +143,11 @@ fn main() -> ExitCode {
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let provider_hint = args.provider.clone().unwrap_or_default();
     let route = resolve_api_key(args.api_key.clone(), &provider_hint);
-    let api_key = route.key;
-    let base_url = args.base_url.clone().unwrap_or_else(|| {
-        if route.from_xai && provider_hint.is_empty() {
-            XAI_BASE_URL.to_owned()
-        } else if route.from_anthropic && provider_hint.is_empty() {
-            ANTHROPIC_BASE_URL.to_owned()
-        } else {
-            default_compat_base_url(&provider_hint, route.from_openrouter)
-        }
-    });
+    let api_key = route.key.clone();
+    let base_url = args
+        .base_url
+        .clone()
+        .unwrap_or_else(|| route.default_base_url(&provider_hint));
     let provider = if provider_hint.is_empty() {
         provider_from_base_url(&base_url)
     } else {
@@ -405,14 +398,7 @@ fn emit_envelope(
     }
 }
 
-struct KeyRoute {
-    key: Option<String>,
-    from_openrouter: bool,
-    from_xai: bool,
-    from_anthropic: bool,
-}
-
-fn resolve_api_key(cli: Option<String>, provider: &str) -> KeyRoute {
+fn resolve_api_key(cli: Option<String>, provider: &str) -> canact::KeyRoute {
     let anthropic = std::env::var("ANTHROPIC_AUTH_TOKEN")
         .ok()
         .filter(|s| !s.is_empty())
@@ -434,81 +420,6 @@ fn resolve_api_key(cli: Option<String>, provider: &str) -> KeyRoute {
         anthropic,
         provider,
     )
-}
-
-fn openrouter_default_ok(provider: &str) -> bool {
-    let p = provider.to_ascii_lowercase();
-    p.is_empty() || p == "openrouter" || p == "openrouter.ai"
-}
-
-fn xai_default_ok(provider: &str) -> bool {
-    provider.is_empty() || is_xai_provider_label(provider)
-}
-
-fn anthropic_default_ok(provider: &str) -> bool {
-    provider.is_empty() || is_anthropic_provider_label(provider)
-}
-
-fn resolve_api_key_from(
-    cli: Option<String>,
-    openai: Option<String>,
-    openrouter: Option<String>,
-    xai: Option<String>,
-    anthropic: Option<String>,
-    provider: &str,
-) -> KeyRoute {
-    let from_openrouter =
-        openrouter.is_some() && openai.is_none() && openrouter_default_ok(provider);
-    let from_xai = xai.is_some() && openai.is_none() && xai_default_ok(provider);
-    let from_anthropic = anthropic.is_some() && openai.is_none() && anthropic_default_ok(provider);
-    if let Some(key) = cli {
-        if !key.is_empty() {
-            return KeyRoute {
-                key: Some(key),
-                from_openrouter,
-                from_xai: from_xai && !from_openrouter,
-                from_anthropic: from_anthropic && !from_openrouter && !from_xai,
-            };
-        }
-    }
-    if let Some(key) = openai {
-        return KeyRoute {
-            key: Some(key),
-            from_openrouter: false,
-            from_xai: false,
-            from_anthropic: false,
-        };
-    }
-    if from_xai {
-        return KeyRoute {
-            key: xai,
-            from_openrouter: false,
-            from_xai: true,
-            from_anthropic: false,
-        };
-    }
-    if from_anthropic {
-        return KeyRoute {
-            key: anthropic,
-            from_openrouter: false,
-            from_xai: false,
-            from_anthropic: true,
-        };
-    }
-    if let Some(key) = openrouter {
-        return KeyRoute {
-            key: Some(key),
-            from_openrouter,
-            from_xai: false,
-            from_anthropic: false,
-        };
-    }
-    KeyRoute {
-        key: None,
-        from_openrouter: false,
-        from_xai: false,
-        from_anthropic: false,
-    }
 }
 
 async fn resolve_model(
@@ -591,8 +502,8 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_tilde, resolve_api_key_from};
-    use canact::looks_cheap;
+    use super::expand_tilde;
+    use canact::{looks_cheap, resolve_api_key_from};
     use std::path::PathBuf;
 
     #[test]
