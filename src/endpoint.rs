@@ -76,6 +76,114 @@ pub fn is_ollama_compat_base(base_url: &str) -> bool {
     loopback && hostport.ends_with(":11434")
 }
 
+/// Which probe key to send and which default host flags it implies.
+///
+/// `key` is never logged. Do not `#[derive(Debug)]`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct KeyRoute {
+    /// Bearer token after CLI flag / env resolution. Never log this.
+    pub key: Option<String>,
+    /// True when the OpenRouter env key selected the default host.
+    pub from_openrouter: bool,
+    /// True when `XAI_API_KEY` selected the default host.
+    pub from_xai: bool,
+    /// True when an Anthropic env key selected the default host.
+    pub from_anthropic: bool,
+}
+
+impl KeyRoute {
+    /// Default OpenAI-compat base URL for this route when `--base-url` is omitted.
+    pub fn default_base_url(&self, provider: &str) -> String {
+        if self.from_xai && provider.is_empty() {
+            XAI_BASE_URL.to_owned()
+        } else if self.from_anthropic && provider.is_empty() {
+            ANTHROPIC_BASE_URL.to_owned()
+        } else {
+            let from_openrouter = self.from_openrouter && openrouter_default_ok(provider);
+            default_compat_base_url(provider, from_openrouter)
+        }
+    }
+}
+
+fn openrouter_default_ok(provider: &str) -> bool {
+    let p = provider.to_ascii_lowercase();
+    p.is_empty() || p == "openrouter" || p == "openrouter.ai"
+}
+
+fn xai_default_ok(provider: &str) -> bool {
+    provider.is_empty() || is_xai_provider_label(provider)
+}
+
+fn anthropic_default_ok(provider: &str) -> bool {
+    provider.is_empty() || is_anthropic_provider_label(provider)
+}
+
+/// Pick a key and host flags from injected values. Parse `provider` first.
+///
+/// Callers read env vars (or MCP `api_key_env`) and pass the values in.
+/// Tests inject keys so they do not race on process-global env.
+pub fn resolve_api_key_from(
+    cli: Option<String>,
+    openai: Option<String>,
+    openrouter: Option<String>,
+    xai: Option<String>,
+    anthropic: Option<String>,
+    provider: &str,
+) -> KeyRoute {
+    let from_openrouter =
+        openrouter.is_some() && openai.is_none() && openrouter_default_ok(provider);
+    let from_xai = xai.is_some() && openai.is_none() && xai_default_ok(provider);
+    let from_anthropic = anthropic.is_some() && openai.is_none() && anthropic_default_ok(provider);
+    if let Some(key) = cli {
+        if !key.is_empty() {
+            return KeyRoute {
+                key: Some(key),
+                from_openrouter,
+                from_xai: from_xai && !from_openrouter,
+                from_anthropic: from_anthropic && !from_openrouter && !from_xai,
+            };
+        }
+    }
+    if let Some(key) = openai {
+        return KeyRoute {
+            key: Some(key),
+            from_openrouter: false,
+            from_xai: false,
+            from_anthropic: false,
+        };
+    }
+    if from_xai {
+        return KeyRoute {
+            key: xai,
+            from_openrouter: false,
+            from_xai: true,
+            from_anthropic: false,
+        };
+    }
+    if from_anthropic {
+        return KeyRoute {
+            key: anthropic,
+            from_openrouter: false,
+            from_xai: false,
+            from_anthropic: true,
+        };
+    }
+    if let Some(key) = openrouter {
+        return KeyRoute {
+            key: Some(key),
+            from_openrouter,
+            from_xai: false,
+            from_anthropic: false,
+        };
+    }
+    KeyRoute {
+        key: None,
+        from_openrouter: false,
+        from_xai: false,
+        from_anthropic: false,
+    }
+}
+
 /// Cloud hosts that must not be called without an API key.
 pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
     let host = url_host_hint(base_url);
@@ -181,6 +289,53 @@ fn host_without_port(hostport: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openrouter_provider_uses_openrouter_key_when_xai_also_set() {
+        let route = resolve_api_key_from(
+            None,
+            None,
+            Some("sk-or-env".to_owned()),
+            Some("xai-env".to_owned()),
+            None,
+            "openrouter",
+        );
+        assert_eq!(route.key.as_deref(), Some("sk-or-env"));
+        assert!(route.from_openrouter);
+        assert!(!route.from_xai);
+        assert_eq!(
+            route.default_base_url("openrouter"),
+            "https://openrouter.ai/api/v1"
+        );
+    }
+
+    #[test]
+    fn anthropic_provider_uses_anthropic_key_when_xai_also_set() {
+        let route = resolve_api_key_from(
+            None,
+            None,
+            None,
+            Some("xai-env".to_owned()),
+            Some("sk-ant-env".to_owned()),
+            "anthropic",
+        );
+        assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
+        assert!(route.from_anthropic);
+        assert!(!route.from_xai);
+        assert_eq!(route.default_base_url("anthropic"), ANTHROPIC_BASE_URL);
+        let xai_only = resolve_api_key_from(
+            None,
+            None,
+            None,
+            Some("xai-env".to_owned()),
+            None,
+            "anthropic",
+        );
+        assert!(
+            xai_only.key.is_none(),
+            "provider=anthropic must not reuse XAI_API_KEY"
+        );
+    }
 
     #[test]
     fn ollama_defaults_to_loopback_not_openai() {
