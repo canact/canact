@@ -66,7 +66,7 @@ def build_manifest(version: str, hash_x64: str) -> dict:
         "checkver": {
             "url": "https://api.github.com/repos/canact/canact/releases/latest",
             "jsonpath": "$.tag_name",
-            "regex": r"v([\\d.]+)",
+            "regex": r"v([\d.]+)",
         },
         "autoupdate": {
             "architecture": {
