@@ -5,6 +5,9 @@ release ships. Until then, put work under Unreleased.
 
 ## [Unreleased]
 
+- GitHub Release archives include Cosign `.sigstore.json` bundles and
+  SLSA `.intoto.jsonl` provenance.
+
 ## [0.1.1] - 2026-09-07
 
 - cargo-dist GitHub Release archives for macOS, Linux, and Windows x64.
