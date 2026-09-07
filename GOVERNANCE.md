@@ -10,8 +10,9 @@ Decisions are made by the maintainer. Open a GitHub issue before a
 large change. Small, tested fixes can go straight to a pull request.
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Releases are maintainer-only. There is no crates.io publish until the
-maintainer says launch.
+Releases are maintainer-only. crates.io publish is a human step.
+cargo-dist builds GitHub Release archives and does not publish the
+crate.
 
 Security reports go through [SECURITY.md](SECURITY.md), not a public
 issue. Conduct is in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
