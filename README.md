@@ -14,21 +14,20 @@ template, and this tool schema, then writes host policy.
 
 ## Install
 
-No crates.io package yet (`publish = false`). Build from git:
+CLI:
 
 ```bash
-git clone https://github.com/canact/canact.git
-cd canact
-cargo install --path . --locked --features cli
+cargo install canact --locked --features cli
 ```
 
-Library pin (runtime only, no CLI):
+Library (runtime only, no CLI):
 
 ```toml
-canact = { git = "https://github.com/canact/canact", default-features = false, features = ["runtime"] }
+canact = { version = "0.1", default-features = false, features = ["runtime"] }
 ```
 
-MSRV is Rust 1.85.
+Default features are empty so a host pin does not pull clap. MSRV is
+Rust 1.85.
 
 ## Getting started
 

@@ -1,9 +1,9 @@
 # Roadmap
 
 Near term: keep README, `llms.txt`, and GitHub About aligned with the
-crate. First crates.io publish is a separate human gate.
+crate on crates.io.
 
-Medium term: a first crates.io release when the maintainer publishes.
+Medium term: follow-up crate versions as host-policy fields change.
 
 Longer term: follow open issues labeled
 [good first issue](https://github.com/canact/canact/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
