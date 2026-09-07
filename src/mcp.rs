@@ -224,6 +224,9 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             }
         }
     }
+    if mcp_refuse_cloud_without_key(api_key.as_deref(), &base_url) {
+        return Err(mcp_missing_key_error(api_key_env));
+    }
     let hints = resolve_host_catalog(
         advertised,
         vision_flag,
@@ -257,9 +260,6 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
                 }));
             }
         }
-    }
-    if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
-        return Err(mcp_missing_key_error(api_key_env));
     }
     let catalog = CatalogPriors {
         advertised_context_tokens: advertised,
@@ -302,6 +302,11 @@ fn mcp_resolve_key_route(
         },
         _ => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
     }
+}
+
+/// True when MCP must skip catalog HTTP and error: cloud host, no key.
+fn mcp_refuse_cloud_without_key(api_key: Option<&str>, base_url: &str) -> bool {
+    api_key.is_none() && cloud_endpoint_requires_key(base_url)
 }
 
 /// Named `api_key_env` does not fall back to OPENAI_API_KEY / XAI_API_KEY.
@@ -492,6 +497,27 @@ mod tests {
         assert!(route.from_anthropic);
         assert!(!route.from_xai);
         assert_eq!(route.default_base_url("anthropic"), ANTHROPIC_BASE_URL);
+    }
+
+    #[test]
+    fn mcp_refuse_cloud_without_key_matches_cli_gate() {
+        assert!(mcp_refuse_cloud_without_key(
+            None,
+            "https://api.openai.com/v1"
+        ));
+        assert!(mcp_refuse_cloud_without_key(None, "https://api.x.ai/v1"));
+        assert!(mcp_refuse_cloud_without_key(
+            None,
+            "https://api.anthropic.com/v1"
+        ));
+        assert!(!mcp_refuse_cloud_without_key(
+            None,
+            "http://127.0.0.1:11434/v1"
+        ));
+        assert!(!mcp_refuse_cloud_without_key(
+            Some("sk"),
+            "https://api.openai.com/v1"
+        ));
     }
 
     #[test]
