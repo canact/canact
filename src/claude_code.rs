@@ -367,15 +367,28 @@ async fn refresh_access_token_async(
         "refresh_token": refresh_token,
         "client_id": CLAUDE_CODE_CLIENT_ID,
     });
-    let resp = client.post(primary).json(&body).send().await.ok()?;
-    let resp = if resp.status() == reqwest::StatusCode::NOT_FOUND {
+    let primary_result = client.post(primary).json(&body).send().await;
+    if let Err(err) = &primary_result {
+        warn!(error = %err, "Claude Code refresh primary request failed");
+    }
+    let try_fallback = match &primary_result {
+        Ok(resp) => resp.status() == reqwest::StatusCode::NOT_FOUND,
+        Err(_) => true,
+    };
+    let resp = if try_fallback {
         if let Some(fb) = fallback {
-            client.post(fb).json(&body).send().await.ok()?
+            match client.post(fb).json(&body).send().await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    warn!(error = %err, "Claude Code refresh fallback request failed");
+                    return None;
+                }
+            }
         } else {
-            resp
+            primary_result.ok()?
         }
     } else {
-        resp
+        primary_result.ok()?
     };
     if !resp.status().is_success() {
         return None;
@@ -771,6 +784,58 @@ mod tests {
             parsed.refresh_token.as_deref(),
             Some("rt-old"),
             "missing refresh_token in response keeps stored refresh"
+        );
+    }
+
+    #[test]
+    fn expired_file_refresh_falls_back_on_connect_refuse() {
+        let _guard = ClaudeCodeKeychainIsolation::hold();
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("creds.json");
+        std::fs::write(
+            &path,
+            r#"{"accessToken":"sk-ant-oat01-old","refreshToken":"rt-old","expiresAt":1}"#,
+        )
+        .expect("write");
+        let primary = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            drop(listener);
+            format!("http://{addr}/v1/oauth/token")
+        };
+        let (fallback, seen_fallback) = spawn_refresh_seq(vec![(
+            200,
+            r#"{"access_token":"sk-ant-oat01-fallback","expires_in":3600}"#,
+        )]);
+        let fallback_host = fallback
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("fallback host")
+            .to_owned();
+        let _urls = TokenUrlOverride::set(primary, Some(fallback));
+        assert_eq!(
+            load_from_file(&path).as_deref(),
+            Some("sk-ant-oat01-fallback")
+        );
+        let fallback_reqs = seen_fallback.lock().expect("seen");
+        assert_eq!(
+            fallback_reqs.len(),
+            1,
+            "fallback must get one POST, got: {fallback_reqs:?}"
+        );
+        assert!(
+            fallback_reqs[0].contains("POST /v1/oauth/token")
+                && fallback_reqs[0]
+                    .to_ascii_lowercase()
+                    .contains(&fallback_host.to_ascii_lowercase()),
+            "fallback POST must hit {fallback_host}, got: {}",
+            fallback_reqs[0]
+        );
+        assert!(
+            fallback_reqs[0].contains("\"grant_type\":\"refresh_token\""),
+            "fallback must receive grant_type=refresh_token, got: {}",
+            fallback_reqs[0]
         );
     }
 

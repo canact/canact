@@ -5,6 +5,8 @@ release ships. Until then, put work under Unreleased.
 
 ## [Unreleased]
 
+- MCP `probe_model` does not GET a cloud catalog without an API key.
+- Claude Code login token refresh tries the second host on connect failure as well as HTTP 404.
 - HTTP error bodies redact `xai-` keys the same way as `sk-` / `gsk_`.
 - `canact mcp` `probe_model` picks the API key from `provider`, not from
   whichever `*_API_KEY` is set first.
