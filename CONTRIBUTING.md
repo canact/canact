@@ -42,7 +42,8 @@ Do not publish to crates.io until the maintainer publishes.
 
 ## License
 
-This project is licensed under Apache-2.0. See `LICENSE`.
+This project is dual-licensed under MIT or Apache-2.0. You may choose
+either. See `LICENSE` (MIT) and `LICENSE-APACHE`.
 
 ## Conduct
 

@@ -55,7 +55,7 @@ def build_manifest(version: str, hash_x64: str) -> dict:
             "XML fallback, JSON repair"
         ),
         "homepage": "https://github.com/canact/canact",
-        "license": "Apache-2.0",
+        "license": "MIT OR Apache-2.0",
         "architecture": {
             "64bit": {
                 "url": f"{base}/{X64_ZIP}",
