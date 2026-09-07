@@ -709,24 +709,60 @@ mod tests {
             r#"{"accessToken":"sk-ant-oat01-old","refreshToken":"rt-old","expiresAt":1}"#,
         )
         .expect("write");
-        let (url, seen) = spawn_refresh_seq(vec![
-            (404, r#"{"error":"not_found"}"#),
-            (
-                200,
-                r#"{"access_token":"sk-ant-oat01-fallback","expires_in":3600}"#,
-            ),
-        ]);
-        let _urls = TokenUrlOverride::set(url.clone(), Some(url));
+        let (primary, seen_primary) = spawn_refresh_seq(vec![(404, r#"{"error":"not_found"}"#)]);
+        let (fallback, seen_fallback) = spawn_refresh_seq(vec![(
+            200,
+            r#"{"access_token":"sk-ant-oat01-fallback","expires_in":3600}"#,
+        )]);
+        let primary_host = primary
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("primary host")
+            .to_owned();
+        let fallback_host = fallback
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("fallback host")
+            .to_owned();
+        let _urls = TokenUrlOverride::set(primary, Some(fallback));
         assert_eq!(
             load_from_file(&path).as_deref(),
             Some("sk-ant-oat01-fallback")
         );
-        let seen = seen.lock().expect("seen");
-        assert_eq!(seen.len(), 2, "primary 404 then fallback, got: {seen:?}");
+        let primary_reqs = seen_primary.lock().expect("seen");
+        let fallback_reqs = seen_fallback.lock().expect("seen");
+        assert_eq!(
+            primary_reqs.len(),
+            1,
+            "primary must get one POST, got: {primary_reqs:?}"
+        );
+        assert_eq!(
+            fallback_reqs.len(),
+            1,
+            "fallback must get one POST, got: {fallback_reqs:?}"
+        );
         assert!(
-            seen[1].contains("\"grant_type\":\"refresh_token\""),
+            primary_reqs[0].contains("POST /v1/oauth/token")
+                && primary_reqs[0]
+                    .to_ascii_lowercase()
+                    .contains(&primary_host.to_ascii_lowercase()),
+            "primary POST must hit {primary_host}, got: {}",
+            primary_reqs[0]
+        );
+        assert!(
+            fallback_reqs[0].contains("POST /v1/oauth/token")
+                && fallback_reqs[0]
+                    .to_ascii_lowercase()
+                    .contains(&fallback_host.to_ascii_lowercase()),
+            "fallback POST must hit {fallback_host}, got: {}",
+            fallback_reqs[0]
+        );
+        assert!(
+            fallback_reqs[0].contains("\"grant_type\":\"refresh_token\""),
             "fallback must receive grant_type=refresh_token, got: {}",
-            seen[1]
+            fallback_reqs[0]
         );
         let written = std::fs::read_to_string(&path).expect("reread");
         let parsed = parse_creds_from_json(&written).expect("parse written");

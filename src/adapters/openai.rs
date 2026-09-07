@@ -2525,10 +2525,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(args.len(), 2, "{chunks:?}");
-        assert!(args[0].contains('a'), "{args:?}");
-        assert!(args[1].contains('b'), "{args:?}");
-        assert!(!args[0].contains('b'), "{args:?}");
+        assert_eq!(args, vec![r#"{"p":"a"}"#, r#"{"p":"b"}"#]);
         let ends = chunks
             .iter()
             .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
@@ -3138,10 +3135,15 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_host_catalog_skips_http_when_both_flags_set() {
-        let base = spawn_http(500, "ERR", Vec::new(), b"nope".to_vec());
+        let (base, seen) = spawn_http_seq_record(vec![(500, "ERR", Vec::new(), b"nope".to_vec())]);
         let hints = resolve_host_catalog(Some(8192), Some(false), &base, Some(SECRET), "x").await;
         assert_eq!(hints.advertised_context_tokens, Some(8192));
         assert_eq!(hints.supports_vision, Some(false));
+        let seen = seen.lock().expect("seen");
+        assert!(
+            seen.is_empty(),
+            "both flags set must skip catalog HTTP, got {seen:?}"
+        );
     }
 
     #[tokio::test]
