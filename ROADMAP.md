@@ -1,7 +1,8 @@
 # Roadmap
 
 Near term: keep README, `llms.txt`, and GitHub About aligned with the
-crate on crates.io.
+crate on crates.io. Install remains `cargo install canact --locked
+--features cli`. Binary archives come from cargo-dist GitHub Releases.
 
 Medium term: follow-up crate versions as host-policy fields change.
 

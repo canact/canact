@@ -1,8 +1,13 @@
 # canact
 
 [![CI](https://github.com/canact/canact/actions/workflows/ci.yml/badge.svg)](https://github.com/canact/canact/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/canact?logo=rust)](https://crates.io/crates/canact)
+[![docs.rs](https://img.shields.io/docsrs/canact?logo=docs.rs)](https://docs.rs/canact)
 [![License](https://img.shields.io/github/license/canact/canact)](https://github.com/canact/canact/blob/main/LICENSE)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/canact/canact/badge)](https://securityscorecards.dev/viewer/?uri=github.com/canact/canact)
+
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14503/badge)](https://www.bestpractices.dev/projects/14503)
+[![FOSSA](https://github.com/canact/canact/actions/workflows/fossa.yml/badge.svg)](https://github.com/canact/canact/actions/workflows/fossa.yml)
 
 Probe an LLM against this host's tools and return a capability card the
 host can use: how many tools to send, which edit format to pick, whether

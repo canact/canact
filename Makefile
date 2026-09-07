@@ -1,4 +1,4 @@
-.PHONY: help check brand
+.PHONY: help check brand python-test
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -6,6 +6,9 @@ help: ## Show this help
 
 brand: ## Rasterize docs/brand/canact.svg into /tmp/canact-brand
 	bash scripts/render-brand.sh
+
+python-test: ## FOSSA filter unit tests
+	python3 scripts/test_fossa_filter.py
 
 check: ## fmt, clippy, test, deny (same as CI lint+test)
 	cargo fmt --check
@@ -16,3 +19,4 @@ check: ## fmt, clippy, test, deny (same as CI lint+test)
 	RUSTFLAGS="-D warnings" cargo test --locked --features runtime
 	RUSTFLAGS="-D warnings" cargo test --locked --features cli
 	bash scripts/deny-check.sh
+	python3 scripts/test_fossa_filter.py
