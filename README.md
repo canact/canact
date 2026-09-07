@@ -1,3 +1,96 @@
 # canact
 
-Not ready.
+[![CI](https://github.com/canact/canact/actions/workflows/ci.yml/badge.svg)](https://github.com/canact/canact/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/canact/canact)](https://github.com/canact/canact/blob/main/LICENSE)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/canact/canact/badge)](https://securityscorecards.dev/viewer/?uri=github.com/canact/canact)
+
+Probe an LLM against this host's tools and return a capability card the
+host can use: how many tools to send, which edit format to pick, whether
+to enable XML fallback, and whether to wrap JSON in a repair layer.
+
+Catalog flags (`supports_function_calling: true`, `context: 128k`) are
+priors. canact spends seconds of real prompts on this model, this
+template, and this tool schema, then writes host policy.
+
+## Install
+
+No crates.io package yet (`publish = false`). Build from git:
+
+```bash
+git clone https://github.com/canact/canact.git
+cd canact
+cargo install --path . --locked --features cli
+```
+
+Library pin (runtime only, no CLI):
+
+```toml
+canact = { git = "https://github.com/canact/canact", default-features = false, features = ["runtime"] }
+```
+
+MSRV is Rust 1.85.
+
+## Getting started
+
+```bash
+canact probe --provider ollama --model llama3.2:3b --cheap --json
+```
+
+Cloud hosts need a key before any HTTP call (`OPENAI_API_KEY`,
+`OPENROUTER_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
+`--api-key`). Auth, a missing model, and connect failures abort the
+suite. Timeouts and 429/5xx stay session-local and are not cached.
+
+`--json` prints the host-policy envelope. That object is not the
+on-disk cache. The cache is `probes.json` (30-day TTL, keyed by
+model, provider, effort, and suite version). `fromCache` is true
+only on a cache hit. `cacheable` means the result may be stored
+for 30 days.
+
+Dry runs that do not call a model live in [`examples/`](examples/).
+
+```bash
+cargo run --locked --example host_policy
+cargo run --locked --features cli --example export_overlays -- /tmp/canact-overlays
+```
+
+After a cached probe:
+
+```bash
+canact export --aider --model llama3.2:3b --provider ollama --dir /tmp/overlays
+```
+
+## Library
+
+Hosts implement `ProbeClient` and run `ProbeRunner`:
+
+```rust
+use canact::{ProbeClient, ProbeError, ProbeRunner};
+
+async fn card(client: impl ProbeClient) -> Result<canact::CapabilityProfile, ProbeError> {
+    ProbeRunner::new_throttled(client).run().await
+}
+```
+
+Then read `max_tools()`, `best_edit_format()`, `needs_xml_fallback()`,
+and `needs_json_repair()` on the profile. `ProbeError::Auth` aborts
+the suite. Do not persist a Transient run. `ProbeCache` writes the
+on-disk `probes.json` file.
+
+## Host policy
+
+| Field | Meaning |
+|-------|---------|
+| `maxTools` | Strong tool selection: no cap. Medium: 20. Weak: 10. |
+| `probeLadderEditFormat` | Search/replace, unified diff, or whole file |
+| `needsXmlFallback` | Native tools were Weak |
+| `needsJsonRepair` | Completed JSON score is Medium or weaker |
+| `recommendedContextTokens` | `min(advertised, measured)`. Advertised alone is never used. |
+| `cacheable` | Safe to persist for 30 days |
+| `fromCache` | This print came from disk |
+
+Agents that only have the repo URL should start at [`llms.txt`](llms.txt).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

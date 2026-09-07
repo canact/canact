@@ -13,5 +13,5 @@ Immutable. Amending this file is a human-visible change
 5. Host policy output required (`max_tools`, edit ladder, XML fallback).
 6. Do not extract `env_probe`.
 7. Do not pitch Claude Pro / oat reuse.
-8. Do not publish crates.io until launch.
+8. Do not publish crates.io until the maintainer publishes.
 9. Amending this constitution is a human-visible change.

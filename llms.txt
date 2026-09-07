@@ -1,0 +1,26 @@
+# canact
+
+> Probe an LLM and return host policy: max tools, edit format, XML fallback, JSON repair.
+
+canact is a Rust crate plus a `canact` CLI. A host that already has this
+URL should read this file, then the linked pages that match the task.
+
+## Docs
+
+- [README](https://github.com/canact/canact/blob/main/README.md): install, `canact probe`, library sketch
+- [examples](https://github.com/canact/canact/tree/main/examples): no-network host-policy JSON and Aider/Cline overlays
+- [SECURITY](https://github.com/canact/canact/blob/main/SECURITY.md): private vulnerability reports
+
+## Host contract
+
+- Library entry: `ProbeRunner::new` (paid) or `ProbeRunner::new_throttled` / `.cheap()` (free or local). Feature `runtime`. Call `run()` or `run_detailed()`. Persist only with `ProbeRun::persist` / `ProbeRunner::persist` when the run is cacheable.
+- Disk cache (`probes.json`) is `ProbeCache`: pretty JSON, 30-day TTL, key includes model, provider, effort, and `PROBE_SUITE_VERSION`. That file is not the CLI envelope.
+- CLI `canact probe --json` prints a host-policy envelope (`maxTools`, `fromCache`, `cacheable`, `recommendedContextTokens`, per-probe `status`). `fromCache` is a cache hit. `cacheable` is persist-for-30-days.
+- `maxTools` follows completed `tool_selection` only: Strong unlimited (`null`), Medium 20, Weak 10. Transient or skipped cores do not collapse overall and do not force JSON repair.
+- Auth, missing model, and connect failures abort the suite. Timeouts and 429/5xx are Transient and must not be stored as a 30-day Weak or Medium card.
+
+## Optional
+
+- [AGENTS.md](https://github.com/canact/canact/blob/main/AGENTS.md): clone-local build and DCO notes
+- [CONTRIBUTING.md](https://github.com/canact/canact/blob/main/CONTRIBUTING.md)
+- [CHANGELOG](https://github.com/canact/canact/blob/main/CHANGELOG.md)

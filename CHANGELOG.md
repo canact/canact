@@ -7,6 +7,8 @@ No crates.io package yet (`publish = false`).
 
 ## [Unreleased]
 
+- Launch README, `llms.txt`, GitHub About, and crate keywords.
+- `canact` with no subcommand prints help instead of `Not ready.`
 - Dry `examples/` for host-policy JSON and Aider/Cline overlay files.
 - Community files, DCO, and stealth-safe CI (CodeQL, Dependency Review,
   Scorecard, lychee, semantic PR titles, actionlint, zizmor, cargo-deny).

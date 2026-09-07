@@ -5,9 +5,9 @@ edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 publish = false
-description = "Reserved."
-keywords = []
-categories = []
+description = "Probe an LLM and return host policy: max tools, edit format, XML fallback, JSON repair"
+keywords = ["llm", "probe", "cli", "agents"]
+categories = ["command-line-utilities", "development-tools"]
 repository = "https://github.com/canact/canact"
 
 [dependencies]

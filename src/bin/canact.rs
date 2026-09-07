@@ -1,4 +1,4 @@
-//! canact CLI. Default (no subcommand) prints `Not ready.` and exits 0.
+//! canact CLI. No subcommand prints help.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,10 +14,15 @@ use canact::{
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "canact", version, about = "Reserved.")]
+#[command(
+    name = "canact",
+    version,
+    about = "Probe a model and print host-policy results",
+    arg_required_else_help = true
+)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Subcommand)]
@@ -119,11 +124,7 @@ struct ExportArgs {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        None => {
-            println!("Not ready.");
-            ExitCode::SUCCESS
-        }
-        Some(Command::Probe(args)) => {
+        Command::Probe(args) => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -133,11 +134,11 @@ fn main() -> ExitCode {
                 Err(code) => ExitCode::from(code),
             }
         }
-        Some(Command::Export(args)) => match run_export(args) {
+        Command::Export(args) => match run_export(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
-        Some(Command::Mcp) => ExitCode::from(run_mcp_stdio()),
+        Command::Mcp => ExitCode::from(run_mcp_stdio()),
     }
 }
 

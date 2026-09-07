@@ -1,4 +1,4 @@
-//! Not ready.
+//! Probe an LLM and return host policy (`max_tools`, edit format, XML, JSON).
 
 mod cache;
 mod endpoint;

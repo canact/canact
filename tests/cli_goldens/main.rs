@@ -29,10 +29,16 @@ fn stdout_of(args: &[&str]) -> String {
 }
 
 #[test]
-fn root_no_args_prints_not_ready() {
+fn root_no_args_prints_help() {
     let out = canact().output().expect("spawn canact");
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Not ready.");
+    assert!(!out.status.success(), "no subcommand should fail closed");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("probe"), "{text}");
+    assert!(text.contains("export"), "{text}");
 }
 
 #[test]
