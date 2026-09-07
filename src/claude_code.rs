@@ -367,22 +367,28 @@ async fn refresh_access_token_async(
         "refresh_token": refresh_token,
         "client_id": CLAUDE_CODE_CLIENT_ID,
     });
-    let resp = match client.post(primary).json(&body).send().await {
-        Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
-            if let Some(fb) = fallback {
-                client.post(fb).json(&body).send().await.ok()?
-            } else {
-                resp
+    let primary_result = client.post(primary).json(&body).send().await;
+    if let Err(err) = &primary_result {
+        warn!(error = %err, "Claude Code refresh primary request failed");
+    }
+    let try_fallback = match &primary_result {
+        Ok(resp) => resp.status() == reqwest::StatusCode::NOT_FOUND,
+        Err(_) => true,
+    };
+    let resp = if try_fallback {
+        if let Some(fb) = fallback {
+            match client.post(fb).json(&body).send().await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    warn!(error = %err, "Claude Code refresh fallback request failed");
+                    return None;
+                }
             }
+        } else {
+            primary_result.ok()?
         }
-        Ok(resp) => resp,
-        Err(_) => {
-            if let Some(fb) = fallback {
-                client.post(fb).json(&body).send().await.ok()?
-            } else {
-                return None;
-            }
-        }
+    } else {
+        primary_result.ok()?
     };
     if !resp.status().is_success() {
         return None;
