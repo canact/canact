@@ -259,10 +259,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         }
     }
     if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
-        return Err(
-            "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
-                .to_owned(),
-        );
+        return Err(mcp_missing_key_error(api_key_env));
     }
     let catalog = CatalogPriors {
         advertised_context_tokens: advertised,
@@ -304,6 +301,15 @@ fn mcp_resolve_key_route(
             from_anthropic: var == "ANTHROPIC_AUTH_TOKEN" || var == "ANTHROPIC_API_KEY",
         },
         _ => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
+    }
+}
+
+/// Named `api_key_env` does not fall back to OPENAI_API_KEY / XAI_API_KEY.
+fn mcp_missing_key_error(api_key_env: Option<&str>) -> String {
+    match api_key_env {
+        Some(var) if !var.is_empty() => format!("{var} is unset or empty"),
+        _ => "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
+            .to_owned(),
     }
 }
 
@@ -486,6 +492,29 @@ mod tests {
         assert!(route.from_anthropic);
         assert!(!route.from_xai);
         assert_eq!(route.default_base_url("anthropic"), ANTHROPIC_BASE_URL);
+    }
+
+    #[test]
+    fn mcp_named_api_key_env_unset_names_the_var() {
+        let route = mcp_resolve_key_route(
+            Some("FOO_KEY"),
+            None,
+            Some("sk-openai".to_owned()),
+            Some("sk-or".to_owned()),
+            Some("xai-env".to_owned()),
+            Some("sk-ant".to_owned()),
+            "openai",
+        );
+        assert_eq!(
+            route.key, None,
+            "named api_key_env must not fall back to OPENAI_API_KEY / XAI_API_KEY"
+        );
+        let err = mcp_missing_key_error(Some("FOO_KEY"));
+        assert_eq!(err, "FOO_KEY is unset or empty");
+        assert!(
+            !err.contains("OPENAI_API_KEY") && !err.contains("XAI_API_KEY"),
+            "named api_key_env error must not list fallback env vars: {err}"
+        );
     }
 
     fn route_url(
