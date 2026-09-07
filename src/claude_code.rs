@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+use tracing::warn;
 
 const DEFAULT_AUTH_FILE: &str = ".claude/.credentials.json";
 const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -26,6 +27,8 @@ static KEYCHAIN_DISABLES: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 thread_local! {
     static TEST_TOKEN_URLS: std::cell::RefCell<Option<(String, Option<String>)>> =
+        const { std::cell::RefCell::new(None) };
+    static LAST_PERSIST_ERROR: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -215,7 +218,11 @@ fn token_from_store(raw: &str, store: &CredStore) -> Option<String> {
         .as_deref()
         .or(parsed.refresh_token.as_deref());
     let expires_in = resp.expires_in.unwrap_or(DEFAULT_LIFETIME_SECS);
-    let _ = persist_refresh(store, raw, &resp.access_token, new_rt, expires_in);
+    if let Err(err) = persist_refresh(store, raw, &resp.access_token, new_rt, expires_in) {
+        warn!(error = %err, "failed to persist Claude Code refresh token");
+        #[cfg(test)]
+        LAST_PERSIST_ERROR.with(|c| *c.borrow_mut() = Some(err));
+    }
     Some(resp.access_token)
 }
 
@@ -225,7 +232,7 @@ fn persist_refresh(
     access_token: &str,
     refresh_token: Option<&str>,
     expires_in: u64,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     let expires_at_ms = now_plus_secs_ms(expires_in);
     match store {
         CredStore::File(path) => persist_file(
@@ -252,16 +259,37 @@ fn persist_file(
     access_token: &str,
     refresh_token: Option<&str>,
     expires_at_ms: u64,
-) -> Result<(), ()> {
+) -> Result<(), String> {
+    let shown = path.display();
     let raw = std::fs::read_to_string(path).unwrap_or_else(|_| current_raw.to_owned());
-    let mut doc: Value = serde_json::from_str(&raw).map_err(|_| ())?;
-    apply_refresh_to_json(&mut doc, access_token, refresh_token, expires_at_ms).map_err(|_| ())?;
-    let updated = serde_json::to_string_pretty(&doc).map_err(|_| ())?;
-    std::fs::write(path, updated).map_err(|_| ())?;
+    let mut doc: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("failed to parse Claude Code credentials {shown}: {e}"))?;
+    apply_refresh_to_json(&mut doc, access_token, refresh_token, expires_at_ms)
+        .map_err(|e| format!("failed to apply Claude Code refresh to {shown}: {e}"))?;
+    let updated = serde_json::to_string_pretty(&doc)
+        .map_err(|e| format!("failed to serialize Claude Code credentials {shown}: {e}"))?;
+    std::fs::write(path, updated)
+        .map_err(|e| format!("failed to write Claude Code credentials {shown}: {e}"))?;
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    restrict_persist_mode(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_persist_mode(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("failed to set mode 0600 on {}: {e}", path.display()))?;
+    let mode = std::fs::metadata(path)
+        .map_err(|e| format!("failed to read mode of {}: {e}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode != 0o600 {
+        return Err(format!(
+            "failed to set mode 0600 on {} (got {mode:#o})",
+            path.display()
+        ));
     }
     Ok(())
 }
@@ -273,14 +301,18 @@ fn persist_keychain(
     access_token: &str,
     refresh_token: Option<&str>,
     expires_at_ms: u64,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     if KEYCHAIN_DISABLES.load(Ordering::SeqCst) > 0 {
         return Ok(());
     }
-    let mut doc: Value = serde_json::from_str(current_raw).map_err(|_| ())?;
-    apply_refresh_to_json(&mut doc, access_token, refresh_token, expires_at_ms).map_err(|_| ())?;
-    let updated = serde_json::to_string(&doc).map_err(|_| ())?;
+    let mut doc: Value = serde_json::from_str(current_raw)
+        .map_err(|e| format!("failed to parse Claude Code keychain JSON: {e}"))?;
+    apply_refresh_to_json(&mut doc, access_token, refresh_token, expires_at_ms)
+        .map_err(|e| format!("failed to apply Claude Code refresh: {e}"))?;
+    let updated = serde_json::to_string(&doc)
+        .map_err(|e| format!("failed to serialize Claude Code credentials: {e}"))?;
     write_keychain_secret(account, &updated)
+        .map_err(|_| format!("failed to write Claude Code keychain item {account}"))
 }
 
 fn token_urls() -> (String, Option<String>) {
@@ -709,6 +741,7 @@ mod tests {
     #[test]
     fn write_back_failure_still_returns_new_access() {
         let _guard = ClaudeCodeKeychainIsolation::hold();
+        LAST_PERSIST_ERROR.with(|c| *c.borrow_mut() = None);
         let dir = tempfile::tempdir().expect("temp");
         let path = dir.path().join("creds.json");
         std::fs::write(
@@ -742,6 +775,76 @@ mod tests {
         assert!(
             written.contains("sk-ant-oat01-old"),
             "readonly write-back must leave the file unchanged"
+        );
+        let persist_err = LAST_PERSIST_ERROR.with(|c| c.borrow().clone());
+        let persist_err = persist_err.expect("failed persist must be visible");
+        assert!(
+            persist_err.contains(&path.display().to_string()),
+            "persist error must name the path, got: {persist_err}"
+        );
+    }
+
+    #[test]
+    fn persist_file_error_names_the_path() {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("not-a-file");
+        std::fs::create_dir(&path).expect("dir");
+        let err = persist_file(
+            &path,
+            r#"{"accessToken":"sk-ant-oat01-old"}"#,
+            "sk-ant-oat01-new",
+            Some("rt-new"),
+            99,
+        )
+        .expect_err("write to a directory must fail");
+        assert!(
+            err.contains(&path.display().to_string()),
+            "persist error must name the path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn persist_file_invalid_json_names_the_path() {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("creds.json");
+        std::fs::write(&path, "not-json").expect("write");
+        let err = persist_file(&path, "not-json", "sk-ant-oat01-new", Some("rt-new"), 99)
+            .expect_err("invalid JSON must fail persist");
+        assert!(
+            err.contains(&path.display().to_string()),
+            "persist error must name the path, got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_file_sets_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("creds.json");
+        std::fs::write(
+            &path,
+            r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","refreshToken":"rt-old"}}"#,
+        )
+        .expect("write");
+        persist_file(&path, "", "sk-ant-oat01-new", Some("rt-new"), 99).expect("persist");
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "persisted credentials must be mode 0600");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restrict_persist_mode_fails_when_path_missing() {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("missing.json");
+        let err = restrict_persist_mode(&path).expect_err("missing path cannot chmod 0600");
+        assert!(
+            err.contains(&path.display().to_string()),
+            "chmod error must name the path, got: {err}"
+        );
+        assert!(
+            err.contains("0600"),
+            "chmod error must mention mode 0600, got: {err}"
         );
     }
 
