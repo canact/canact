@@ -949,16 +949,43 @@ fn matrix_profiles_skips_stale_suite_version() {
     let mut cache = ProbeCache::default();
     let mut stale = sample_profile();
     stale.tool_calling.details = "v96".into();
-    cache.put(stale);
-    for entry in cache.profiles.values_mut() {
-        entry.probe_suite_version = PROBE_SUITE_VERSION - 1;
-    }
+    cache.put_with_settings(
+        stale,
+        "unset",
+        PROBE_SUITE_VERSION - 1,
+        DEFAULT_SKIP_EXPENSIVE,
+        DEFAULT_VISION,
+        None,
+    );
+    let rows = cache.matrix_profiles("p");
+    assert!(
+        rows.is_empty(),
+        "stale-only suite must not appear: {:?}",
+        rows.iter()
+            .map(|p| &p.tool_calling.details)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn matrix_profiles_skips_stale_full_when_current_policy_exists() {
+    let mut cache = ProbeCache::default();
+    let mut stale = sample_profile();
+    stale.tool_calling.details = "v96".into();
+    cache.put_with_settings(
+        stale,
+        "unset",
+        PROBE_SUITE_VERSION - 1,
+        false,
+        DEFAULT_VISION,
+        None,
+    );
     let mut current = sample_profile();
-    current.tool_calling.details = "v97".into();
-    cache.put(current);
+    current.tool_calling.details = "policy".into();
+    cache.put_with_suite(current, canact::SuiteTier::Policy, false, None);
     let rows = cache.matrix_profiles("p");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].tool_calling.details, "v97");
+    assert_eq!(rows[0].tool_calling.details, "policy");
 }
 
 #[test]
@@ -972,6 +999,52 @@ fn matrix_profiles_prefers_all_suite() {
     cache.put_with_suite(all, canact::SuiteTier::All, false, None);
     let rows = cache.matrix_profiles("p");
     assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].tool_calling.details, "all");
+}
+
+#[test]
+fn matrix_profiles_collapses_provider_prefixed_model_id() {
+    let mut cache = ProbeCache::default();
+    let mut policy = sample_profile();
+    policy.model_id = "qwen".into();
+    policy.provider = "localhost".into();
+    policy.tool_calling.details = "policy".into();
+    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    let mut all = sample_profile();
+    all.model_id = "localhost/qwen".into();
+    all.provider = "localhost".into();
+    all.tool_calling.details = "all".into();
+    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    let rows = cache.matrix_profiles("ollama");
+    assert_eq!(
+        rows.len(),
+        1,
+        "qwen and localhost/qwen must collapse: {:?}",
+        rows.iter().map(|p| &p.model_id).collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0].tool_calling.details, "all");
+}
+
+#[test]
+fn matrix_profiles_collapses_openrouter_vendor_prefix() {
+    let mut cache = ProbeCache::default();
+    let mut policy = sample_profile();
+    policy.model_id = "anthropic/claude-3.5-sonnet".into();
+    policy.provider = "openrouter".into();
+    policy.tool_calling.details = "policy".into();
+    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    let mut all = sample_profile();
+    all.model_id = "openrouter/anthropic/claude-3.5-sonnet".into();
+    all.provider = "openrouter".into();
+    all.tool_calling.details = "all".into();
+    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    let rows = cache.matrix_profiles("openrouter");
+    assert_eq!(
+        rows.len(),
+        1,
+        "vendor and openrouter/vendor prefixes must collapse: {:?}",
+        rows.iter().map(|p| &p.model_id).collect::<Vec<_>>()
+    );
     assert_eq!(rows[0].tool_calling.details, "all");
 }
 

@@ -13,6 +13,14 @@ use super::refuse_truncated_incomplete;
 const PROBE_IMAGE_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAIklEQVR4nGNgYGD4jwQYkAAaF7sELj\
      bFGoaQk3BJjYIhBwBFt1ykBOQgDQAAAABJRU5ErkJggg==";
 
+/// User text for [`probe_vision`].
+///
+/// Constrains the reply to two letters or NONE so an echo of the prompt
+/// cannot trip `saw_glyphs` via the word `letters`.
+const VISION_USER_TEXT: &str = "\
+Look at the image. Reply with exactly two letters if you can read \
+them, or the single word NONE if you cannot. No other words.";
+
 /// Probe whether the model can process image input (vision capability).
 ///
 /// Sends a small test image containing the text "BL" and asks the model
@@ -34,9 +42,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
             role: ProbeRole::User,
             content: ProbeContent::Parts(vec![
                 ProbeContentPart::Text {
-                    text: "Look at the image. Reply with exactly two letters if you can read \
-                           them, or the single word NONE if you cannot. No other words."
-                        .to_string(),
+                    text: VISION_USER_TEXT.to_string(),
                 },
                 ProbeContentPart::ImageBase64 {
                     media_type: "image/png".to_string(),
@@ -417,6 +423,39 @@ mod tests {
 
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[test]
+    fn vision_user_text_is_constrained_not_open_question() {
+        let prompt = VISION_USER_TEXT;
+        assert!(
+            prompt.contains("exactly two letters"),
+            "constrained prompt must require exactly two letters: {prompt}"
+        );
+        assert!(
+            prompt.contains("NONE"),
+            "constrained prompt must allow NONE: {prompt}"
+        );
+        assert!(
+            !prompt
+                .to_lowercase()
+                .contains("what text or letters appear"),
+            "must not revert to the old open question: {prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vision_constrained_prompt_echo_is_weak() {
+        let llm = MockLlm {
+            response: text_response(VISION_USER_TEXT),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Medium,
+            "constrained prompt echo must not set supportsVision: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
 
     #[tokio::test]
     async fn vision_constrained_bl_is_strong() {
