@@ -68,6 +68,18 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertNotRegex(text, r"cargo (test|nextest|clippy|fuzz)")
         self.assertIn("cancel-in-progress: false", text)
 
+    def test_publish_crates_is_tag_or_dispatch(self) -> None:
+        text = (WORKFLOWS / "publish-crates.yml").read_text(encoding="utf-8")
+        on_block = _on_block(text)
+        self.assertIn("workflow_dispatch:", on_block)
+        self.assertIn("tags:", on_block)
+        self.assertNotIn("pull_request:", on_block)
+        self.assertNotIn("branches:", on_block)
+        self.assertIn("id-token: write", text)
+        self.assertIn("crates-io-auth-action", text)
+        self.assertNotIn("CARGO_REGISTRY_TOKEN: ${{ secrets.", text)
+        self.assertNotRegex(text, r"cargo (test|nextest|clippy|fuzz)")
+
     def test_apply_release_notes_is_dispatch_only(self) -> None:
         text = (WORKFLOWS / "apply-release-notes.yml").read_text(encoding="utf-8")
         on_block = _on_block(text)

@@ -20,7 +20,8 @@ human yes. Curated GitHub Release notes are branch
 deletes the notes branch. Do not commit notes to `main`.
 
 Keep GitHub About, topics, and README in sync with the launched
-product. Do not publish to crates.io until the maintainer publishes.
+product. crates.io publish is the tag job after the release PR
+merges. Do not `cargo publish` from a laptop except to recover.
 
 Do not depend on `bline-llm`, `bline-types`, `bline-probe`, or other
 `bline-*` crates.

@@ -47,8 +47,8 @@ title is what release-please reads:
 release-please opens a `chore(main): release X.Y.Z` PR and writes
 `CHANGELOG.md`. That PR is labeled `autorelease: pending`. Do not
 auto-merge it. Merging it creates the git tag and starts cargo-dist
-(GitHub Release archives, Homebrew, Scoop). crates.io is still a
-manual `cargo publish` by the maintainer.
+(GitHub Release archives, Homebrew, Scoop) plus the crates.io
+publish job (OIDC trusted publishing, no long-lived token).
 
 Optional curated GitHub Release notes. Do not put them on `main`
 and do not open a PR for them (that would start CI). Push a

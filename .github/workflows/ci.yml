@@ -66,6 +66,8 @@ jobs:
       - run: python3 scripts/test_attach_release_signatures.py
       - run: python3 scripts/test_apply_release_notes.py
       - run: python3 scripts/test_workflow_triggers.py
+      - run: python3 scripts/test_rerun_cancelled_pr_checks.py
+      - run: python3 scripts/test_publish_crates.py
 
   test:
     name: Test

@@ -139,5 +139,5 @@ if [[ "$missing" -gt 0 ]]; then
 fi
 
 echo "DONE: ok=true missing=0"
-echo "NEXT: crates.io stays a separate human publish"
+echo "NEXT: crates.io publishes from the vX.Y.Z tag job"
 exit 0
