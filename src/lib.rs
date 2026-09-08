@@ -20,7 +20,7 @@ pub use endpoint::{
 pub use error::ProbeError;
 pub use report::missing_model_message;
 pub use types::{
-    CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
+    AgentLoop, CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
     EditFormatRecommendation, HostPolicyMeta, ProbeResult, REQUIREMENT_DIMENSION_NAMES,
     TOOL_PROBE_NAMES, classify,
 };

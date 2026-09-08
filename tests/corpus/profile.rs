@@ -667,6 +667,10 @@ fn host_policy_envelope_omits_bline_best_edit_format() {
     assert_eq!(value["canUseTools"], true);
     assert_eq!(value["needsJsonRepair"], true);
     assert_eq!(value["needsXmlFallback"], false);
+    assert_eq!(value["useStreamingForToolCalls"], true);
+    assert_eq!(value["supportsNestedToolArgs"], true);
+    assert_eq!(value["verifiedParallelToolCalls"], 5);
+    assert_eq!(value["agentLoop"], "full");
     assert!(value["probes"]["toolCalling"].is_object());
     assert_eq!(value["scoreScale"]["strongMin"], 0.8);
     assert_eq!(value["scoreScale"]["mediumMin"], 0.4);
@@ -963,6 +967,65 @@ fn host_policy_envelope_default_meta_is_cacheable_full() {
     assert!(value["advertisedContextTokens"].is_null(), "{value}");
     assert!(value["probedContextFloor"].is_null(), "{value}");
     assert!(value["recommendedContextTokens"].is_null(), "{value}");
+}
+
+#[test]
+fn plumbing_fields_are_independent_of_diagnostic_weak() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    let before = profile.host_policy_envelope();
+    profile.one_shot_tool_plan = make_probe("one_shot_tool_plan", CapabilityLevel::Weak);
+    profile.token_efficiency = make_probe("token_efficiency", CapabilityLevel::Weak);
+    profile.code_syntax = make_probe("code_syntax", CapabilityLevel::Weak);
+    let after = profile.host_policy_envelope();
+    assert_eq!(
+        after["useStreamingForToolCalls"],
+        before["useStreamingForToolCalls"]
+    );
+    assert_eq!(
+        after["supportsNestedToolArgs"],
+        before["supportsNestedToolArgs"]
+    );
+    assert_eq!(
+        after["verifiedParallelToolCalls"],
+        before["verifiedParallelToolCalls"]
+    );
+    assert_eq!(after["agentLoop"], before["agentLoop"]);
+    assert!(profile.meets(&[("nested_arguments", CapabilityLevel::Medium)]));
+    assert!(profile.meets(&[("complex_tool_calling", CapabilityLevel::Medium)]));
+}
+
+#[test]
+fn parallel_field_is_a_floor_not_a_max() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.parallel_tool_scale.score = 0.6;
+    profile.parallel_tool_scale.level = CapabilityLevel::Medium;
+    assert_eq!(profile.verified_parallel_tool_calls(), Some(3));
+    profile.parallel_tool_scale.details = "Skipped: --cheap".into();
+    assert_eq!(profile.verified_parallel_tool_calls(), None);
+}
+
+#[test]
+fn agent_loop_maps_completed_levels() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert_eq!(profile.agent_loop(), Some(canact::AgentLoop::Full));
+    profile.multi_turn_task_sequencing =
+        make_probe("multi_turn_task_sequencing", CapabilityLevel::Medium);
+    assert_eq!(profile.agent_loop(), Some(canact::AgentLoop::Assisted));
+    profile.multi_turn_task_sequencing =
+        make_probe("multi_turn_task_sequencing", CapabilityLevel::Weak);
+    assert_eq!(profile.agent_loop(), Some(canact::AgentLoop::Single));
 }
 
 #[test]

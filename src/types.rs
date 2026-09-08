@@ -81,6 +81,18 @@ pub enum EditFormatRecommendation {
     DiffFenced,
 }
 
+/// How far a host should run an agent loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentLoop {
+    /// Sequencing completed Strong: full multi-turn loop.
+    Full,
+    /// Sequencing completed Medium: host-assisted loop.
+    Assisted,
+    /// Sequencing completed Weak: single shot.
+    Single,
+}
+
 /// Capability level for a probe dimension.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -401,6 +413,33 @@ impl CapabilityProfile {
         }
     }
 
+    /// Use streaming for native tool calls (completed Medium or stronger).
+    pub fn use_streaming_for_tool_calls(&self) -> bool {
+        completed_level(&self.streaming_tool_calls) >= CapabilityLevel::Medium
+    }
+
+    /// Nested tool-argument schemas completed Medium or stronger.
+    pub fn supports_nested_tool_args(&self) -> bool {
+        completed_level(&self.nested_arguments) >= CapabilityLevel::Medium
+    }
+
+    /// Verified parallel tool-call floor ("at least N"). The probe asks for 5.
+    ///
+    /// Skipped, unprobed, and synthesized-error rows return `None`.
+    pub fn verified_parallel_tool_calls(&self) -> Option<u32> {
+        self.parallel_tool_scale.measured_level()?;
+        Some(parallel_floor_from_score(self.parallel_tool_scale.score))
+    }
+
+    /// Agent-loop recommendation from sequencing. `None` when unmeasured.
+    pub fn agent_loop(&self) -> Option<AgentLoop> {
+        match self.multi_turn_task_sequencing.measured_level()? {
+            CapabilityLevel::Strong => Some(AgentLoop::Full),
+            CapabilityLevel::Medium => Some(AgentLoop::Assisted),
+            CapabilityLevel::Weak => Some(AgentLoop::Single),
+        }
+    }
+
     /// Verified context floor: `min(advertised, measured)`.
     ///
     /// Measured is [`Self::effective_context_tokens`] or else
@@ -456,6 +495,10 @@ impl CapabilityProfile {
             "maxTools": self.max_tools(),
             "needsXmlFallback": self.needs_xml_fallback(),
             "needsJsonRepair": self.needs_json_repair(),
+            "useStreamingForToolCalls": self.use_streaming_for_tool_calls(),
+            "supportsNestedToolArgs": self.supports_nested_tool_args(),
+            "verifiedParallelToolCalls": self.verified_parallel_tool_calls(),
+            "agentLoop": self.agent_loop(),
             "effectiveContextTokens": self.effective_context_tokens,
             "probedContextFloor": self.probed_context_floor,
             "recommendedContextTokens": self.recommended_context_tokens(meta.advertised_context_tokens),
@@ -472,6 +515,22 @@ impl CapabilityProfile {
             },
             "probes": probes,
         })
+    }
+}
+
+fn parallel_floor_from_score(score: f32) -> u32 {
+    if score >= 1.0 {
+        5
+    } else if score >= 0.8 {
+        4
+    } else if score >= 0.6 {
+        3
+    } else if score >= 0.4 {
+        2
+    } else if score >= 0.2 {
+        1
+    } else {
+        0
     }
 }
 
