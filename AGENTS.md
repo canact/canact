@@ -11,6 +11,11 @@ Targeted probe tests:
 
 DCO: `git commit -s`
 
+PR titles must be conventional (`feat` / `fix` / `perf` bump a
+release; `docs` / `chore` / `test` / `ci` do not). Do not merge a
+release-please PR (`autorelease: pending`) without an explicit
+human yes.
+
 Keep GitHub About, topics, and README in sync with the launched
 product. Do not publish to crates.io until the maintainer publishes.
 

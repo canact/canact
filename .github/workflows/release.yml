@@ -43,7 +43,9 @@ concurrency:
 # If there's a prerelease-style suffix to the version, then the release(s)
 # will be marked as a prerelease.
 on:
-  pull_request:
+  # No pull_request: feature PRs already ran CI, and pr-run-mode is skip.
+  # No push to main: that would install cargo-dist on every merge.
+  # Tag push (from release-please App token) and manual dispatch only.
   push:
     tags:
       # Public crate tags only. Stealth tags (v0.1.0-stealth.N) must not
@@ -330,18 +332,27 @@ jobs:
           ANNOUNCEMENT_TITLE: "${{ fromJson(steps.host.outputs.manifest).announcement_title }}"
           ANNOUNCEMENT_BODY: "${{ fromJson(steps.host.outputs.manifest).announcement_github_body }}"
           RELEASE_COMMIT: "${{ github.sha }}"
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           echo "$ANNOUNCEMENT_BODY" > "$RUNNER_TEMP/notes.txt"
           extra=()
           if [ -n "$PRERELEASE_FLAG" ]; then
             extra+=(--prerelease)
           fi
-          gh release create "${{ needs.plan.outputs.tag }}" \
-            --target "$RELEASE_COMMIT" \
-            "${extra[@]}" \
-            --title "$ANNOUNCEMENT_TITLE" \
-            --notes-file "$RUNNER_TEMP/notes.txt" \
-            artifacts/*
+          # release-please may have already created the GitHub Release
+          # (tag plus notes) when its PR merged. Upload only in that case
+          # so cargo-dist does not replace the changelog body.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading artifacts"
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" \
+              --target "$RELEASE_COMMIT" \
+              "${extra[@]}" \
+              --title "$ANNOUNCEMENT_TITLE" \
+              --notes-file "$RUNNER_TEMP/notes.txt" \
+              artifacts/*
+          fi
 
   provenance:
     needs:

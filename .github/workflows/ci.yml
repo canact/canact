@@ -64,6 +64,7 @@ jobs:
       - run: python3 scripts/test_fossa_filter.py
       - run: python3 scripts/test_update_scoop_manifest.py
       - run: python3 scripts/test_attach_release_signatures.py
+      - run: python3 scripts/test_workflow_triggers.py
 
   test:
     name: Test
@@ -112,6 +113,11 @@ jobs:
 
   fuzz:
     name: Fuzz smoke
+    # Version-only release-please PRs already passed fuzz on the
+    # feature PR. Skip the nightly compile here.
+    if: >-
+      github.event_name != 'pull_request' ||
+      !startsWith(github.head_ref, 'release-please')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
