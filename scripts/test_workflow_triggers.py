@@ -56,6 +56,7 @@ class WorkflowTriggerTests(unittest.TestCase):
         cfg = (ROOT / "release-please-config.json").read_text(encoding="utf-8")
         self.assertIn('"release-type": "rust"', cfg)
         self.assertIn('"bump-minor-pre-major": true', cfg)
+        self.assertIn('"include-component-in-tag": false', cfg)
         self.assertNotIn("bump-patch-for-minor-pre-major", cfg)
         dist = (ROOT / "dist-workspace.toml").read_text(encoding="utf-8")
         self.assertIn('pr-run-mode = "skip"', dist)
