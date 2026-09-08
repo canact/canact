@@ -726,4 +726,27 @@ mod tests {
         let err = read_message(&mut cursor).expect_err("cap");
         assert!(err.contains("too large"), "{err}");
     }
+
+    #[test]
+    fn expand_tilde_joins_home_for_export_dir() {
+        let home = dirs::home_dir().expect("home");
+        assert_eq!(
+            expand_tilde(PathBuf::from("~/overlays")),
+            home.join("overlays")
+        );
+        assert_eq!(expand_tilde(PathBuf::from("~")), home);
+        assert_eq!(
+            expand_tilde(PathBuf::from("/tmp/overlays")),
+            PathBuf::from("/tmp/overlays")
+        );
+    }
+
+    #[test]
+    fn default_cache_path_joins_dirs_cache() {
+        let expected = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("canact")
+            .join("probes.json");
+        assert_eq!(default_cache_path(), expected);
+    }
 }

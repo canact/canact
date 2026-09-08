@@ -33,7 +33,7 @@ optional = true
 features = ["derive"]
 
 [dependencies.dirs]
-version = "6"
+version = "7"
 optional = true
 
 [dependencies.reqwest]
