@@ -8,7 +8,9 @@ on:
 
 concurrency:
   group: dco-${{ github.ref }}
-  cancel-in-progress: true
+  # Required check. Do not cancel: a double synchronize can leave
+  # the current SHA cancelled with no replacement (same class as #162).
+  cancel-in-progress: false
 
 permissions:
   contents: read

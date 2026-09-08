@@ -7,7 +7,9 @@ on:
 
 concurrency:
   group: pr-title-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Cheap status check. cancel-in-progress can drop the current SHA
+  # when release-please force-pushes twice (canact #162).
+  cancel-in-progress: false
 
 permissions:
   contents: read

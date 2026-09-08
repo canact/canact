@@ -1,0 +1,44 @@
+# Rerun a cancelled check when that SHA is still an open PR head.
+# Stops a double synchronize from leaving a red cancelled status
+# (canact #162 Semantic PR Title).
+name: Rerun cancelled PR checks
+
+on:
+  check_run:
+    types: [completed]
+  workflow_dispatch: {}
+
+concurrency:
+  group: rerun-cancelled-${{ github.event.check_run.head_sha || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    name: Rerun if cancelled
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.check_run.conclusion == 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      pull-requests: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.check_run.head_sha || github.sha }}
+      DETAILS_URL: ${{ github.event.check_run.details_url }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rerun cancelled run
+        run: bash scripts/rerun-cancelled-pr-checks.sh
