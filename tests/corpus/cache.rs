@@ -945,6 +945,37 @@ fn stale_max_tokens_compliance_grader_resets_only_that_dim() {
 }
 
 #[test]
+fn matrix_profiles_skips_stale_suite_version() {
+    let mut cache = ProbeCache::default();
+    let mut stale = sample_profile();
+    stale.tool_calling.details = "v96".into();
+    cache.put(stale);
+    for entry in cache.profiles.values_mut() {
+        entry.probe_suite_version = PROBE_SUITE_VERSION - 1;
+    }
+    let mut current = sample_profile();
+    current.tool_calling.details = "v97".into();
+    cache.put(current);
+    let rows = cache.matrix_profiles("p");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].tool_calling.details, "v97");
+}
+
+#[test]
+fn matrix_profiles_prefers_all_suite() {
+    let mut cache = ProbeCache::default();
+    let mut policy = sample_profile();
+    policy.tool_calling.details = "policy".into();
+    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    let mut all = sample_profile();
+    all.tool_calling.details = "all".into();
+    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    let rows = cache.matrix_profiles("p");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].tool_calling.details, "all");
+}
+
+#[test]
 fn suite_all_key_is_isolated_from_full() {
     let mut cache = ProbeCache::default();
     cache.put_with_suite(sample_profile(), canact::SuiteTier::All, false, None);

@@ -39,6 +39,7 @@ fn root_no_args_prints_help() {
     );
     assert!(text.contains("probe"), "{text}");
     assert!(text.contains("export"), "{text}");
+    assert!(text.contains("matrix"), "{text}");
 }
 
 #[test]
@@ -47,6 +48,7 @@ fn root_help_mentions_probe() {
     assert!(help.contains("probe"), "{help}");
     assert!(help.contains("export"), "{help}");
     assert!(help.contains("mcp"), "{help}");
+    assert!(help.contains("matrix"), "{help}");
 }
 
 #[test]
@@ -740,4 +742,67 @@ fn export_dir_file_explains_not_os_error_17() {
         !stderr.contains("os error 17"),
         "raw OS error leaked: {stderr}"
     );
+}
+
+#[test]
+fn matrix_help_lists_provider() {
+    let help = stdout_of(&["matrix", "--help"]);
+    assert!(help.contains("--provider"), "{help}");
+    assert!(help.contains("--cache"), "{help}");
+}
+
+#[test]
+fn matrix_empty_cache_fails_closed() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(stderr.contains("no cached probes"), "stderr={stderr}");
+}
+
+#[test]
+fn matrix_prints_json_without_score() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut a = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    a.model_id = "alpha".to_owned();
+    a.provider = "ollama".to_owned();
+    let mut b = cached_profile(CapabilityLevel::Weak, CapabilityLevel::Medium);
+    b.model_id = "beta".to_owned();
+    b.provider = "ollama".to_owned();
+    cache.put(a);
+    cache.put(b);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["provider"], "ollama", "{value}");
+    assert_eq!(value["rows"].as_array().unwrap().len(), 2, "{value}");
+    assert!(value.get("score").is_none(), "{value}");
+    assert!(value.get("overall").is_none(), "{value}");
+    assert_eq!(value["rows"][0]["model"], "alpha", "{value}");
+    assert_eq!(value["rows"][0]["nativeTools"], "pass", "{value}");
+    assert_eq!(value["rows"][1]["nativeTools"], "fail", "{value}");
 }

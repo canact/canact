@@ -8,8 +8,8 @@ There is no judge model.
 
 Overlays must not overwrite another host's window with the measured
 context floor. Default suite cost stays on policy fields, not every
-diagnostic. A plumbing conformance table (`canact matrix`) is optional
-later; it is not a capability leaderboard.
+diagnostic. `canact matrix` is a plumbing table (pass / degraded /
+fail) from cached probes. It is not a capability leaderboard.
 
 ## Install
 
