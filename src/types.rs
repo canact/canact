@@ -399,6 +399,7 @@ pub const POLICY_DIMENSION_NAMES: &[&str] = &[
     "streaming_tool_calls",
     "multi_turn_task_sequencing",
     "parallel_tool_scale",
+    "context_faithfulness",
 ];
 
 /// Diagnostics shown under envelope `"diagnostics"` on [`SuiteTier::All`].
@@ -407,7 +408,6 @@ pub const DIAGNOSTIC_DIMENSION_NAMES: &[&str] = &[
     "system_message_adherence",
     "code_syntax",
     "max_tokens_compliance",
-    "context_faithfulness",
     "multi_turn_memory",
 ];
 
@@ -883,13 +883,6 @@ mod recommended_context_tests {
         };
         weak.max_tokens_compliance = ProbeResult {
             name: "max_tokens_compliance".into(),
-            score: 0.0,
-            max_score: 1.0,
-            level: CapabilityLevel::Weak,
-            details: "weak diagnostic".into(),
-        };
-        weak.context_faithfulness = ProbeResult {
-            name: "context_faithfulness".into(),
             score: 0.0,
             max_score: 1.0,
             level: CapabilityLevel::Weak,

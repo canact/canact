@@ -246,6 +246,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// v97: suite cost token is policy|full|all (was cheap|full);
 ///      per-dimension grader_versions so a vision bump does not
 ///      flush tool_calling (#176 / #180).
+///      context_faithfulness grader 2: derived from ladder recall
+///      fraction; standalone probe retired (#178).
 pub const PROBE_SUITE_VERSION: u32 = 97;
 
 /// Default per-dimension grader epoch. Bump one arm in
@@ -1013,6 +1015,7 @@ fn key_knobs_match_suite(
 pub fn current_grader_version(name: &str) -> u32 {
     match name {
         "max_tokens_compliance" => 2,
+        "context_faithfulness" => 2,
         _ => DEFAULT_GRADER_VERSION,
     }
 }

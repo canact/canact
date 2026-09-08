@@ -1,7 +1,7 @@
 //! Effective context-token ladder.
 //!
-//! Separate from `context_faithfulness`. Climbs 4k / 8k / 16k and writes
-//! `CapabilityProfile.effective_context_tokens`. Stop on first fail.
+//! Climbs 4k / 8k / 16k and writes `effective_context_tokens`.
+//! Each rung reports a recall fraction; `context_faithfulness` is derived.
 //! Catalog `advertised_context_tokens` may cap the max rung; it is never
 //! stored as the measured value without a passing live rung.
 //! Mid-climb Transient/RateLimit keeps the last passing rung.
@@ -57,6 +57,8 @@ pub struct ContextLadder {
     pub tokens: Option<u32>,
     /// `Ok` when the climb finished or stopped on a recall miss.
     pub error: Result<(), ProbeError>,
+    /// Facts recalled on the last attempted rung (`0..=3`).
+    pub recall_hits: u8,
 }
 
 /// Climb the 4k/8k/16k ladder. `skip_expensive` tries 4k only.
@@ -70,6 +72,7 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
 ) -> ContextLadder {
     let advertised = llm.catalog().advertised_context_tokens;
     let mut best: Option<u32> = None;
+    let mut recall_hits = 0u8;
 
     for &rung in &RUNGS {
         if skip_expensive && rung > FIRST_RUNG {
@@ -83,7 +86,8 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
         let request = build_rung_request(llm.model_id(), rung);
         match llm.chat(request).await {
             Ok(response) => {
-                if !recalls_all_facts(&response.text) {
+                recall_hits = count_recalled_facts(&response.text);
+                if recall_hits < 3 {
                     let error = if response.finish == ProbeFinish::Length {
                         Err(ProbeError::Transient(
                             "response truncated before context recall".into(),
@@ -94,6 +98,7 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
                     return ContextLadder {
                         tokens: best,
                         error,
+                        recall_hits,
                     };
                 }
                 best = Some(rung);
@@ -102,6 +107,7 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
                 return ContextLadder {
                     tokens: best,
                     error: Err(err),
+                    recall_hits,
                 };
             }
         }
@@ -110,6 +116,7 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
     ContextLadder {
         tokens: best,
         error: Ok(()),
+        recall_hits,
     }
 }
 
@@ -132,9 +139,31 @@ fn build_rung_request(model: &str, rung: u32) -> ProbeRequest {
     }
 }
 
-fn recalls_all_facts(text: &str) -> bool {
+fn count_recalled_facts(text: &str) -> u8 {
     let lower = text.to_lowercase();
-    recalls_warehouse(&lower) && recalls_protocol(&lower) && recalls_heartbeat(&lower)
+    u8::from(recalls_warehouse(&lower))
+        + u8::from(recalls_protocol(&lower))
+        + u8::from(recalls_heartbeat(&lower))
+}
+
+#[cfg(test)]
+fn recalls_all_facts(text: &str) -> bool {
+    count_recalled_facts(text) == 3
+}
+
+/// Derived `context_faithfulness` from the last ladder rung.
+pub fn faithfulness_from_ladder(ladder: &ContextLadder) -> crate::types::ProbeResult {
+    let score = f32::from(ladder.recall_hits) / 3.0;
+    crate::types::ProbeResult {
+        name: "context_faithfulness".to_string(),
+        score,
+        max_score: 1.0,
+        level: crate::types::classify(score),
+        details: format!(
+            "{}/3 ladder facts recalled (derived from context ladder)",
+            ladder.recall_hits
+        ),
+    }
 }
 
 fn fold_marker(s: &str) -> String {
@@ -638,8 +667,34 @@ mod tests {
         let got = probe_effective_context_tokens(&llm, true).await;
         assert!(got.error.is_ok(), "{:?}", got.error);
         assert_eq!(got.tokens, Some(4096));
+        assert_eq!(got.recall_hits, 3);
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1);
         assert_is_4k(calls[0]);
+    }
+
+    #[test]
+    fn miss_is_a_recall_fraction() {
+        let two = format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n");
+        assert_eq!(count_recalled_facts(&two), 2);
+        let ladder = ContextLadder {
+            tokens: Some(4096),
+            error: Ok(()),
+            recall_hits: 2,
+        };
+        let faith = faithfulness_from_ladder(&ladder);
+        assert_eq!(faith.name, "context_faithfulness");
+        assert!((faith.score - 2.0 / 3.0).abs() < f32::EPSILON);
+        assert!(faith.details.contains("2/3"));
+    }
+
+    #[tokio::test]
+    async fn failed_4k_records_zero_hits() {
+        let llm = LadderMock::new(None, Some(4096));
+        let got = probe_effective_context_tokens(&llm, true).await;
+        assert_eq!(got.tokens, None);
+        assert_eq!(got.recall_hits, 0);
+        let faith = faithfulness_from_ladder(&got);
+        assert_eq!(faith.score, 0.0);
     }
 }

@@ -280,7 +280,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
 
         let skip_promoted = !self.suite.run_promoted_expensive();
         let skip_diag = !self.suite.run_diagnostics();
-        let (plan_r, seq_r, faith_r, mem_r) = tokio::join!(
+        let (plan_r, seq_r, mem_r) = tokio::join!(
             async { Ok(named_skip("one_shot_tool_plan", ONE_SHOT_SKIP)) },
             Self::gated_or_skip_named(
                 skip_promoted,
@@ -288,13 +288,6 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 "multi_turn_task_sequencing",
                 PROMOTED_SKIP,
                 probes::probe_multi_turn_task_sequencing(&self.client),
-            ),
-            Self::gated_or_skip_named(
-                skip_diag,
-                &sem,
-                "context_faithfulness",
-                DIAGNOSTIC_SKIP,
-                probes::probe_context_faithfulness(&self.client),
             ),
             Self::gated_or_skip_named(
                 skip_diag,
@@ -307,20 +300,17 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let one_shot_tool_plan = take_probe(&mut cacheable, plan_r, "one_shot_tool_plan")?;
         let multi_turn_task_sequencing =
             take_probe(&mut cacheable, seq_r, "multi_turn_task_sequencing")?;
-        let context_faithfulness = take_probe(&mut cacheable, faith_r, "context_faithfulness")?;
         let multi_turn_memory = take_probe(&mut cacheable, mem_r, "multi_turn_memory")?;
 
-        let ladder_tokens = {
+        let ladder = {
             let _permit = sem
                 .acquire()
                 .await
                 .map_err(|_| ProbeError::Internal("probe semaphore closed unexpectedly".into()))?;
-            take_ladder(
-                &mut cacheable,
-                probes::probe_effective_context_tokens(&self.client, self.suite.skip_expensive())
-                    .await,
-            )?
+            probes::probe_effective_context_tokens(&self.client, self.suite.skip_expensive()).await
         };
+        let context_faithfulness = probes::faithfulness_from_ladder(&ladder);
+        let ladder_tokens = take_ladder(&mut cacheable, ladder)?;
         // Cheap / auto-cheap stops after 4k. That pass is not a finished
         // 4k/8k/16k climb, so do not publish it as effectiveContextTokens.
         let effective_context_tokens = if self.suite.skip_expensive() {
