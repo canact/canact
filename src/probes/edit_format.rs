@@ -132,6 +132,21 @@ Rename the function `greet` to `welcome` and change the greeting from \
     })
 }
 
+/// System prompt for [`probe_unified_diff`].
+///
+/// Describes the format without a copyable example. A fenced card with
+/// `--- a/path/to/file.rs` and `-removed line` / `+added line` is what
+/// models echoed through suite v28–v62.
+const UNIFIED_DIFF_SYSTEM: &str = "\
+When editing files, output a unified diff. Use the standard format: \
+old-file and new-file headers, a hunk header, unchanged context, \
+and the requested deletion and insertion.
+
+Rules:
+- Include enough context lines for unambiguous placement.
+- Use one diff per file.
+- Header paths must name the file the user provided.";
+
 /// Probe whether the model can produce valid unified diff output.
 ///
 /// Sends the same small file and asks for a unified diff format rename.
@@ -141,23 +156,7 @@ Rename the function `greet` to `welcome` and change the greeting from \
 /// - `0.5` - parseable but with wrong paths or extra junk
 /// - `0.0` - not a valid unified diff
 pub async fn probe_unified_diff<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
-    let system = "\
-When editing files, output a unified diff. Use the standard format with \
-file headers and hunk markers:
-
-```diff
---- a/path/to/file.rs
-+++ b/path/to/file.rs
-@@ -10,4 +10,5 @@
- context line
--removed line
-+added line
- context line
-```
-
-Rules:
-- Include enough context lines for unambiguous placement.
-- Use one diff per file.";
+    let system = UNIFIED_DIFF_SYSTEM;
 
     let user = "\
 Here is the file `src/greet.rs`:
@@ -953,6 +952,29 @@ fn welcome(name: &str) -> String {
             "filename above SEARCH must count as the path: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[test]
+    fn unified_diff_system_has_no_echoable_format_card() {
+        let prompt = UNIFIED_DIFF_SYSTEM;
+        for token in [
+            "removed line",
+            "added line",
+            "path/to/file.rs",
+            "```diff",
+            "--- a/",
+            "+++ b/",
+            "@@ -",
+        ] {
+            assert!(
+                !prompt.contains(token),
+                "unified-diff system must not include copyable card token {token:?}: {prompt}"
+            );
+        }
+        assert!(
+            !is_unified_diff_card_echo(prompt),
+            "the system prompt itself must not match the leftover card-echo grader: {prompt}"
+        );
     }
 
     #[tokio::test]

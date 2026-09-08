@@ -903,6 +903,26 @@ fn stale_vision_grader_v1_resets_only_vision() {
 }
 
 #[test]
+fn stale_unified_diff_grader_v1_resets_only_that_dim() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    cache.put(sample_profile());
+    for entry in cache.profiles.values_mut() {
+        entry.grader_versions.insert("unified_diff".into(), 1);
+    }
+    cache.save(&path).expect("save");
+    let loaded = ProbeCache::load(&path).expect("load");
+    let got = loaded.get("m", "p").expect("hit");
+    assert_eq!(got.tool_calling.level, CapabilityLevel::Strong);
+    assert!(
+        got.unified_diff.is_unprobed_default(),
+        "{:?}",
+        got.unified_diff
+    );
+}
+
+#[test]
 fn stale_max_tokens_compliance_grader_resets_only_that_dim() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
