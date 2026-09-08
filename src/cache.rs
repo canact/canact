@@ -248,6 +248,8 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      flush tool_calling (#176 / #180).
 ///      context_faithfulness grader 2: derived from ladder recall
 ///      fraction; standalone probe retired (#178).
+///      unified_diff grader 2: no echoable format card in the
+///      prompt (#181).
 pub const PROBE_SUITE_VERSION: u32 = 97;
 
 /// Default per-dimension grader epoch. Bump one arm in
@@ -1017,6 +1019,7 @@ pub fn current_grader_version(name: &str) -> u32 {
         "max_tokens_compliance" => 2,
         "context_faithfulness" => 2,
         "vision" => 2,
+        "unified_diff" => 2,
         _ => DEFAULT_GRADER_VERSION,
     }
 }
