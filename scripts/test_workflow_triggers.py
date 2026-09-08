@@ -106,6 +106,64 @@ class WorkflowTriggerTests(unittest.TestCase):
         dist = (ROOT / "dist-workspace.toml").read_text(encoding="utf-8")
         self.assertIn('pr-run-mode = "skip"', dist)
 
+    def test_required_jobs_stay_named_on_release_please(self) -> None:
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        sec = (WORKFLOWS / "security.yml").read_text(encoding="utf-8")
+        self.assertIn("name: Lint", ci)
+        self.assertIn("name: Test", ci)
+        self.assertIn("name: CodeQL (${{ matrix.language }})", sec)
+        # Job-level skip would drop the required check name.
+        lint = ci[ci.index("name: Lint") : ci.index("name: Test")]
+        test = ci[ci.index("name: Test") : ci.index("name: Fuzz smoke")]
+        self.assertNotIn("startsWith(github.head_ref, 'release-please')", lint.split("steps:")[0])
+        self.assertNotIn("startsWith(github.head_ref, 'release-please')", test.split("steps:")[0])
+        codeql = sec[sec.index("name: CodeQL") :]
+        self.assertNotIn(
+            "startsWith(github.head_ref, 'release-please')",
+            codeql.split("steps:")[0],
+        )
+
+    def test_release_please_uses_cargo_check_not_full_matrix(self) -> None:
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("cargo check --locked --all-targets", ci)
+        self.assertGreaterEqual(ci.count("Release-please check"), 2)
+        for cmd in (
+            "cargo clippy --locked --all-targets",
+            "cargo nextest run --locked",
+            "cargo test --locked --doc",
+        ):
+            idx = ci.index(cmd)
+            window = ci[max(0, idx - 400) : idx]
+            self.assertIn("!startsWith(github.head_ref, 'release-please')", window, cmd)
+
+    def test_codeql_standin_on_release_please(self) -> None:
+        sec = (WORKFLOWS / "security.yml").read_text(encoding="utf-8")
+        self.assertIn("startsWith(github.head_ref, 'release-please')", sec)
+        for pin in (
+            "github/codeql-action/init@",
+            "github/codeql-action/analyze@",
+        ):
+            idx = sec.index(pin)
+            window = sec[max(0, idx - 400) : idx]
+            self.assertIn("!startsWith(github.head_ref, 'release-please')", window, pin)
+
+    def test_fossa_push_and_pr_share_cargo_path_filter(self) -> None:
+        on_block = _on_block((WORKFLOWS / "fossa.yml").read_text(encoding="utf-8"))
+        self.assertIn("push:", on_block)
+        self.assertIn("pull_request:", on_block)
+        self.assertIn("workflow_dispatch:", on_block)
+        push = on_block[on_block.index("push:") : on_block.index("pull_request:")]
+        pr = on_block[on_block.index("pull_request:") : on_block.index("workflow_dispatch:")]
+        for needle in (
+            "Cargo.*",
+            "src/**",
+            "scripts/fossa-filter.py",
+            "scripts/test_fossa_filter.py",
+            ".github/workflows/fossa.yml",
+        ):
+            self.assertIn(needle, push, needle)
+            self.assertIn(needle, pr, needle)
+
 
 if __name__ == "__main__":
     unittest.main()

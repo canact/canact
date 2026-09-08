@@ -3,6 +3,12 @@ name: FOSSA
 on:
   push:
     branches: [main]
+    paths:
+      - "Cargo.*"
+      - "src/**"
+      - "scripts/fossa-filter.py"
+      - "scripts/test_fossa_filter.py"
+      - ".github/workflows/fossa.yml"
   pull_request:
     paths:
       - "Cargo.*"
