@@ -43,6 +43,9 @@ pub use runner::{
     FREE_CONCURRENCY, PAID_CONCURRENCY, ProbeRun, ProbeRunner, is_unreachable_host, resolve_probe,
 };
 
+#[cfg(feature = "runtime")]
+pub use probes::{OVERSIZE_MAX_TOKENS, parse_max_output_cap};
+
 #[cfg(all(feature = "runtime", feature = "openai"))]
 mod adapters;
 #[cfg(all(feature = "runtime", feature = "openai"))]

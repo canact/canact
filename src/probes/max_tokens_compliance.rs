@@ -11,15 +11,15 @@ use super::{refuse_truncated_incomplete, user_text};
 
 /// Probe whether the model respects `max_tokens` output limits.
 ///
-/// Asks for a long numbered list with `max_tokens=40`, then checks whether
-/// the response stayed under a generous character budget. The budget is
-/// generous (800 chars) because tokens != chars, but a model that produces
-/// 5K+ chars with `max_tokens=40` is clearly not honoring the limit.
+/// Asks for a long numbered list with `max_tokens=40`. `finish=Length`
+/// means the host honored the budget. A Stop with a huge body did not.
+/// Character bands are a fallback when finish is Stop.
 ///
 /// Scoring:
-/// - `1.0` - response <= 400 characters (model respected the limit)
-/// - `0.5` - response 401-800 characters (borderline)
-/// - `0.0` - response > 800 characters (limit ignored)
+/// - `1.0` - `finish=Length` (non-empty), or Stop with <= 400 characters
+/// - `0.5` - Stop with 401-800 characters
+/// - `0.0` - empty Stop, or Stop with > 800 characters
+/// - empty `finish=Length` is Transient (not a 30-day Weak card)
 pub async fn probe_max_tokens_compliance<C: ProbeClient>(
     llm: &C,
 ) -> Result<ProbeResult, ProbeError> {
@@ -37,25 +37,30 @@ pub async fn probe_max_tokens_compliance<C: ProbeClient>(
     }
     let char_count = response.text.len();
 
-    let (score, details) = if response.text.trim().is_empty() {
+    let (score, details) = if response.finish == ProbeFinish::Length {
+        (
+            1.0,
+            format!("finish=Length after {char_count} chars with max_tokens=40 (honored)"),
+        )
+    } else if response.text.trim().is_empty() {
         (
             0.0,
             format!("Response {char_count} chars with max_tokens=40 (empty)"),
+        )
+    } else if char_count > 800 {
+        (
+            0.0,
+            format!("finish=Stop after {char_count} chars with max_tokens=40 (limit ignored)"),
         )
     } else if char_count <= 400 {
         (
             1.0,
             format!("Response {char_count} chars with max_tokens=40 (compliant)"),
         )
-    } else if char_count <= 800 {
+    } else {
         (
             0.5,
             format!("Response {char_count} chars with max_tokens=40 (borderline)"),
-        )
-    } else {
-        (
-            0.0,
-            format!("Response {char_count} chars with max_tokens=40 (limit ignored)"),
         )
     };
 
@@ -111,6 +116,17 @@ mod tests {
         };
         let result = probe_max_tokens_compliance(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn length_finish_is_compliant_even_when_long() {
+        let long = "x".repeat(2000);
+        let llm = MockLlm {
+            response: length_text_response(&long),
+        };
+        let result = probe_max_tokens_compliance(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert!(result.details.contains("Length"), "{}", result.details);
     }
 
     #[tokio::test]

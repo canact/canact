@@ -330,6 +330,14 @@ impl<C: ProbeClient> ProbeRunner<C> {
         };
         let probed_context_floor = ladder_tokens;
 
+        let max_output_tokens = {
+            let _permit = sem
+                .acquire()
+                .await
+                .map_err(|_| ProbeError::Internal("probe semaphore closed unexpectedly".into()))?;
+            take_max_output(probes::probe_max_output_tokens(&self.client).await)?
+        };
+
         let xml_tool_calling = if tool_calling.level == CapabilityLevel::Strong {
             ProbeResult {
                 name: "xml_tool_calling".to_string(),
@@ -373,6 +381,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 probed_at: unix_now(),
                 effective_context_tokens,
                 probed_context_floor,
+                max_output_tokens,
             },
             cacheable,
             skip_expensive: self.suite.skip_expensive(),
@@ -429,6 +438,15 @@ fn take_probe(
     let (probe, ok_to_cache) = resolve_probe(result, name)?;
     *cacheable &= ok_to_cache;
     Ok(probe)
+}
+
+fn take_max_output(result: Result<Option<u32>, ProbeError>) -> Result<Option<u32>, ProbeError> {
+    match result {
+        Ok(n) => Ok(n),
+        Err(err @ ProbeError::Auth(_)) | Err(err @ ProbeError::NotFound(_)) => Err(err),
+        Err(err) if is_unreachable_host(&err) => Err(err),
+        Err(_) => Ok(None),
+    }
 }
 
 fn take_ladder(

@@ -52,6 +52,7 @@ fn make_profile(
         probed_at: 1_700_000_000,
         effective_context_tokens: None,
         probed_context_floor: None,
+        max_output_tokens: None,
     }
 }
 

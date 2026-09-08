@@ -271,6 +271,9 @@ macro_rules! define_probe_dimensions {
             /// Highest passing ladder rung when the climb is incomplete (cheap 4k).
             #[serde(default, skip_serializing_if = "Option::is_none")]
             pub probed_context_floor: Option<u32>,
+            /// Measured provider output cap, in tokens. Never the input window.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub max_output_tokens: Option<u32>,
         }
 
         /// All probed dimension names, in the order they appear on the struct.
@@ -598,7 +601,7 @@ impl CapabilityProfile {
                 }
             }
         }
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "model": self.model_id,
             "provider": self.provider,
             "overall": self.overall_level(),
@@ -615,6 +618,7 @@ impl CapabilityProfile {
             "effectiveContextTokens": self.effective_context_tokens,
             "probedContextFloor": self.probed_context_floor,
             "recommendedContextTokens": self.recommended_context_tokens(meta.advertised_context_tokens),
+            "maxOutputTokens": self.max_output_tokens,
             "cacheable": meta.cacheable,
             "fromCache": meta.from_cache,
             "skipExpensive": meta.skip_expensive,
@@ -629,7 +633,13 @@ impl CapabilityProfile {
             },
             "probes": probes,
             "diagnostics": diagnostics,
-        })
+        });
+        if self.max_output_tokens.is_none() {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("maxOutputTokens");
+            }
+        }
+        value
     }
 }
 
@@ -776,6 +786,7 @@ mod recommended_context_tests {
             probed_at: 1,
             effective_context_tokens: None,
             probed_context_floor: None,
+            max_output_tokens: None,
         }
     }
 
@@ -899,5 +910,23 @@ mod recommended_context_tests {
         assert!(env["probes"].get("oneShotToolPlan").is_none(), "{env}");
         assert!(env["probes"].get("codeSyntax").is_none(), "{env}");
         assert!(env["diagnostics"].as_object().unwrap().is_empty(), "{env}");
+    }
+
+    #[test]
+    fn envelope_omits_unmeasured_max_output_tokens() {
+        let p = profile();
+        let value = p.host_policy_envelope();
+        assert!(value.get("maxOutputTokens").is_none(), "{value}");
+    }
+
+    #[test]
+    fn envelope_writes_measured_max_output_tokens() {
+        let mut p = profile();
+        p.max_output_tokens = Some(4096);
+        p.probed_context_floor = Some(16384);
+        let value = p.host_policy_envelope();
+        assert_eq!(value["maxOutputTokens"], 4096, "{value}");
+        assert_ne!(value["maxOutputTokens"], value["advertisedContextTokens"]);
+        assert_ne!(value["maxOutputTokens"], value["probedContextFloor"]);
     }
 }
