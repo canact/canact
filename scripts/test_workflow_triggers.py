@@ -47,6 +47,19 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertNotIn("pull_request:", on_block)
         self.assertNotRegex(text, r"cargo (test|nextest|clippy|fuzz)")
 
+    def test_auto_merge_skips_release_please_head(self) -> None:
+        text = (WORKFLOWS / "auto-approve.yml").read_text(encoding="utf-8")
+        self.assertIn("!startsWith(github.head_ref, 'release-please')", text)
+        self.assertIn("autorelease: pending", text)
+
+    def test_rust_release_type_is_minor_pre_major(self) -> None:
+        cfg = (ROOT / "release-please-config.json").read_text(encoding="utf-8")
+        self.assertIn('"release-type": "rust"', cfg)
+        self.assertIn('"bump-minor-pre-major": true', cfg)
+        self.assertNotIn("bump-patch-for-minor-pre-major", cfg)
+        dist = (ROOT / "dist-workspace.toml").read_text(encoding="utf-8")
+        self.assertIn('pr-run-mode = "skip"', dist)
+
 
 if __name__ == "__main__":
     unittest.main()

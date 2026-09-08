@@ -55,6 +55,7 @@ jobs:
       - name: Enable auto-merge
         if: >-
           !github.event.pull_request.draft &&
+          !startsWith(github.head_ref, 'release-please') &&
           !contains(github.event.pull_request.labels.*.name, 'autorelease: pending') &&
           github.event.pull_request.title != 'chore: amend constitution' &&
           !startsWith(github.event.pull_request.title, 'release:') &&
