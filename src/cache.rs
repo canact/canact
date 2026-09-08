@@ -397,6 +397,43 @@ impl ProbeCache {
             .map(|(key, entry)| (&entry.profile, key.split('|').nth(4) == Some("cheap")))
     }
 
+    /// Newest cheap/full row when the caller omitted catalog priors.
+    ///
+    /// Matches model, provider, suite, and cost. Vision and advertised
+    /// knobs may differ from the defaults (`novision` / `ctxnone`) so a
+    /// row stored after `GET /models` is reused without another catalog
+    /// round trip. Returns the stored advertised window from the key.
+    pub fn find_profile_unspecified_catalog(
+        &self,
+        model_id: &str,
+        provider: &str,
+        skip_expensive: bool,
+    ) -> Option<(&CapabilityProfile, bool, Option<u32>)> {
+        let want_cost = if skip_expensive { "cheap" } else { "full" };
+        self.profiles
+            .iter()
+            .filter(|(key, entry)| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == PROBE_SUITE_VERSION
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
+                    && providers_equivalent(&entry.profile.provider, provider)
+                    && key.rsplit('|').nth(2) == Some(want_cost)
+            })
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(key, entry)| {
+                (
+                    &entry.profile,
+                    key.split('|').nth(4) == Some("cheap"),
+                    key_advertised(key),
+                )
+            })
+    }
+
     /// Newest matching row for probe cache hits (cheap/full fallback).
     ///
     /// Keeps advertised isolation. Export uses [`Self::find_profile_with_cost`],

@@ -169,7 +169,25 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             } else {
                 looks_cheap(&provider, model, &base_url)
             };
-            if let Some((profile, skip_expensive)) = cached_probe(
+            if vision_catalog_flag(&args).is_none() && args.advertised_context.is_none() {
+                if let Some((profile, skip_expensive, advertised)) = cache
+                    .find_profile_unspecified_catalog(model, &provider, cheap)
+                    .map(|(p, c, a)| (p.clone(), c, a))
+                {
+                    return emit_profile(
+                        &profile,
+                        args.json,
+                        args.verbose,
+                        HostPolicyMeta {
+                            cacheable: true,
+                            from_cache: true,
+                            skip_expensive,
+                            advertised_context_tokens: advertised,
+                        },
+                    );
+                }
+            }
+            if let Some((profile, skip_expensive, advertised)) = cached_probe(
                 &cache,
                 model,
                 &provider,
@@ -186,7 +204,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                         cacheable: true,
                         from_cache: true,
                         skip_expensive,
-                        advertised_context_tokens: args.advertised_context,
+                        advertised_context_tokens: advertised,
                     },
                 );
             }
@@ -218,7 +236,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         looks_cheap(&provider, &model, &base_url)
     };
     if !args.force {
-        if let Some((profile, skip_expensive)) = cached_probe(
+        if let Some((profile, skip_expensive, advertised)) = cached_probe(
             &cache, &model, &provider, cheap, vision, advertised, args.full,
         ) {
             return emit_profile(
@@ -464,17 +482,17 @@ fn cached_probe(
     vision: bool,
     advertised: Option<u32>,
     full: bool,
-) -> Option<(CapabilityProfile, bool)> {
+) -> Option<(CapabilityProfile, bool, Option<u32>)> {
     if let Some(profile) = cache.get_with_knobs(model, provider, skip_expensive, vision, advertised)
     {
-        return Some((profile.clone(), skip_expensive));
+        return Some((profile.clone(), skip_expensive, advertised));
     }
     if full || vision {
         return None;
     }
     cache
         .find_profile_with_cost_and_advertised(model, provider, advertised)
-        .map(|(profile, cheap_row)| (profile.clone(), cheap_row))
+        .map(|(profile, cheap_row)| (profile.clone(), cheap_row, advertised))
 }
 
 fn expand_tilde(path: PathBuf) -> PathBuf {
