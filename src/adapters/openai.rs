@@ -384,6 +384,23 @@ pub async fn resolve_advertised_context(
     )
 }
 
+#[cfg(test)]
+thread_local! {
+    static CATALOG_LOOKUPS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static CATALOG_SKIP_HTTP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_catalog_lookups() -> Vec<String> {
+    CATALOG_LOOKUPS.with(|lookups| lookups.replace(Vec::new()))
+}
+
+#[cfg(test)]
+pub(crate) fn set_catalog_skip_http(skip: bool) {
+    CATALOG_SKIP_HTTP.with(|flag| flag.set(skip));
+}
+
 /// Fill advertised context and vision from the host catalog when flags
 /// are unset. Catalog errors stay `None`; `--advertised-context` and
 /// `--vision` / `--no-vision` win.
@@ -399,6 +416,16 @@ pub async fn resolve_host_catalog(
             advertised_context_tokens: advertised_flag,
             supports_vision: vision_flag,
         };
+    }
+    #[cfg(test)]
+    {
+        CATALOG_LOOKUPS.with(|lookups| lookups.borrow_mut().push(base_url.to_owned()));
+        if CATALOG_SKIP_HTTP.with(|flag| flag.get()) {
+            return HostCatalogHints {
+                advertised_context_tokens: advertised_flag,
+                supports_vision: vision_flag,
+            };
+        }
     }
     let catalog = lookup_host_catalog(base_url, api_key, model_id)
         .await

@@ -406,9 +406,9 @@ fn mcp_openai_force_without_key_is_missing_key_error() {
     let text = called["result"]["content"][0]["text"]
         .as_str()
         .expect("text");
-    assert!(
-        text.contains("api_key_env") || text.contains("OPENAI_API_KEY"),
-        "cloud host without a key must name the missing key, got: {text}"
+    assert_eq!(
+        text,
+        "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
     );
 
     drop(stdin);

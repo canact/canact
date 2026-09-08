@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
-    ProbeError, ProbeRun, ProbeRunner, claude_code_access_token, cloud_endpoint_requires_key,
-    list_model_ids, looks_cheap, missing_model_message, overlay_context_tokens,
-    provider_from_base_url, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
+    ProbeError, ProbeRun, ProbeRunner, claude_code_access_token, list_model_ids, looks_cheap,
+    missing_model_message, overlay_context_tokens, provider_from_base_url,
+    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -193,7 +193,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         }
     }
 
-    if api_key.is_none() && cloud_endpoint_requires_key(&base_url) {
+    if refuse_cloud_without_key(api_key.as_deref(), &base_url) {
         eprintln!(
             "error: set --api-key, OPENAI_API_KEY, OPENROUTER_API_KEY, XAI_API_KEY, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY (or pass --base-url for a local host)"
         );

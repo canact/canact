@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRunner, claude_code_access_token, cloud_endpoint_requires_key, looks_cheap,
-    provider_from_base_url, resolve_api_key_from, resolve_host_catalog,
+    ProbeRunner, claude_code_access_token, looks_cheap, provider_from_base_url,
+    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -141,6 +141,37 @@ fn handle_tools_call(params: &Value) -> Result<Value, String> {
 }
 
 async fn probe_model_args(args: &Value) -> Result<Value, String> {
+    let provider_given = args
+        .get("provider")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    let api_key_env = args.get("api_key_env").and_then(Value::as_str);
+    let named_key = match api_key_env {
+        Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
+        _ => None,
+    };
+    let route = mcp_resolve_key_route(
+        api_key_env,
+        named_key,
+        std::env::var("OPENAI_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        std::env::var("OPENROUTER_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
+        anthropic_env_key(),
+        provider_given,
+    );
+    probe_model_with_route(args, route, api_key_env).await
+}
+
+async fn probe_model_with_route(
+    args: &Value,
+    route: KeyRoute,
+    api_key_env: Option<&str>,
+) -> Result<Value, String> {
     let model = args
         .get("model")
         .and_then(Value::as_str)
@@ -167,24 +198,6 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let api_key_env = args.get("api_key_env").and_then(Value::as_str);
-    let named_key = match api_key_env {
-        Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
-        _ => None,
-    };
-    let route = mcp_resolve_key_route(
-        api_key_env,
-        named_key,
-        std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("OPENROUTER_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
-        anthropic_env_key(),
-        provider_given.as_deref().unwrap_or(""),
-    );
     let api_key = route.key.clone();
     let base_url = args
         .get("base_url")
@@ -224,7 +237,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             }
         }
     }
-    if mcp_refuse_cloud_without_key(api_key.as_deref(), &base_url) {
+    if refuse_cloud_without_key(api_key.as_deref(), &base_url) {
         return Err(mcp_missing_key_error(api_key_env));
     }
     let hints = resolve_host_catalog(
@@ -302,11 +315,6 @@ fn mcp_resolve_key_route(
         },
         _ => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
     }
-}
-
-/// True when MCP must skip catalog HTTP and error: cloud host, no key.
-fn mcp_refuse_cloud_without_key(api_key: Option<&str>, base_url: &str) -> bool {
-    api_key.is_none() && cloud_endpoint_requires_key(base_url)
 }
 
 /// Named `api_key_env` does not fall back to OPENAI_API_KEY / XAI_API_KEY.
@@ -499,25 +507,33 @@ mod tests {
         assert_eq!(route.default_base_url("anthropic"), ANTHROPIC_BASE_URL);
     }
 
-    #[test]
-    fn mcp_refuse_cloud_without_key_matches_cli_gate() {
-        assert!(mcp_refuse_cloud_without_key(
-            None,
-            "https://api.openai.com/v1"
-        ));
-        assert!(mcp_refuse_cloud_without_key(None, "https://api.x.ai/v1"));
-        assert!(mcp_refuse_cloud_without_key(
-            None,
-            "https://api.anthropic.com/v1"
-        ));
-        assert!(!mcp_refuse_cloud_without_key(
-            None,
-            "http://127.0.0.1:11434/v1"
-        ));
-        assert!(!mcp_refuse_cloud_without_key(
-            Some("sk"),
-            "https://api.openai.com/v1"
-        ));
+    #[tokio::test]
+    async fn mcp_force_without_key_skips_catalog_lookup() {
+        crate::adapters::openai::set_catalog_skip_http(true);
+        let _ = crate::adapters::openai::take_catalog_lookups();
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let route = KeyRoute {
+            key: None,
+            from_openrouter: false,
+            from_xai: false,
+            from_anthropic: false,
+        };
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "force": true,
+            "cache": cache_path.to_str().expect("utf8"),
+        });
+        let err = probe_model_with_route(&args, route, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err, mcp_missing_key_error(None));
+        assert!(
+            crate::adapters::openai::take_catalog_lookups().is_empty(),
+            "must not call catalog"
+        );
+        crate::adapters::openai::set_catalog_skip_http(false);
     }
 
     #[test]

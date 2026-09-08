@@ -201,6 +201,11 @@ pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
         || host.ends_with(".anthropic.com")
 }
 
+/// True when a cloud host must not be called without an API key.
+pub fn refuse_cloud_without_key(api_key: Option<&str>, base_url: &str) -> bool {
+    api_key.is_none() && cloud_endpoint_requires_key(base_url)
+}
+
 /// True when the host or model looks local/free so the cheap suite is enough.
 /// Host label used as `provider` when the user omitted `--provider`.
 /// Loopback URLs keep `host:port` so different listeners do not share a cache row.
@@ -335,6 +340,21 @@ mod tests {
             xai_only.key.is_none(),
             "provider=anthropic must not reuse XAI_API_KEY"
         );
+    }
+
+    #[test]
+    fn refuse_cloud_without_key_gates_cloud_hosts() {
+        assert!(refuse_cloud_without_key(None, "https://api.openai.com/v1"));
+        assert!(refuse_cloud_without_key(None, "https://api.x.ai/v1"));
+        assert!(refuse_cloud_without_key(
+            None,
+            "https://api.anthropic.com/v1"
+        ));
+        assert!(!refuse_cloud_without_key(None, "http://127.0.0.1:11434/v1"));
+        assert!(!refuse_cloud_without_key(
+            Some("sk"),
+            "https://api.openai.com/v1"
+        ));
     }
 
     #[test]
