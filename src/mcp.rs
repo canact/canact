@@ -509,8 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_force_without_key_skips_catalog_lookup() {
-        crate::adapters::openai::set_catalog_skip_http(true);
-        let _ = crate::adapters::openai::take_catalog_lookups();
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
         let dir = tempfile::tempdir().expect("temp");
         let cache_path = dir.path().join("probes.json");
         let route = KeyRoute {
@@ -533,7 +532,6 @@ mod tests {
             crate::adapters::openai::take_catalog_lookups().is_empty(),
             "must not call catalog"
         );
-        crate::adapters::openai::set_catalog_skip_http(false);
     }
 
     #[test]

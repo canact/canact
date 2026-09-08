@@ -401,6 +401,26 @@ pub(crate) fn set_catalog_skip_http(skip: bool) {
     CATALOG_SKIP_HTTP.with(|flag| flag.set(skip));
 }
 
+#[cfg(test)]
+pub(crate) struct CatalogSkipHttp;
+
+#[cfg(test)]
+impl CatalogSkipHttp {
+    pub(crate) fn enable() -> Self {
+        set_catalog_skip_http(true);
+        let _ = take_catalog_lookups();
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for CatalogSkipHttp {
+    fn drop(&mut self) {
+        set_catalog_skip_http(false);
+        let _ = take_catalog_lookups();
+    }
+}
+
 /// Fill advertised context and vision from the host catalog when flags
 /// are unset. Catalog errors stay `None`; `--advertised-context` and
 /// `--vision` / `--no-vision` win.
