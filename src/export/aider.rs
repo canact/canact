@@ -23,10 +23,10 @@ pub struct AiderSettingsRow {
 /// LiteLLM-shaped metadata Aider loads from `--model-metadata-file`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AiderMetadataEntry {
-    /// Measured (or min(advertised, measured)) input window.
+    /// Catalog advertised input window. Not the measured ladder floor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_input_tokens: Option<u32>,
-    /// Same number as input when we have no separate output cap.
+    /// Output cap. Omitted until a measured `maxOutputTokens` exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     /// Provider label LiteLLM/Aider use for routing.
@@ -48,7 +48,6 @@ impl AiderOverlay {
     /// Build settings + metadata from a probed profile.
     pub fn from_profile(profile: &CapabilityProfile, advertised: Option<u32>) -> Self {
         let name = overlay_model_name(profile);
-        let ctx = overlay_context_tokens(profile, advertised);
         let row = AiderSettingsRow {
             name: name.clone(),
             edit_format: aider_edit_format(profile.best_edit_format()).to_owned(),
@@ -58,8 +57,8 @@ impl AiderOverlay {
         metadata.insert(
             name,
             AiderMetadataEntry {
-                max_input_tokens: ctx,
-                max_output_tokens: ctx,
+                max_input_tokens: overlay_context_tokens(profile, advertised),
+                max_output_tokens: None,
                 litellm_provider: super::normalize_overlay_provider(
                     &profile.provider.to_ascii_lowercase(),
                 )
@@ -139,8 +138,25 @@ mod tests {
         assert!(yaml.contains("edit_format: diff"), "{yaml}");
         assert!(yaml.contains("use_repo_map: true"), "{yaml}");
         let meta = overlay.metadata.get("ollama/qwen2.5-coder").expect("meta");
-        assert_eq!(meta.max_input_tokens, Some(8192));
+        assert_eq!(meta.max_input_tokens, Some(40960));
+        assert_eq!(meta.max_output_tokens, None);
         assert_eq!(meta.litellm_provider, "ollama");
+    }
+
+    #[test]
+    fn aider_export_omits_token_fields_when_unadvertised() {
+        let p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        let overlay = AiderOverlay::from_profile(&p, None);
+        let meta = overlay.metadata.get("ollama/qwen2.5-coder").expect("meta");
+        assert_eq!(meta.max_input_tokens, None);
+        assert_eq!(meta.max_output_tokens, None);
+        let value = serde_json::to_value(meta).expect("json");
+        assert!(value.get("max_input_tokens").is_none(), "{value}");
+        assert!(value.get("max_output_tokens").is_none(), "{value}");
     }
 
     #[test]

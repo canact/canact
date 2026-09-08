@@ -26,7 +26,7 @@ a shell installer. Extra taps (`brew install canact/tap/canact`, Scoop
 
 - Library entry: `ProbeRunner::new` (paid) or `ProbeRunner::new_throttled` / `.cheap()` (free or local). Feature `runtime`. Call `run()` or `run_detailed()`. Persist only with `ProbeRun::persist` / `ProbeRunner::persist` when the run is cacheable.
 - Disk cache (`probes.json`) is `ProbeCache`: pretty JSON, 30-day TTL, key includes model, provider, effort, and `PROBE_SUITE_VERSION`. That file is not the CLI envelope.
-- CLI `canact probe --json` prints a host-policy envelope (`maxTools`, `fromCache`, `cacheable`, `recommendedContextTokens`, per-probe `status`). `fromCache` is a cache hit. `cacheable` is persist-for-30-days.
+- CLI `canact probe --json` prints a host-policy envelope (`maxTools`, `fromCache`, `cacheable`, `recommendedContextTokens`, per-probe `status`). `recommendedContextTokens` is a verified floor (`min(advertised, measured)`), not a window to copy into Cline or Aider. `fromCache` is a cache hit. `cacheable` is persist-for-30-days.
 - `maxTools` follows completed `tool_selection` only: Strong unlimited (`null`), Medium 20, Weak 10. Transient or skipped cores do not collapse overall and do not force JSON repair.
 - Auth, missing model, and connect failures abort the suite. Timeouts and 429/5xx are Transient and must not be stored as a 30-day Weak or Medium card.
 

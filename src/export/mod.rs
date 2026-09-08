@@ -160,9 +160,15 @@ fn overlay_loopback_host(provider: &str) -> bool {
         || provider.starts_with("[::1]:")
 }
 
-/// Context tokens the host should compact against.
-pub fn overlay_context_tokens(profile: &CapabilityProfile, advertised: Option<u32>) -> Option<u32> {
-    profile.recommended_context_tokens(advertised)
+/// Catalog advertised window for Cline `contextWindow` / Aider `max_input_tokens`.
+///
+/// `profile` is unused (kept so the `cli` signature stays source-compatible).
+/// This is not the measured floor ([`CapabilityProfile::recommended_context_tokens`]).
+pub fn overlay_context_tokens(
+    _profile: &CapabilityProfile,
+    advertised: Option<u32>,
+) -> Option<u32> {
+    advertised
 }
 
 fn merge_overlay_file(path: &std::path::Path, file: &OverlayFiles) -> std::io::Result<String> {

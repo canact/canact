@@ -534,12 +534,12 @@ fn export_aider_writes_cwd_when_dir_omitted() {
 }
 
 #[test]
-fn export_cline_without_measured_window_exits_1() {
+fn export_cline_without_advertised_window_omits_token_fields() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
-    profile.effective_context_tokens = None;
-    profile.probed_context_floor = None;
+    profile.effective_context_tokens = Some(8192);
+    profile.probed_context_floor = Some(8192);
     let mut cache = ProbeCache::default();
     cache.put(profile);
     cache.save(&cache_path).expect("save");
@@ -559,17 +559,20 @@ fn export_cline_without_measured_window_exits_1() {
         .output()
         .expect("spawn export");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
-    assert!(stderr.contains("measured context"), "stderr={stderr}");
+    assert!(out.status.success(), "stderr={stderr}");
+    let body = std::fs::read_to_string(dir.path().join("cline.modelinfo.json")).expect("json");
+    let value: serde_json::Value = serde_json::from_str(&body).expect("parse");
+    assert!(value.get("contextWindow").is_none(), "{value}");
+    assert!(value.get("maxTokens").is_none(), "{value}");
 }
 
 #[test]
-fn export_aider_without_measured_window_exits_1() {
+fn export_aider_without_advertised_window_omits_token_fields() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
-    profile.effective_context_tokens = None;
-    profile.probed_context_floor = None;
+    profile.effective_context_tokens = Some(8192);
+    profile.probed_context_floor = Some(8192);
     let mut cache = ProbeCache::default();
     cache.put(profile);
     cache.save(&cache_path).expect("save");
@@ -589,8 +592,13 @@ fn export_aider_without_measured_window_exits_1() {
         .output()
         .expect("spawn export");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
-    assert!(stderr.contains("measured context"), "stderr={stderr}");
+    assert!(out.status.success(), "stderr={stderr}");
+    let metadata =
+        std::fs::read_to_string(dir.path().join(".aider.model.metadata.json")).expect("metadata");
+    let value: serde_json::Value = serde_json::from_str(&metadata).expect("parse");
+    let entry = &value["test/weak-tools"];
+    assert!(entry.get("max_input_tokens").is_none(), "{value}");
+    assert!(entry.get("max_output_tokens").is_none(), "{value}");
 }
 
 #[test]
