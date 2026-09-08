@@ -59,7 +59,7 @@ jobs:
         if: >-
           github.event_name == 'pull_request' &&
           startsWith(github.head_ref, 'release-please')
-        run: echo "OK: version-bump PR; CodeQL already ran on the feature PR"
+        run: echo 'version-bump PR; CodeQL already ran on the feature PR'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: >-
           github.event_name != 'pull_request' ||
