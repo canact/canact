@@ -861,6 +861,28 @@ fn stale_vision_grader_keeps_tool_calling() {
 }
 
 #[test]
+fn stale_max_tokens_compliance_grader_resets_only_that_dim() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    cache.put(sample_profile());
+    for entry in cache.profiles.values_mut() {
+        entry
+            .grader_versions
+            .insert("max_tokens_compliance".into(), 1);
+    }
+    cache.save(&path).expect("save");
+    let loaded = ProbeCache::load(&path).expect("load");
+    let got = loaded.get("m", "p").expect("hit");
+    assert_eq!(got.tool_calling.level, CapabilityLevel::Strong);
+    assert!(
+        got.max_tokens_compliance.is_unprobed_default(),
+        "{:?}",
+        got.max_tokens_compliance
+    );
+}
+
+#[test]
 fn suite_all_key_is_isolated_from_full() {
     let mut cache = ProbeCache::default();
     cache.put_with_suite(sample_profile(), canact::SuiteTier::All, false, None);

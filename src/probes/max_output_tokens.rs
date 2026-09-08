@@ -29,10 +29,21 @@ pub async fn probe_max_output_tokens<C: ProbeClient>(llm: &C) -> Result<Option<u
 
 /// Parse a provider reject for the allowed `max_tokens` ceiling.
 pub fn parse_max_output_cap(err: &str) -> Option<u32> {
-    if let Some(n) = parse_greater_than(err) {
-        return Some(n);
+    let lower = err.to_ascii_lowercase();
+    if !mentions_output_budget(&lower) {
+        return None;
     }
-    parse_named_maximum(err)
+    let n = parse_greater_than(err).or_else(|| parse_named_maximum(err))?;
+    if n == 0 || n == OVERSIZE_MAX_TOKENS {
+        return None;
+    }
+    Some(n)
+}
+
+fn mentions_output_budget(lower: &str) -> bool {
+    lower.contains("max_tokens")
+        || lower.contains("max_completion_tokens")
+        || lower.contains("maxoutputtokens")
 }
 
 fn parse_greater_than(err: &str) -> Option<u32> {
@@ -131,6 +142,15 @@ mod tests {
             parse_max_output_cap("advertised context window is 200000 tokens"),
             None
         );
+        assert_eq!(
+            parse_max_output_cap("prompt exceeds maximum context 32768 > 8192"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_ignores_the_oversize_ask_as_the_cap() {
+        assert_eq!(parse_max_output_cap("max_tokens: 32768 > 32768"), None);
     }
 
     struct RejectLlm(&'static str);

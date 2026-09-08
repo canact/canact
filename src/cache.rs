@@ -1010,8 +1010,11 @@ fn key_knobs_match_suite(
 ///
 /// When a grader changes, return a higher number for that `name` only.
 /// Do not bump [`PROBE_SUITE_VERSION`].
-pub fn current_grader_version(_name: &str) -> u32 {
-    DEFAULT_GRADER_VERSION
+pub fn current_grader_version(name: &str) -> u32 {
+    match name {
+        "max_tokens_compliance" => 2,
+        _ => DEFAULT_GRADER_VERSION,
+    }
 }
 
 fn current_grader_map() -> BTreeMap<String, u32> {
