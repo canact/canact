@@ -1,16 +1,30 @@
 # Roadmap
 
-Near term: keep README, `llms.txt`, and GitHub About aligned with the
-crate on crates.io. Install remains `cargo install canact --locked
---features cli`. Binary archives come from cargo-dist GitHub Releases.
-Homebrew (`canact/homebrew-tap`) and Scoop (`canact/scoop-bucket`)
-update only after a release has those zips. winget is a separate
-community PR and is not the same-day install path.
+canact probes a model on this host and returns a capability card the
+host can branch on: `maxTools`, edit-format ladder, XML fallback, JSON
+repair, and later plumbing fields (streaming tool calls, nested args,
+parallel floor). Catalog flags are priors. Real prompts run in seconds.
+There is no judge model.
 
-Medium term: follow-up crate versions as host-policy fields change.
+Overlays must not overwrite another host's window with the measured
+context floor. Default suite cost stays on policy fields, not every
+diagnostic. A plumbing conformance table (`canact matrix`) is optional
+later; it is not a capability leaderboard.
 
-Longer term: follow open issues labeled
+## Install
+
+Keep README, `llms.txt`, and GitHub About aligned with the crate on
+crates.io. Install remains `cargo install canact --locked --features
+cli`. Binary archives come from cargo-dist GitHub Releases. Homebrew
+(`canact/homebrew-tap`) and Scoop (`canact/scoop-bucket`) update only
+after a release has those zips. winget is a separate community PR and
+is not the same-day install path.
+
+Follow-up crate versions land as host-policy fields change.
+
+## Issues
+
+Follow open issues labeled
 [good first issue](https://github.com/canact/canact/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 and
 [help wanted](https://github.com/canact/canact/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
-There is no public issue list for launch itself.
