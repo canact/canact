@@ -9,7 +9,8 @@ cargo run --locked --example host_policy
 ```
 
 Prints the same envelope shape as `canact probe --json` (cacheable,
-`fromCache`, `maxTools`, `recommendedContextTokens`).
+`fromCache`, `maxTools`, `recommendedContextTokens` as a verified
+floor, not a host window).
 
 ## Aider and Cline overlays
 

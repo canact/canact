@@ -401,10 +401,11 @@ impl CapabilityProfile {
         }
     }
 
-    /// Production context window: `min(advertised, measured)`.
+    /// Verified context floor: `min(advertised, measured)`.
     ///
     /// Measured is [`Self::effective_context_tokens`] or else
     /// [`Self::probed_context_floor`]. Advertised alone is never returned.
+    /// This is not a production window to copy into Cline or Aider.
     pub fn recommended_context_tokens(&self, advertised: Option<u32>) -> Option<u32> {
         let measured = self.effective_context_tokens.or(self.probed_context_floor);
         match (advertised, measured) {

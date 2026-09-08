@@ -13,10 +13,11 @@ use crate::types::CapabilityProfile;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClineModelInfo {
-    /// Measured window. Cline's default 128000 is the #13457 lie.
+    /// Catalog advertised window. Cline's default 128000 is the #13457 lie.
+    /// Do not write the measured ladder floor here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
-    /// Same measured window as `contextWindow` (`maxInputTokens` sibling).
+    /// Cline output-token budget. Omitted until a measured cap exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     /// Vision probe Medium or higher.
@@ -28,10 +29,9 @@ pub struct ClineModelInfo {
 impl ClineModelInfo {
     /// Build a Cline `ModelInfo` from a probed profile.
     pub fn from_profile(profile: &CapabilityProfile, advertised: Option<u32>) -> Self {
-        let ctx = overlay_context_tokens(profile, advertised);
         Self {
-            context_window: ctx,
-            max_tokens: ctx,
+            context_window: overlay_context_tokens(profile, advertised),
+            max_tokens: None,
             supports_images: profile.supports_vision(),
             supports_prompt_cache: false,
         }
@@ -57,17 +57,32 @@ mod tests {
     use crate::types::CapabilityLevel;
 
     #[test]
-    fn cline_export_uses_measured_window_not_128k() {
+    fn cline_export_uses_advertised_window_not_ladder_floor() {
         let p = sample_profile(
             CapabilityLevel::Strong,
             CapabilityLevel::Medium,
             CapabilityLevel::Weak,
         );
         let info = ClineModelInfo::from_profile(&p, Some(128_000));
-        assert_eq!(info.context_window, Some(8192));
-        assert_eq!(info.max_tokens, Some(8192));
+        assert_eq!(info.context_window, Some(128_000));
+        assert_eq!(info.max_tokens, None);
         assert!(!info.supports_images);
         assert!(!info.supports_prompt_cache);
+    }
+
+    #[test]
+    fn cline_export_omits_window_when_unadvertised() {
+        let p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        let info = ClineModelInfo::from_profile(&p, None);
+        assert_eq!(info.context_window, None);
+        assert_eq!(info.max_tokens, None);
+        let value = serde_json::to_value(&info).expect("json");
+        assert!(value.get("contextWindow").is_none(), "{value}");
+        assert!(value.get("maxTokens").is_none(), "{value}");
     }
 
     #[test]

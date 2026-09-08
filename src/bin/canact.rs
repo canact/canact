@@ -6,8 +6,8 @@ use std::process::ExitCode;
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
     ProbeError, ProbeRun, ProbeRunner, claude_code_access_token, list_model_ids, looks_cheap,
-    missing_model_message, overlay_context_tokens, provider_from_base_url,
-    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
+    missing_model_message, provider_from_base_url, refuse_cloud_without_key, resolve_api_key_from,
+    resolve_host_catalog, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -114,7 +114,7 @@ struct ExportArgs {
     #[arg(long)]
     dir: Option<PathBuf>,
 
-    /// Catalog advertised context used for min(advertised, measured)
+    /// Catalog advertised context: cache-row key and overlay window
     #[arg(long, value_name = "N")]
     advertised_context: Option<u32>,
 }
@@ -308,16 +308,6 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
     } else {
         HostOverlay::cline(&profile, args.advertised_context)
     };
-    let missing_window = match &overlay {
-        HostOverlay::Cline(info) => info.context_window.is_none(),
-        HostOverlay::Aider(_) => {
-            overlay_context_tokens(&profile, args.advertised_context).is_none()
-        }
-    };
-    if missing_window {
-        eprintln!("error: no measured context window; re-run `canact probe` without --cheap");
-        return Err(1);
-    }
     let files = overlay.files();
     let dir = expand_tilde(args.dir.clone().unwrap_or_else(|| PathBuf::from(".")));
     if dir.exists() && !dir.is_dir() {

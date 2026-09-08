@@ -129,8 +129,42 @@ fn cline_modelinfo_json_has_only_official_keys() {
             "Cline ModelInfo does not declare {key}"
         );
     }
-    assert_eq!(value["contextWindow"], 8192, "{value}");
+    assert!(
+        value.get("contextWindow").is_none(),
+        "unadvertised overlay must omit contextWindow: {value}"
+    );
+    assert!(
+        value.get("maxTokens").is_none(),
+        "output cap stays omitted until measured: {value}"
+    );
     assert_eq!(value["supportsImages"], false, "{value}");
+}
+
+#[test]
+fn advertised_200k_is_not_written_as_ladder_floor() {
+    let overlay = HostOverlay::cline(
+        &sample(CapabilityLevel::Weak, CapabilityLevel::Weak),
+        Some(200_000),
+    );
+    let value: serde_json::Value = serde_json::from_str(&overlay.files()[0].body).expect("json");
+    assert_eq!(value["contextWindow"], 200_000, "{value}");
+    assert!(value.get("maxTokens").is_none(), "{value}");
+
+    let aider = HostOverlay::aider(
+        &sample(CapabilityLevel::Strong, CapabilityLevel::Medium),
+        Some(200_000),
+    );
+    let meta: serde_json::Value = serde_json::from_str(&aider.files()[1].body).expect("metadata");
+    assert_eq!(
+        meta["ollama/qwen2.5-coder"]["max_input_tokens"], 200_000,
+        "{meta}"
+    );
+    assert!(
+        meta["ollama/qwen2.5-coder"]
+            .get("max_output_tokens")
+            .is_none(),
+        "{meta}"
+    );
 }
 
 fn canact() -> Command {
@@ -298,7 +332,7 @@ fn cli_export_advertised_context_selects_matching_row() {
     let mut older = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
     older.effective_context_tokens = Some(32768);
     older.probed_context_floor = Some(32768);
-    let mut newer = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    let mut newer = sample(CapabilityLevel::Weak, CapabilityLevel::Weak);
     newer.effective_context_tokens = Some(8192);
     newer.probed_context_floor = Some(8192);
     cache.profiles.insert(
@@ -365,7 +399,13 @@ fn cli_export_advertised_context_selects_matching_row() {
     let value: serde_json::Value = serde_json::from_str(&metadata).expect("json");
     assert_eq!(
         value["ollama/qwen2.5-coder"]["max_input_tokens"], 32768,
-        "export --advertised-context 32768 must pick the 32k row, not the newer 8k: {value}"
+        "{value}"
+    );
+    let settings =
+        std::fs::read_to_string(out_dir.join(".aider.model.settings.yml")).expect("settings");
+    assert!(
+        settings.contains("edit_format: diff"),
+        "export --advertised-context 32768 must pick the older Strong row, not the newer Weak: {settings}"
     );
 }
 

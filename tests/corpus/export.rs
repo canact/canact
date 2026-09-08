@@ -70,7 +70,13 @@ fn host_overlay_write_aider_pair() {
     assert!(settings.contains("edit_format: diff"), "{settings}");
     let value: serde_json::Value = serde_json::from_str(&metadata).expect("json");
     assert_eq!(
-        value["ollama/qwen2.5-coder"]["max_input_tokens"], 8192,
+        value["ollama/qwen2.5-coder"]["max_input_tokens"], 40960,
+        "{value}"
+    );
+    assert!(
+        value["ollama/qwen2.5-coder"]
+            .get("max_output_tokens")
+            .is_none(),
         "{value}"
     );
 }
@@ -89,7 +95,8 @@ fn host_overlay_write_cline_json() {
     overlay.write_to(dir.path()).expect("write");
     let body = std::fs::read_to_string(dir.path().join("cline.modelinfo.json")).expect("json");
     let info: ClineModelInfo = serde_json::from_str(&body).expect("parse");
-    assert_eq!(info.context_window, Some(8192));
+    assert_eq!(info.context_window, None);
+    assert_eq!(info.max_tokens, None);
     assert!(info.supports_images);
 }
 
