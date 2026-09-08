@@ -34,8 +34,8 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
             role: ProbeRole::User,
             content: ProbeContent::Parts(vec![
                 ProbeContentPart::Text {
-                    text: "What text or letters appear in this image? Reply with ONLY the text \
-                           you see, nothing else."
+                    text: "Look at the image. Reply with exactly two letters if you can read \
+                           them, or the single word NONE if you cannot. No other words."
                         .to_string(),
                 },
                 ProbeContentPart::ImageBase64 {
@@ -103,28 +103,33 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // Strong is a read, not any "don't"/"cannot" hedge (font, typeface).
     // See-denial still blocks Strong via negated_glyphs ("I don't see BL").
     // Infix leftover read verbs ("cannot quite read BL") are not Strong.
-    let (score, details) =
-        if identified_text && !negated_glyphs && !make_out_negated && !leftover_unread {
-            (1.0, "Can read text from images".to_string())
-        } else if echoed_question {
-            (0.0, "Did not use the image (generic reply)".to_string())
-        } else if saw_glyphs
-            || (processed_surface && (make_out_negated || leftover_unread) && !negated_glyphs)
-        {
-            (
-                0.5,
-                "Processed the image but could not read the text clearly".to_string(),
-            )
-        } else if refused {
-            (0.0, "Cannot process images".to_string())
-        } else if processed_surface {
-            (
-                0.5,
-                "Processed the image but could not read the text clearly".to_string(),
-            )
-        } else {
-            (0.0, "Did not use the image (generic reply)".to_string())
-        };
+    let constrained_none = trimmed_lower == "none";
+    let echoed_constrained =
+        lower.contains("exactly two letters") || lower.contains("single word none");
+
+    let (score, details) = if constrained_none {
+        (0.0, "Constrained NONE (cannot read letters)".to_string())
+    } else if identified_text && !negated_glyphs && !make_out_negated && !leftover_unread {
+        (1.0, "Can read text from images".to_string())
+    } else if echoed_question || echoed_constrained {
+        (0.0, "Did not use the image (generic reply)".to_string())
+    } else if saw_glyphs
+        || (processed_surface && (make_out_negated || leftover_unread) && !negated_glyphs)
+    {
+        (
+            0.5,
+            "Processed the image but could not read the text clearly".to_string(),
+        )
+    } else if refused {
+        (0.0, "Cannot process images".to_string())
+    } else if processed_surface {
+        (
+            0.5,
+            "Processed the image but could not read the text clearly".to_string(),
+        )
+    } else {
+        (0.0, "Did not use the image (generic reply)".to_string())
+    };
 
     refuse_truncated_incomplete(response.finish, score)?;
     Ok(ProbeResult {
@@ -412,6 +417,30 @@ mod tests {
 
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn vision_constrained_bl_is_strong() {
+        let llm = MockLlm {
+            response: text_response("BL"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn vision_constrained_none_is_weak() {
+        let llm = MockLlm {
+            response: text_response("NONE"),
+        };
+        let result = probe_vision(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert!(result.details.contains("NONE"), "{}", result.details);
+        assert!(
+            !result.details.contains("BL"),
+            "must not echo ground-truth: {}",
+            result.details
+        );
+    }
 
     #[tokio::test]
     async fn vision_color_words_are_not_strong() {

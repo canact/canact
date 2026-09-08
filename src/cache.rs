@@ -1016,6 +1016,7 @@ pub fn current_grader_version(name: &str) -> u32 {
     match name {
         "max_tokens_compliance" => 2,
         "context_faithfulness" => 2,
+        "vision" => 2,
         _ => DEFAULT_GRADER_VERSION,
     }
 }
