@@ -46,6 +46,10 @@ features = ["json", "stream", "rustls"]
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [package.metadata.dist]
 features = ["cli"]
 

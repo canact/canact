@@ -157,7 +157,7 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      (does not set supportsVision).
 /// v65: cheap skip is not a measured Medium (envelope status + completed_level);
 ///      persist probed_context_floor; CLI envelope cacheable/skipExpensive.
-/// v66: adapter strips <think> / thinking parts so CoT is not graded.
+/// v66: adapter strips `<think>` / thinking parts so CoT is not graded.
 /// v67: Length + no tool call is truncated (uncacheable), not 30-day Weak.
 /// v68: recommendedContextTokens = min(advertised, measured); advertised in cache key.
 /// v69: Length + incomplete tool/XML is truncated, not 30-day Medium.
