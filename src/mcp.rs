@@ -534,6 +534,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn mcp_named_api_key_env_unset_skips_catalog_lookup() {
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let route = mcp_resolve_key_route(
+            Some("FOO_KEY"),
+            None,
+            Some("sk-openai".to_owned()),
+            Some("sk-or".to_owned()),
+            Some("xai-env".to_owned()),
+            Some("sk-ant".to_owned()),
+            "openai",
+        );
+        assert_eq!(route.key, None);
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "force": true,
+            "cache": cache_path.to_str().expect("utf8"),
+            "api_key_env": "FOO_KEY",
+        });
+        let err = probe_model_with_route(&args, route, Some("FOO_KEY"))
+            .await
+            .unwrap_err();
+        assert_eq!(err, "FOO_KEY is unset or empty");
+        let lookups = crate::adapters::openai::take_catalog_lookups();
+        assert!(
+            lookups.is_empty(),
+            "named unset api_key_env must not call catalog, got {lookups:?}"
+        );
+    }
+
     #[test]
     fn mcp_named_api_key_env_unset_names_the_var() {
         let route = mcp_resolve_key_route(

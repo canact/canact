@@ -788,6 +788,60 @@ mod tests {
     }
 
     #[test]
+    fn expired_file_refresh_does_not_fall_back_on_http_401() {
+        let _guard = ClaudeCodeKeychainIsolation::hold();
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("creds.json");
+        std::fs::write(
+            &path,
+            r#"{"accessToken":"sk-ant-oat01-old","refreshToken":"rt-old","expiresAt":1}"#,
+        )
+        .expect("write");
+        let (primary, seen_primary) =
+            spawn_refresh_seq(vec![(401, r#"{"error":"invalid_grant"}"#)]);
+        let (fallback, seen_fallback) = spawn_refresh_seq(vec![(
+            200,
+            r#"{"access_token":"sk-ant-oat01-fallback","expires_in":3600}"#,
+        )]);
+        let primary_host = primary
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("primary host")
+            .to_owned();
+        let _urls = TokenUrlOverride::set(primary, Some(fallback));
+        assert_eq!(load_from_file(&path).as_deref(), Some("sk-ant-oat01-old"));
+        let primary_reqs = seen_primary.lock().expect("seen");
+        let fallback_reqs = seen_fallback.lock().expect("seen");
+        assert_eq!(
+            primary_reqs.len(),
+            1,
+            "primary must get one POST, got: {primary_reqs:?}"
+        );
+        assert!(
+            fallback_reqs.is_empty(),
+            "401 must not POST the refresh token to fallback, got: {fallback_reqs:?}"
+        );
+        assert!(
+            primary_reqs[0].contains("POST /v1/oauth/token")
+                && primary_reqs[0]
+                    .to_ascii_lowercase()
+                    .contains(&primary_host.to_ascii_lowercase()),
+            "primary POST must hit {primary_host}, got: {}",
+            primary_reqs[0]
+        );
+        let written = std::fs::read_to_string(&path).expect("reread");
+        assert!(
+            written.contains("sk-ant-oat01-old"),
+            "401 must keep the stored access token, got: {written}"
+        );
+        assert!(
+            !written.contains("sk-ant-oat01-fallback"),
+            "401 must not persist a fallback token, got: {written}"
+        );
+    }
+
+    #[test]
     fn expired_file_refresh_falls_back_on_connect_refuse() {
         let _guard = ClaudeCodeKeychainIsolation::hold();
         let dir = tempfile::tempdir().expect("temp");
