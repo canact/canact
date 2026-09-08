@@ -511,6 +511,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_auth_path_joins_home() {
+        let home = dirs::home_dir().expect("home");
+        assert_eq!(
+            default_auth_path().expect("auth path"),
+            home.join(DEFAULT_AUTH_FILE)
+        );
+    }
+
+    #[test]
     fn access_token_from_nested_oauth_object() {
         let raw = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-nested","refreshToken":"rt"}}"#;
         assert_eq!(

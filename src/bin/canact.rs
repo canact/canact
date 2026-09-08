@@ -696,6 +696,15 @@ mod tests {
     }
 
     #[test]
+    fn default_cache_path_joins_dirs_cache() {
+        let expected = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("canact")
+            .join("probes.json");
+        assert_eq!(super::default_cache_path(), expected);
+    }
+
+    #[test]
     fn looks_cheap_treats_ipv6_loopback_like_localhost() {
         assert!(looks_cheap("openai-compat", "llama3", "http://[::1]:11434"));
         assert!(looks_cheap("::1", "llama3", "http://example.invalid/v1"));
