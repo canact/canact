@@ -353,6 +353,19 @@ jobs:
               --notes-file "$RUNNER_TEMP/notes.txt" \
               artifacts/*
           fi
+      # Curated notes live on release-note-<semver> or in Actions vars.
+      # After a successful apply the notes branch is deleted. Missing
+      # source leaves the auto changelog. continue-on-error so a notes
+      # miss does not fail the archive upload.
+      - name: Apply curated release notes
+        continue-on-error: true
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_NOTES: ${{ vars.RELEASE_NOTES }}
+          RELEASE_NOTES_TAG: ${{ vars.RELEASE_NOTES_TAG }}
+        run: bash scripts/apply-release-notes.sh
 
   provenance:
     needs:

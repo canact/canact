@@ -50,6 +50,29 @@ auto-merge it. Merging it creates the git tag and starts cargo-dist
 (GitHub Release archives, Homebrew, Scoop). crates.io is still a
 manual `cargo publish` by the maintainer.
 
+Optional curated GitHub Release notes. Do not put them on `main`
+and do not open a PR for them (that would start CI). Push a
+one-file branch named after the version, then merge the release PR:
+
+```bash
+# tag v0.1.2 -> branch release-note-0.1.2
+git checkout --orphan release-note-0.1.2
+git rm -rf --cached .
+printf '%s\n' '# canact 0.1.2' > RELEASE_NOTES.md
+git add RELEASE_NOTES.md
+git commit -s -m "docs: notes for 0.1.2"
+git push -u origin release-note-0.1.2
+```
+
+cargo-dist host copies that file onto the Release page and deletes
+the branch. No cleanup PR. A later `gh workflow run "Apply release
+notes" -f tag=v0.1.2` does the same without rebuilding archives.
+
+Or skip git: set Actions variables `RELEASE_NOTES` (markdown) and
+`RELEASE_NOTES_TAG` (`v0.1.2` or `0.1.2`). The tag pin stops leftover
+text applying to the next cut. Variables are not auto-deleted
+(`GITHUB_TOKEN` cannot manage them).
+
 ## License
 
 This project is dual-licensed under MIT or Apache-2.0. You may choose

@@ -64,6 +64,7 @@ jobs:
       - run: python3 scripts/test_fossa_filter.py
       - run: python3 scripts/test_update_scoop_manifest.py
       - run: python3 scripts/test_attach_release_signatures.py
+      - run: python3 scripts/test_apply_release_notes.py
       - run: python3 scripts/test_workflow_triggers.py
 
   test:

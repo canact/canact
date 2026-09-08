@@ -11,6 +11,7 @@ python-test: ## FOSSA filter, Scoop generator, and workflow trigger tests
 	python3 scripts/test_fossa_filter.py
 	python3 scripts/test_update_scoop_manifest.py
 	python3 scripts/test_attach_release_signatures.py
+	python3 scripts/test_apply_release_notes.py
 	python3 scripts/test_workflow_triggers.py
 
 scoop-manifest-test: ## Scoop manifest generator tests
@@ -28,4 +29,5 @@ check: ## fmt, clippy, test, deny (same as CI lint+test)
 	python3 scripts/test_fossa_filter.py
 	python3 scripts/test_update_scoop_manifest.py
 	python3 scripts/test_attach_release_signatures.py
+	python3 scripts/test_apply_release_notes.py
 	python3 scripts/test_workflow_triggers.py

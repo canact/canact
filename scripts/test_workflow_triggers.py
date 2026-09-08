@@ -52,6 +52,14 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertIn("!startsWith(github.head_ref, 'release-please')", text)
         self.assertIn("autorelease: pending", text)
 
+    def test_apply_release_notes_is_dispatch_only(self) -> None:
+        text = (WORKFLOWS / "apply-release-notes.yml").read_text(encoding="utf-8")
+        on_block = _on_block(text)
+        self.assertIn("workflow_dispatch:", on_block)
+        self.assertNotIn("pull_request:", on_block)
+        self.assertNotIn("push:", on_block)
+        self.assertNotRegex(text, r"cargo (test|nextest|clippy|fuzz)")
+
     def test_rust_release_type_is_minor_pre_major(self) -> None:
         cfg = (ROOT / "release-please-config.json").read_text(encoding="utf-8")
         self.assertIn('"release-type": "rust"', cfg)
