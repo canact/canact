@@ -108,6 +108,55 @@ pub enum CapabilityLevel {
     Strong,
 }
 
+/// Suite cost tier (`--suite=policy|full|all`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SuiteTier {
+    /// Host-policy fields only. Alias: `--cheap`.
+    #[default]
+    Policy,
+    /// Policy plus sequencing and the full context ladder. Alias: `--full`.
+    Full,
+    /// Full plus diagnostics (`token_efficiency`, system-message, `code_syntax`).
+    All,
+}
+
+impl SuiteTier {
+    /// Cache-key and envelope token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Policy => "policy",
+            Self::Full => "full",
+            Self::All => "all",
+        }
+    }
+
+    /// Parse `policy` / `full` / `all`.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "policy" | "cheap" => Some(Self::Policy),
+            "full" => Some(Self::Full),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    /// Policy is the cheap/skip-expensive tier.
+    pub fn skip_expensive(self) -> bool {
+        matches!(self, Self::Policy)
+    }
+
+    /// Sequencing and the 8k/16k ladder run on full and all.
+    pub fn run_promoted_expensive(self) -> bool {
+        !matches!(self, Self::Policy)
+    }
+
+    /// Diagnostic probes run only on all.
+    pub fn run_diagnostics(self) -> bool {
+        matches!(self, Self::All)
+    }
+}
+
 /// Session knobs for [`CapabilityProfile::host_policy_envelope_with`].
 ///
 /// [`CapabilityProfile::host_policy_envelope`] uses [`HostPolicyMeta::default`]:
@@ -120,10 +169,12 @@ pub struct HostPolicyMeta {
     /// True only when this envelope was served from the on-disk cache.
     /// Independent of [`Self::cacheable`]. Default is live (`false`).
     pub from_cache: bool,
-    /// Whether expensive dimensions were skipped (`--cheap` / free-tier).
+    /// Whether expensive dimensions were skipped (`--cheap` / policy).
     pub skip_expensive: bool,
     /// Catalog advertised context window. Not a measured ladder result.
     pub advertised_context_tokens: Option<u32>,
+    /// Suite tier that produced this envelope.
+    pub suite: SuiteTier,
 }
 
 impl Default for HostPolicyMeta {
@@ -133,14 +184,38 @@ impl Default for HostPolicyMeta {
             from_cache: false,
             skip_expensive: false,
             advertised_context_tokens: None,
+            suite: SuiteTier::Full,
+        }
+    }
+}
+
+impl HostPolicyMeta {
+    /// Session flags for a live or cached envelope.
+    pub fn for_suite(
+        cacheable: bool,
+        from_cache: bool,
+        suite: SuiteTier,
+        advertised_context_tokens: Option<u32>,
+    ) -> Self {
+        Self {
+            cacheable,
+            from_cache,
+            skip_expensive: suite.skip_expensive(),
+            advertised_context_tokens,
+            suite,
         }
     }
 }
 
 /// Default probe result for deserialization when the field is absent.
 pub(crate) fn default_probe() -> ProbeResult {
+    default_probe_named("unknown")
+}
+
+/// Unprobed placeholder for a named dimension (stale grader or missing field).
+pub(crate) fn default_probe_named(name: &str) -> ProbeResult {
     ProbeResult {
-        name: "unknown".to_string(),
+        name: name.to_string(),
         score: 0.5,
         max_score: 1.0,
         level: CapabilityLevel::Medium,
@@ -301,6 +376,36 @@ pub const TOOL_PROBE_NAMES: &[&str] = &[
     "parallel_tool_scale",
     "one_shot_tool_plan",
     "multi_turn_task_sequencing",
+];
+
+/// Dimensions a host may branch on. Shown under envelope `"probes"`.
+///
+/// Sequencing is skipped on [`SuiteTier::Policy`] but still a policy field
+/// (`agentLoop`). `one_shot_tool_plan` is serde-only and omitted here.
+pub const POLICY_DIMENSION_NAMES: &[&str] = &[
+    "tool_calling",
+    "json_output",
+    "instruction_following",
+    "search_replace",
+    "unified_diff",
+    "complex_tool_calling",
+    "nested_arguments",
+    "vision",
+    "tool_selection",
+    "xml_tool_calling",
+    "streaming_tool_calls",
+    "multi_turn_task_sequencing",
+    "parallel_tool_scale",
+];
+
+/// Diagnostics shown under envelope `"diagnostics"` on [`SuiteTier::All`].
+pub const DIAGNOSTIC_DIMENSION_NAMES: &[&str] = &[
+    "token_efficiency",
+    "system_message_adherence",
+    "code_syntax",
+    "max_tokens_compliance",
+    "context_faithfulness",
+    "multi_turn_memory",
 ];
 
 /// First 9 of [`DIMENSION_NAMES`]. Zips 1:1 with Bline `ToolRequirements::as_slice()`.
@@ -480,9 +585,17 @@ impl CapabilityProfile {
     /// Host-policy envelope with session flags (`cacheable`, cheap, advertised).
     pub fn host_policy_envelope_with(&self, meta: HostPolicyMeta) -> serde_json::Value {
         let mut probes = serde_json::Map::new();
-        for &dim in DIMENSION_NAMES {
+        for &dim in POLICY_DIMENSION_NAMES {
             if let Some(probe) = self.dimension_result(dim) {
                 probes.insert(snake_to_camel(dim), probe_envelope_json(probe));
+            }
+        }
+        let mut diagnostics = serde_json::Map::new();
+        if meta.suite.run_diagnostics() {
+            for &dim in DIAGNOSTIC_DIMENSION_NAMES {
+                if let Some(probe) = self.dimension_result(dim) {
+                    diagnostics.insert(snake_to_camel(dim), probe_envelope_json(probe));
+                }
             }
         }
         serde_json::json!({
@@ -505,6 +618,7 @@ impl CapabilityProfile {
             "cacheable": meta.cacheable,
             "fromCache": meta.from_cache,
             "skipExpensive": meta.skip_expensive,
+            "suite": meta.suite.as_str(),
             "advertisedContextTokens": meta.advertised_context_tokens,
             "probedAt": self.probed_at,
             "scoreScale": {
@@ -514,6 +628,7 @@ impl CapabilityProfile {
                 "mediumMin": 0.4,
             },
             "probes": probes,
+            "diagnostics": diagnostics,
         })
     }
 }
@@ -697,13 +812,14 @@ mod recommended_context_tests {
     fn recommended_context_tokens_in_host_policy_envelope() {
         let mut p = profile();
         p.probed_context_floor = Some(4096);
-        let value = p.host_policy_envelope_with(HostPolicyMeta {
-            cacheable: true,
-            from_cache: false,
-            skip_expensive: true,
-            advertised_context_tokens: Some(40960),
-        });
+        let value = p.host_policy_envelope_with(HostPolicyMeta::for_suite(
+            true,
+            false,
+            SuiteTier::Policy,
+            Some(40960),
+        ));
         assert_eq!(value["fromCache"], false, "{value}");
+        assert_eq!(value["suite"], "policy", "{value}");
         assert_eq!(value["recommendedContextTokens"], 4096, "{value}");
         assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
         assert_eq!(value["probedContextFloor"], 4096, "{value}");
@@ -712,12 +828,76 @@ mod recommended_context_tests {
     #[test]
     fn recommended_context_tokens_null_when_unmeasured() {
         let p = profile();
-        let value = p.host_policy_envelope_with(HostPolicyMeta {
-            cacheable: true,
-            from_cache: false,
-            skip_expensive: false,
-            advertised_context_tokens: Some(8192),
-        });
+        let value = p.host_policy_envelope_with(HostPolicyMeta::for_suite(
+            true,
+            false,
+            SuiteTier::Full,
+            Some(8192),
+        ));
         assert!(value["recommendedContextTokens"].is_null(), "{value}");
+        assert_eq!(value["suite"], "full", "{value}");
+    }
+
+    #[test]
+    fn policy_envelope_is_byte_identical_when_diagnostics_are_weak() {
+        let strong = profile();
+        let mut weak = profile();
+        weak.one_shot_tool_plan = ProbeResult {
+            name: "one_shot_tool_plan".into(),
+            score: 0.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "weak diagnostic".into(),
+        };
+        weak.token_efficiency = ProbeResult {
+            name: "token_efficiency".into(),
+            score: 0.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "weak diagnostic".into(),
+        };
+        weak.system_message_adherence = ProbeResult {
+            name: "system_message_adherence".into(),
+            score: 0.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "weak diagnostic".into(),
+        };
+        weak.code_syntax = ProbeResult {
+            name: "code_syntax".into(),
+            score: 0.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "weak diagnostic".into(),
+        };
+        weak.max_tokens_compliance = ProbeResult {
+            name: "max_tokens_compliance".into(),
+            score: 0.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "weak diagnostic".into(),
+        };
+        weak.context_faithfulness = ProbeResult {
+            name: "context_faithfulness".into(),
+            score: 0.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "weak diagnostic".into(),
+        };
+        weak.multi_turn_memory = ProbeResult {
+            name: "multi_turn_memory".into(),
+            score: 0.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "weak diagnostic".into(),
+        };
+        let meta = HostPolicyMeta::for_suite(true, false, SuiteTier::Policy, None);
+        let a = serde_json::to_vec(&strong.host_policy_envelope_with(meta)).unwrap();
+        let b = serde_json::to_vec(&weak.host_policy_envelope_with(meta)).unwrap();
+        assert_eq!(a, b, "diagnostics must not leak into the policy envelope");
+        let env = strong.host_policy_envelope_with(meta);
+        assert!(env["probes"].get("oneShotToolPlan").is_none(), "{env}");
+        assert!(env["probes"].get("codeSyntax").is_none(), "{env}");
+        assert!(env["diagnostics"].as_object().unwrap().is_empty(), "{env}");
     }
 }

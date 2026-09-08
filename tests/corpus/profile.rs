@@ -868,8 +868,10 @@ fn cheap_skip_is_not_measured_medium() {
         Some(CapabilityLevel::Weak)
     );
     let value = profile.host_policy_envelope();
-    assert_eq!(value["probes"]["oneShotToolPlan"]["status"], "skipped");
-    assert_eq!(value["probes"]["oneShotToolPlan"]["level"], "medium");
+    assert!(
+        value["probes"].get("oneShotToolPlan").is_none(),
+        "one_shot must not appear in policy probes: {value}"
+    );
 }
 
 #[test]
@@ -938,12 +940,12 @@ fn host_policy_envelope_with_emits_session_flags() {
         CapabilityLevel::Strong,
     );
     profile.probed_context_floor = Some(4096);
-    let value = profile.host_policy_envelope_with(HostPolicyMeta {
-        cacheable: false,
-        from_cache: false,
-        skip_expensive: true,
-        advertised_context_tokens: Some(40960),
-    });
+    let value = profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+        false,
+        false,
+        canact::SuiteTier::Policy,
+        Some(40960),
+    ));
     assert_eq!(value["cacheable"], false, "{value}");
     assert_eq!(value["fromCache"], false, "{value}");
     assert_eq!(value["skipExpensive"], true, "{value}");
@@ -964,6 +966,11 @@ fn host_policy_envelope_default_meta_is_cacheable_full() {
     assert_eq!(value["cacheable"], true, "{value}");
     assert_eq!(value["fromCache"], false, "{value}");
     assert_eq!(value["skipExpensive"], false, "{value}");
+    assert_eq!(value["suite"], "full", "{value}");
+    assert!(
+        value["diagnostics"].as_object().unwrap().is_empty(),
+        "{value}"
+    );
     assert!(value["advertisedContextTokens"].is_null(), "{value}");
     assert!(value["probedContextFloor"].is_null(), "{value}");
     assert!(value["recommendedContextTokens"].is_null(), "{value}");

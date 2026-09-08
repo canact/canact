@@ -71,6 +71,7 @@ fn probe_help_lists_cheap_full_vision() {
     let help = stdout_of(&["probe", "--help"]);
     assert!(help.contains("--cheap"), "{help}");
     assert!(help.contains("--full"), "{help}");
+    assert!(help.contains("--suite"), "{help}");
     assert!(help.contains("--vision"), "{help}");
     assert!(help.contains("--advertised-context"), "{help}");
 }
@@ -294,6 +295,16 @@ fn probe_json_cache_hit_includes_flags() {
     assert_eq!(full["cacheable"], true, "{full}");
     assert_eq!(full["fromCache"], true, "{full}");
     assert_eq!(full["skipExpensive"], false, "{full}");
+    assert_eq!(full["suite"], "full", "{full}");
+    assert_eq!(cheap["suite"], "policy", "{cheap}");
+}
+
+#[test]
+fn probe_json_policy_fallback_reports_full_row_suite() {
+    let value = probe_json_from_cache(&["--cheap"], false, None);
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["suite"], "full", "{value}");
+    assert_eq!(value["skipExpensive"], false, "{value}");
 }
 
 #[test]

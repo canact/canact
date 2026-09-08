@@ -8,12 +8,7 @@ use canact::HostPolicyMeta;
 
 fn main() {
     let profile = sample_profile();
-    let meta = HostPolicyMeta {
-        cacheable: true,
-        from_cache: false,
-        skip_expensive: true,
-        advertised_context_tokens: Some(40_960),
-    };
+    let meta = HostPolicyMeta::for_suite(true, false, canact::SuiteTier::Policy, Some(40_960));
     let envelope = profile.host_policy_envelope_with(meta);
     println!(
         "{}",

@@ -8,6 +8,10 @@
 //! here by correctly starting with only `read_file` - that is expected.
 //! Do **not** use this probe as an auto-architect or multi-step competence
 //! signal; use `multi_turn_task_sequencing` instead.
+//!
+//! The runner never calls this probe (`--suite=policy|full|all`). The
+//! profile field and `multiStepReasoning` serde alias stay so old caches
+//! still deserialize.
 
 use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
@@ -30,6 +34,7 @@ use super::{
 /// - `0.5` - 2 of 3 precise tools, or 3 names with imprecise args
 /// - `0.3` - only one tool call (did not emit a multi-tool plan)
 /// - `0.0` - no tool calls or only text response
+#[allow(dead_code)] // kept for unit tests; runner never invokes
 pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let tools = vec![
         tool(

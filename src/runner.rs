@@ -12,7 +12,7 @@ use crate::client::ProbeClient;
 use crate::error::ProbeError;
 use crate::probes;
 use crate::types::{
-    CapabilityLevel, CapabilityProfile, HostPolicyMeta, ProbeResult, TOOL_PROBE_NAMES,
+    CapabilityLevel, CapabilityProfile, HostPolicyMeta, ProbeResult, SuiteTier, TOOL_PROBE_NAMES,
 };
 
 /// Default concurrency for paid providers (effectively unlimited).
@@ -24,7 +24,9 @@ pub const FREE_CONCURRENCY: usize = 3;
 const VISION_SKIP_NOT_REQUESTED: &str = "Skipped: vision not requested";
 const VISION_SKIP_FLAG: &str = "Skipped: --no-vision";
 const XML_SKIP: &str = "Not tested (native tool calling is Strong; XML fallback unused)";
-const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
+const PROMOTED_SKIP: &str = "Skipped: policy suite (use --suite=full or --suite=all)";
+const DIAGNOSTIC_SKIP: &str = "Skipped: diagnostic suite (use --suite=all)";
+const ONE_SHOT_SKIP: &str = "Skipped: one_shot_tool_plan is not a host-policy signal";
 
 /// Outcome of a probe suite run, including whether the profile is cacheable.
 #[derive(Debug, Clone)]
@@ -34,8 +36,10 @@ pub struct ProbeRun {
     /// False when any required probe hit a transient error (timeout, 429,
     /// network, 5xx). Callers must not persist this profile for 30 days.
     pub cacheable: bool,
-    /// Whether this run skipped the expensive suite (`--cheap` / free-tier).
+    /// Whether this run skipped the expensive suite (`--cheap` / policy).
     pub skip_expensive: bool,
+    /// Suite tier that produced this run.
+    pub suite: SuiteTier,
     /// Whether this run requested the vision probe (`--vision`).
     pub vision: bool,
     /// Catalog advertised context prior for this run, if any.
@@ -45,12 +49,13 @@ pub struct ProbeRun {
 impl ProbeRun {
     /// Host-policy JSON using this run's cacheable / cheap / advertised knobs.
     pub fn host_policy_envelope(&self) -> serde_json::Value {
-        self.profile.host_policy_envelope_with(HostPolicyMeta {
-            cacheable: self.cacheable,
-            from_cache: false,
-            skip_expensive: self.skip_expensive,
-            advertised_context_tokens: self.advertised_context_tokens,
-        })
+        self.profile
+            .host_policy_envelope_with(HostPolicyMeta::for_suite(
+                self.cacheable,
+                false,
+                self.suite,
+                self.advertised_context_tokens,
+            ))
     }
 
     /// Persist the profile when [`Self::cacheable`] is true.
@@ -62,9 +67,9 @@ impl ProbeRun {
             warn!("skipping probe cache persist: transient probe error");
             return Ok(false);
         }
-        cache.put_with_knobs(
+        cache.put_with_suite(
             self.profile.clone(),
-            self.skip_expensive,
+            self.suite,
             self.vision,
             self.advertised_context_tokens,
         );
@@ -77,7 +82,7 @@ impl ProbeRun {
 pub struct ProbeRunner<C: ProbeClient> {
     client: C,
     concurrency: usize,
-    skip_expensive: bool,
+    suite: SuiteTier,
     last_run: Mutex<Option<ProbeRun>>,
 }
 
@@ -87,7 +92,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
         Self {
             client,
             concurrency: PAID_CONCURRENCY,
-            skip_expensive: false,
+            suite: SuiteTier::Full,
             last_run: Mutex::new(None),
         }
     }
@@ -97,27 +102,47 @@ impl<C: ProbeClient> ProbeRunner<C> {
         Self {
             client,
             concurrency: FREE_CONCURRENCY,
-            skip_expensive: true,
+            suite: SuiteTier::Policy,
             last_run: Mutex::new(None),
         }
     }
 
-    /// Builder alias of [`Self::new_throttled`] knobs.
+    /// Builder alias of [`Self::new_throttled`] knobs (`--cheap` / policy).
     pub fn cheap(self) -> Self {
         Self {
             client: self.client,
             concurrency: FREE_CONCURRENCY,
-            skip_expensive: true,
+            suite: SuiteTier::Policy,
             last_run: self.last_run,
         }
     }
 
-    /// Builder alias of [`Self::new`] knobs.
+    /// Builder alias of [`Self::new`] knobs (`--full`).
     pub fn full(self) -> Self {
         Self {
             client: self.client,
             concurrency: PAID_CONCURRENCY,
-            skip_expensive: false,
+            suite: SuiteTier::Full,
+            last_run: self.last_run,
+        }
+    }
+
+    /// Set the suite tier. Does not change concurrency.
+    pub fn suite(self, suite: SuiteTier) -> Self {
+        Self {
+            client: self.client,
+            concurrency: self.concurrency,
+            suite,
+            last_run: self.last_run,
+        }
+    }
+
+    /// Throttle concurrency for local or free-tier hosts.
+    pub fn throttled(self) -> Self {
+        Self {
+            client: self.client,
+            concurrency: FREE_CONCURRENCY,
+            suite: self.suite,
             last_run: self.last_run,
         }
     }
@@ -157,10 +182,34 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let nested_fut = Self::gated(&sem, probes::probe_nested_arguments(&self.client));
         let tool_sel_fut = Self::gated(&sem, probes::probe_tool_selection(&self.client));
         let streaming_fut = Self::gated(&sem, probes::probe_streaming_tool_calls(&self.client));
-        let code_syntax_fut = Self::gated(&sem, probes::probe_code_syntax(&self.client));
-        let max_tok_fut = Self::gated(&sem, probes::probe_max_tokens_compliance(&self.client));
-        let sys_msg_fut = Self::gated(&sem, probes::probe_system_message_adherence(&self.client));
-        let efficiency_fut = Self::gated(&sem, probes::probe_token_efficiency(&self.client));
+        let code_syntax_fut = Self::gated_or_skip_named(
+            !self.suite.run_diagnostics(),
+            &sem,
+            "code_syntax",
+            DIAGNOSTIC_SKIP,
+            probes::probe_code_syntax(&self.client),
+        );
+        let max_tok_fut = Self::gated_or_skip_named(
+            !self.suite.run_diagnostics(),
+            &sem,
+            "max_tokens_compliance",
+            DIAGNOSTIC_SKIP,
+            probes::probe_max_tokens_compliance(&self.client),
+        );
+        let sys_msg_fut = Self::gated_or_skip_named(
+            !self.suite.run_diagnostics(),
+            &sem,
+            "system_message_adherence",
+            DIAGNOSTIC_SKIP,
+            probes::probe_system_message_adherence(&self.client),
+        );
+        let efficiency_fut = Self::gated_or_skip_named(
+            !self.suite.run_diagnostics(),
+            &sem,
+            "token_efficiency",
+            DIAGNOSTIC_SKIP,
+            probes::probe_token_efficiency(&self.client),
+        );
         let par_scale_fut = Self::gated(&sem, probes::probe_parallel_tool_scale(&self.client));
         let vision_flag = self.client.catalog().supports_vision;
         let vision_enabled = vision_flag == Some(true);
@@ -229,29 +278,29 @@ impl<C: ProbeClient> ProbeRunner<C> {
             take_probe(&mut cacheable, par_scale_result, "parallel_tool_scale")?;
         let vision = take_probe(&mut cacheable, vision_result, "vision")?;
 
+        let skip_promoted = !self.suite.run_promoted_expensive();
+        let skip_diag = !self.suite.run_diagnostics();
         let (plan_r, seq_r, faith_r, mem_r) = tokio::join!(
-            Self::gated_or_skip(
-                self.skip_expensive,
-                &sem,
-                "one_shot_tool_plan",
-                probes::probe_one_shot_tool_plan(&self.client),
-            ),
-            Self::gated_or_skip(
-                self.skip_expensive,
+            async { Ok(named_skip("one_shot_tool_plan", ONE_SHOT_SKIP)) },
+            Self::gated_or_skip_named(
+                skip_promoted,
                 &sem,
                 "multi_turn_task_sequencing",
+                PROMOTED_SKIP,
                 probes::probe_multi_turn_task_sequencing(&self.client),
             ),
-            Self::gated_or_skip(
-                self.skip_expensive,
+            Self::gated_or_skip_named(
+                skip_diag,
                 &sem,
                 "context_faithfulness",
+                DIAGNOSTIC_SKIP,
                 probes::probe_context_faithfulness(&self.client),
             ),
-            Self::gated_or_skip(
-                self.skip_expensive,
+            Self::gated_or_skip_named(
+                skip_diag,
                 &sem,
                 "multi_turn_memory",
+                DIAGNOSTIC_SKIP,
                 probes::probe_multi_turn_memory(&self.client),
             ),
         );
@@ -268,12 +317,13 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 .map_err(|_| ProbeError::Internal("probe semaphore closed unexpectedly".into()))?;
             take_ladder(
                 &mut cacheable,
-                probes::probe_effective_context_tokens(&self.client, self.skip_expensive).await,
+                probes::probe_effective_context_tokens(&self.client, self.suite.skip_expensive())
+                    .await,
             )?
         };
         // Cheap / auto-cheap stops after 4k. That pass is not a finished
         // 4k/8k/16k climb, so do not publish it as effectiveContextTokens.
-        let effective_context_tokens = if self.skip_expensive {
+        let effective_context_tokens = if self.suite.skip_expensive() {
             None
         } else {
             ladder_tokens
@@ -325,7 +375,8 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 probed_context_floor,
             },
             cacheable,
-            skip_expensive: self.skip_expensive,
+            skip_expensive: self.suite.skip_expensive(),
+            suite: self.suite,
             vision: vision_enabled,
             advertised_context_tokens: self.client.catalog().advertised_context_tokens,
         };
@@ -352,17 +403,18 @@ impl<C: ProbeClient> ProbeRunner<C> {
         fut.await
     }
 
-    async fn gated_or_skip<F>(
+    async fn gated_or_skip_named<F>(
         skip: bool,
         sem: &Arc<Semaphore>,
         name: &'static str,
+        details: &'static str,
         fut: F,
     ) -> Result<ProbeResult, ProbeError>
     where
         F: std::future::Future<Output = Result<ProbeResult, ProbeError>>,
     {
         if skip {
-            Ok(expensive_skip(name))
+            Ok(named_skip(name, details))
         } else {
             Self::gated(sem, fut).await
         }
@@ -393,13 +445,13 @@ fn take_ladder(
     }
 }
 
-fn expensive_skip(name: &str) -> ProbeResult {
+fn named_skip(name: &str, details: &str) -> ProbeResult {
     ProbeResult {
         name: name.to_string(),
         score: 0.5,
         max_score: 1.0,
         level: CapabilityLevel::Medium,
-        details: EXPENSIVE_SKIP.to_string(),
+        details: details.to_string(),
     }
 }
 

@@ -20,9 +20,10 @@ pub use endpoint::{
 pub use error::ProbeError;
 pub use report::missing_model_message;
 pub use types::{
-    AgentLoop, CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
-    EditFormatRecommendation, HostPolicyMeta, ProbeResult, REQUIREMENT_DIMENSION_NAMES,
-    TOOL_PROBE_NAMES, classify,
+    AgentLoop, CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile,
+    DIAGNOSTIC_DIMENSION_NAMES, DIMENSION_NAMES, EditFormatRecommendation, HostPolicyMeta,
+    POLICY_DIMENSION_NAMES, ProbeResult, REQUIREMENT_DIMENSION_NAMES, SuiteTier, TOOL_PROBE_NAMES,
+    classify,
 };
 
 #[cfg(feature = "runtime")]

@@ -28,6 +28,9 @@ impl CapabilityProfile {
             CORE_DIMENSION_NAMES
         };
         for &dim in dims {
+            if dim == "one_shot_tool_plan" {
+                continue;
+            }
             if let Some(probe) = self.dimension_result(dim) {
                 let _ = writeln!(
                     out,

@@ -350,6 +350,7 @@ fn cli_export_advertised_context_selects_matching_row() {
             cached_at: now.saturating_sub(60),
             reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
             probe_suite_version: PROBE_SUITE_VERSION,
+            grader_versions: Default::default(),
         },
     );
     cache.profiles.insert(
@@ -367,6 +368,7 @@ fn cli_export_advertised_context_selects_matching_row() {
             cached_at: now,
             reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
             probe_suite_version: PROBE_SUITE_VERSION,
+            grader_versions: Default::default(),
         },
     );
     cache.save(&cache_path).expect("save");

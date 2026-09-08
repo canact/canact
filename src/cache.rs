@@ -3,16 +3,19 @@
 //! Persists [`CapabilityProfile`] results to disk so that probing is only
 //! performed once per model+provider+settings combination (with a 30-day
 //! TTL). Cache keys include reasoning effort, probe suite version, the
-//! cheap/full plus vision suite knobs, and the advertised context cap.
+//! policy/full/all plus vision suite knobs, and the advertised context cap.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::ProbeError;
-use crate::types::{CapabilityLevel, CapabilityProfile, TOOL_PROBE_NAMES};
+use crate::types::{
+    CapabilityLevel, CapabilityProfile, DIMENSION_NAMES, SuiteTier, TOOL_PROBE_NAMES,
+    default_probe_named,
+};
 
 /// How long a cached entry remains valid (30 days in seconds).
 pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
@@ -240,7 +243,14 @@ pub const CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 ///      requires a key; 400 incorrect-key is Auth.
 /// v96: claude/anthropic/api.anthropic.com share the anthropic
 ///      family; Anthropic OAuth headers; ANTHROPIC_* keys.
-pub const PROBE_SUITE_VERSION: u32 = 96;
+/// v97: suite cost token is policy|full|all (was cheap|full);
+///      per-dimension grader_versions so a vision bump does not
+///      flush tool_calling (#176 / #180).
+pub const PROBE_SUITE_VERSION: u32 = 97;
+
+/// Default per-dimension grader epoch. Bump one arm in
+/// [`current_grader_version`], not this suite constant.
+pub const DEFAULT_GRADER_VERSION: u32 = 1;
 
 /// Default effort label when probes leave `reasoning_effort` unset.
 pub const DEFAULT_PROBE_EFFORT: &str = "unset";
@@ -265,6 +275,9 @@ pub struct CacheEntry {
     /// Probe suite version used when this entry was written.
     #[serde(default = "default_suite_v1")]
     pub probe_suite_version: u32,
+    /// Per-dimension grader epochs. Empty means every dimension is current.
+    #[serde(default)]
+    pub grader_versions: BTreeMap<String, u32>,
 }
 
 fn default_effort_label() -> String {
@@ -299,7 +312,8 @@ impl ProbeCache {
             )));
         }
         let mut cache = Self::read_disk(path)?;
-        if cache.migrate_stale_tool_scores() {
+        let migrated = cache.migrate_stale_tool_scores() | cache.migrate_stale_grader_versions();
+        if migrated {
             // Keep the migrated rows in memory even when rewrite fails.
             // The next process retries migrate against the stale file.
             if let Err(err) = cache.save(path) {
@@ -394,7 +408,7 @@ impl ProbeCache {
                     && providers_equivalent(&entry.profile.provider, provider)
             })
             .max_by_key(|(_, entry)| entry.cached_at)
-            .map(|(key, entry)| (&entry.profile, key.split('|').nth(4) == Some("cheap")))
+            .map(|(key, entry)| (&entry.profile, key_is_policy(key)))
     }
 
     /// Newest cheap/full row when the caller omitted catalog priors.
@@ -409,7 +423,21 @@ impl ProbeCache {
         provider: &str,
         skip_expensive: bool,
     ) -> Option<(&CapabilityProfile, bool, Option<u32>)> {
-        let want_cost = if skip_expensive { "cheap" } else { "full" };
+        self.find_profile_unspecified_catalog_suite(
+            model_id,
+            provider,
+            suite_from_skip(skip_expensive),
+        )
+    }
+
+    /// Newest matching row when catalog priors were omitted.
+    pub fn find_profile_unspecified_catalog_suite(
+        &self,
+        model_id: &str,
+        provider: &str,
+        suite: SuiteTier,
+    ) -> Option<(&CapabilityProfile, bool, Option<u32>)> {
+        let want_cost = suite.as_str();
         self.profiles
             .iter()
             .filter(|(key, entry)| {
@@ -425,13 +453,7 @@ impl ProbeCache {
                     && key.rsplit('|').nth(2) == Some(want_cost)
             })
             .max_by_key(|(_, entry)| entry.cached_at)
-            .map(|(key, entry)| {
-                (
-                    &entry.profile,
-                    key.split('|').nth(4) == Some("cheap"),
-                    key_advertised(key),
-                )
-            })
+            .map(|(key, entry)| (&entry.profile, key_is_policy(key), key_advertised(key)))
     }
 
     /// Newest matching row for probe cache hits (cheap/full fallback).
@@ -468,7 +490,7 @@ impl ProbeCache {
                     && key_advertised(key) == advertised
             })
             .max_by_key(|(_, entry)| entry.cached_at)
-            .map(|(key, entry)| (&entry.profile, key.split('|').nth(4) == Some("cheap")))
+            .map(|(key, entry)| (&entry.profile, key_is_policy(key)))
     }
 
     /// Get a cached profile for the current suite, default effort, and default knobs.
@@ -491,12 +513,30 @@ impl ProbeCache {
         vision: bool,
         advertised: Option<u32>,
     ) -> Option<&CapabilityProfile> {
-        self.get_with_settings(
+        self.get_with_suite(
+            model_id,
+            provider,
+            suite_from_skip(skip_expensive),
+            vision,
+            advertised,
+        )
+    }
+
+    /// Get a cached profile for an explicit suite tier.
+    pub fn get_with_suite(
+        &self,
+        model_id: &str,
+        provider: &str,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+    ) -> Option<&CapabilityProfile> {
+        self.get_with_settings_suite(
             model_id,
             provider,
             DEFAULT_PROBE_EFFORT,
             PROBE_SUITE_VERSION,
-            skip_expensive,
+            suite,
             vision,
             advertised,
         )
@@ -547,7 +587,60 @@ impl ProbeCache {
                         &entry.profile.provider,
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
-                    && key_knobs_match(stored_key, skip_expensive, vision, advertised)
+                    && key_knobs_match_suite(
+                        stored_key,
+                        suite_from_skip(skip_expensive),
+                        vision,
+                        advertised,
+                    )
+            })
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(_, entry)| &entry.profile)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn get_with_settings_suite(
+        &self,
+        model_id: &str,
+        provider: &str,
+        reasoning_effort: &str,
+        suite_version: u32,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+    ) -> Option<&CapabilityProfile> {
+        let key = Self::cache_key_with_suite(
+            model_id,
+            provider,
+            reasoning_effort,
+            suite_version,
+            suite,
+            vision,
+            advertised,
+        );
+        if let Some(profile) = self.profiles.get(&key).and_then(|entry| {
+            if Self::is_valid(entry) {
+                Some(&entry.profile)
+            } else {
+                None
+            }
+        }) {
+            return Some(profile);
+        }
+        self.profiles
+            .iter()
+            .filter(|(stored_key, entry)| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == suite_version
+                    && entry.reasoning_effort == reasoning_effort
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
+                    && providers_equivalent(&entry.profile.provider, provider)
+                    && key_knobs_match_suite(stored_key, suite, vision, advertised)
             })
             .max_by_key(|(_, entry)| entry.cached_at)
             .map(|(_, entry)| &entry.profile)
@@ -598,7 +691,12 @@ impl ProbeCache {
                         &entry.profile.provider,
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
-                    && key_knobs_match(stored_key, skip_expensive, vision, advertised)
+                    && key_knobs_match_suite(
+                        stored_key,
+                        suite_from_skip(skip_expensive),
+                        vision,
+                        advertised,
+                    )
             })
             .max_by_key(|(_, entry)| entry.cached_at)
             .map(|(_, entry)| entry)
@@ -651,6 +749,53 @@ impl ProbeCache {
             profile,
             reasoning_effort: reasoning_effort.to_owned(),
             probe_suite_version: suite_version,
+            grader_versions: current_grader_map(),
+        };
+        self.profiles.insert(key, entry);
+    }
+
+    /// Store a profile under an explicit suite tier.
+    pub fn put_with_suite(
+        &mut self,
+        profile: CapabilityProfile,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+    ) {
+        self.put_with_settings_suite(
+            profile,
+            DEFAULT_PROBE_EFFORT,
+            PROBE_SUITE_VERSION,
+            suite,
+            vision,
+            advertised,
+        );
+    }
+
+    fn put_with_settings_suite(
+        &mut self,
+        profile: CapabilityProfile,
+        reasoning_effort: &str,
+        suite_version: u32,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+    ) {
+        let key = Self::cache_key_with_suite(
+            &profile.model_id,
+            &profile.provider,
+            reasoning_effort,
+            suite_version,
+            suite,
+            vision,
+            advertised,
+        );
+        let entry = CacheEntry {
+            cached_at: unix_now(),
+            profile,
+            reasoning_effort: reasoning_effort.to_owned(),
+            probe_suite_version: suite_version,
+            grader_versions: current_grader_map(),
         };
         self.profiles.insert(key, entry);
     }
@@ -675,6 +820,16 @@ impl ProbeCache {
                     probe.score = 0.0;
                     changed = true;
                 }
+            }
+        }
+        changed
+    }
+
+    fn migrate_stale_grader_versions(&mut self) -> bool {
+        let mut changed = false;
+        for entry in self.profiles.values_mut() {
+            if apply_grader_freshness(entry) {
+                changed = true;
             }
         }
         changed
@@ -709,7 +864,28 @@ impl ProbeCache {
         vision: bool,
         advertised: Option<u32>,
     ) -> String {
-        let cost = if skip_expensive { "cheap" } else { "full" };
+        Self::cache_key_with_suite(
+            model_id,
+            provider,
+            reasoning_effort,
+            suite_version,
+            suite_from_skip(skip_expensive),
+            vision,
+            advertised,
+        )
+    }
+
+    /// Cache key including policy/full/all, vision, and advertised context knobs.
+    pub fn cache_key_with_suite(
+        model_id: &str,
+        provider: &str,
+        reasoning_effort: &str,
+        suite_version: u32,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+    ) -> String {
+        let cost = suite.as_str();
         let vis = if vision { "vision" } else { "novision" };
         let ctx = match advertised {
             Some(n) => format!("ctx{n}"),
@@ -793,18 +969,78 @@ fn loopback_default_ollama_port(provider: &str) -> bool {
     matches!(bare, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1")
 }
 
-fn key_knobs_match(key: &str, skip_expensive: bool, vision: bool, advertised: Option<u32>) -> bool {
+fn suite_from_skip(skip_expensive: bool) -> SuiteTier {
+    if skip_expensive {
+        SuiteTier::Policy
+    } else {
+        SuiteTier::Full
+    }
+}
+
+fn key_suite(key: &str) -> SuiteTier {
+    key.rsplit('|')
+        .nth(2)
+        .and_then(SuiteTier::parse)
+        .unwrap_or(SuiteTier::Full)
+}
+
+fn key_is_policy(key: &str) -> bool {
+    matches!(key_suite(key), SuiteTier::Policy)
+}
+
+fn key_knobs_match_suite(
+    key: &str,
+    suite: SuiteTier,
+    vision: bool,
+    advertised: Option<u32>,
+) -> bool {
     let mut parts = key.rsplit('|');
     let ctx = parts.next().unwrap_or("");
     let vis = parts.next().unwrap_or("");
     let cost = parts.next().unwrap_or("");
-    let want_cost = if skip_expensive { "cheap" } else { "full" };
     let want_vis = if vision { "vision" } else { "novision" };
     let want_ctx = match advertised {
         Some(n) => format!("ctx{n}"),
         None => "ctxnone".to_owned(),
     };
-    cost == want_cost && vis == want_vis && ctx == want_ctx
+    cost == suite.as_str() && vis == want_vis && ctx == want_ctx
+}
+
+/// Current grader epoch for a named dimension.
+///
+/// When a grader changes, return a higher number for that `name` only.
+/// Do not bump [`PROBE_SUITE_VERSION`].
+pub fn current_grader_version(_name: &str) -> u32 {
+    DEFAULT_GRADER_VERSION
+}
+
+fn current_grader_map() -> BTreeMap<String, u32> {
+    DIMENSION_NAMES
+        .iter()
+        .map(|name| ((*name).to_string(), current_grader_version(name)))
+        .collect()
+}
+
+/// Reset dimensions whose stored grader version is not current.
+///
+/// An empty map means every dimension is already current.
+fn apply_grader_freshness(entry: &mut CacheEntry) -> bool {
+    if entry.grader_versions.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for name in DIMENSION_NAMES {
+        let current = current_grader_version(name);
+        let stored = entry.grader_versions.get(*name).copied().unwrap_or(0);
+        if stored == current {
+            continue;
+        }
+        if let Some(pr) = entry.profile.dimension_result_mut(name) {
+            *pr = default_probe_named(name);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn key_advertised(key: &str) -> Option<u32> {

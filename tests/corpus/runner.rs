@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use canact::{
     CapabilityLevel, CapabilityProfile, CatalogPriors, DIMENSION_NAMES, MockLlm, ProbeCache,
     ProbeClient, ProbeContent, ProbeContentPart, ProbeError, ProbeFinish, ProbeRequest,
-    ProbeResponse, ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool,
+    ProbeResponse, ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool, SuiteTier,
     TOOL_PROBE_NAMES, classify, resolve_probe,
 };
 
@@ -241,6 +241,7 @@ fn persist_cheap_run_is_not_returned_as_full() {
         profile: sample_profile(),
         cacheable: true,
         skip_expensive: true,
+        suite: SuiteTier::Policy,
         vision: false,
         advertised_context_tokens: None,
     };
@@ -265,6 +266,7 @@ fn persist_advertised_is_not_returned_as_uncapped() {
         profile: sample_profile(),
         cacheable: true,
         skip_expensive: false,
+        suite: SuiteTier::Full,
         vision: false,
         advertised_context_tokens: Some(2000),
     };
@@ -291,6 +293,7 @@ fn persist_does_not_write_when_cacheable_false() {
         profile: sample_profile(),
         cacheable: false,
         skip_expensive: false,
+        suite: SuiteTier::Full,
         vision: false,
         advertised_context_tokens: None,
     };
@@ -367,6 +370,7 @@ fn uncacheable_run_envelope_cacheable_false() {
         profile: sample_profile(),
         cacheable: false,
         skip_expensive: true,
+        suite: SuiteTier::Policy,
         vision: false,
         advertised_context_tokens: Some(40960),
     };
@@ -391,7 +395,9 @@ fn runner_persist_without_run_does_not_write() {
 
 const VISION_SKIP_NOT_REQUESTED: &str = "Skipped: vision not requested";
 const VISION_SKIP_FLAG: &str = "Skipped: --no-vision";
-const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
+const PROMOTED_SKIP: &str = "Skipped: policy suite (use --suite=full or --suite=all)";
+const DIAGNOSTIC_SKIP: &str = "Skipped: diagnostic suite (use --suite=all)";
+const ONE_SHOT_SKIP: &str = "Skipped: one_shot_tool_plan is not a host-policy signal";
 
 struct RecordingLlm {
     inner: MockLlm,
@@ -445,6 +451,79 @@ impl ProbeClient for RecordingLlm {
     }
 }
 
+fn request_user_text(req: &ProbeRequest) -> String {
+    req.messages
+        .iter()
+        .map(|m| match &m.content {
+            ProbeContent::Text(t) => t.clone(),
+            ProbeContent::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ProbeContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn requests_contain(recs: &[ProbeRequest], needle: &str) -> bool {
+    recs.iter().any(|r| request_user_text(r).contains(needle))
+}
+
+#[tokio::test]
+async fn policy_suite_does_not_call_diagnostics_or_one_shot() {
+    let (llm, requests) = RecordingLlm::wrap(MockLlm::new("m", "p"));
+    let run = ProbeRunner::new(llm)
+        .suite(SuiteTier::Policy)
+        .run_detailed()
+        .await
+        .expect("run");
+    let rec = requests.lock().expect("lock");
+    assert!(
+        !requests_contain(&rec, "merge_sorted"),
+        "policy must not call code_syntax"
+    );
+    assert!(
+        !requests_contain(&rec, "What is 2+2?"),
+        "policy must not call token_efficiency"
+    );
+    assert_eq!(run.suite, SuiteTier::Policy);
+    assert!(run.skip_expensive);
+    let env = run.host_policy_envelope();
+    assert_eq!(env["suite"], "policy");
+    assert!(env["diagnostics"].as_object().unwrap().is_empty(), "{env}");
+    assert!(env["probes"].get("oneShotToolPlan").is_none(), "{env}");
+    assert!(env["probes"].get("codeSyntax").is_none(), "{env}");
+}
+
+#[tokio::test]
+async fn all_suite_runs_diagnostics_and_omits_one_shot() {
+    let (llm, requests) = RecordingLlm::wrap(MockLlm::new("m", "p"));
+    let run = ProbeRunner::new(llm)
+        .suite(SuiteTier::All)
+        .run_detailed()
+        .await
+        .expect("run");
+    let rec = requests.lock().expect("lock");
+    assert!(
+        requests_contain(&rec, "merge_sorted"),
+        "all must call code_syntax"
+    );
+    assert!(
+        requests_contain(&rec, "What is 2+2?"),
+        "all must call token_efficiency"
+    );
+    assert_eq!(run.suite, SuiteTier::All);
+    let env = run.host_policy_envelope();
+    assert_eq!(env["suite"], "all");
+    assert!(env["diagnostics"].get("codeSyntax").is_some(), "{env}");
+    assert!(env["diagnostics"].get("tokenEfficiency").is_some(), "{env}");
+    assert!(env["probes"].get("oneShotToolPlan").is_none(), "{env}");
+}
+
 fn request_has_image(req: &ProbeRequest) -> bool {
     req.messages.iter().any(|m| match &m.content {
         ProbeContent::Parts(parts) => parts
@@ -452,15 +531,6 @@ fn request_has_image(req: &ProbeRequest) -> bool {
             .any(|p| matches!(p, ProbeContentPart::ImageBase64 { .. })),
         ProbeContent::Text(_) => false,
     })
-}
-
-fn expensive_names() -> [&'static str; 4] {
-    [
-        "one_shot_tool_plan",
-        "multi_turn_task_sequencing",
-        "context_faithfulness",
-        "multi_turn_memory",
-    ]
 }
 
 #[tokio::test]
@@ -561,25 +631,32 @@ async fn new_throttled_sets_expensive_dims_to_free_tier_skip() {
         .run()
         .await
         .expect("run");
-    for name in expensive_names() {
-        let result = profile
-            .dimension_result(name)
-            .unwrap_or_else(|| panic!("missing {name}"));
-        assert_eq!(result.details, EXPENSIVE_SKIP, "{name}");
-        assert_eq!(result.level, CapabilityLevel::Medium, "{name}");
-        assert_eq!(result.score, 0.5, "{name}");
-        assert_eq!(result.name, name);
-    }
+    assert_eq!(
+        profile.one_shot_tool_plan.details, ONE_SHOT_SKIP,
+        "one_shot"
+    );
+    assert_eq!(
+        profile.multi_turn_task_sequencing.details, PROMOTED_SKIP,
+        "sequencing"
+    );
+    assert_eq!(
+        profile.context_faithfulness.details, DIAGNOSTIC_SKIP,
+        "faithfulness"
+    );
+    assert_eq!(profile.multi_turn_memory.details, DIAGNOSTIC_SKIP, "memory");
     assert!(
         !profile.meets(&[("one_shot_tool_plan", CapabilityLevel::Medium)]),
-        "cheap skip must not satisfy a Medium requirement"
+        "one_shot skip must not satisfy a Medium requirement"
     );
     assert_eq!(
         profile.dimension_level("one_shot_tool_plan"),
         Some(CapabilityLevel::Weak)
     );
     let envelope = profile.host_policy_envelope();
-    assert_eq!(envelope["probes"]["oneShotToolPlan"]["status"], "skipped");
+    assert!(
+        envelope["probes"].get("oneShotToolPlan").is_none(),
+        "{envelope}"
+    );
 }
 
 #[tokio::test]
@@ -589,13 +666,10 @@ async fn cheap_sets_expensive_dims_to_free_tier_skip() {
         .run()
         .await
         .expect("run");
-    for name in expensive_names() {
-        let result = profile
-            .dimension_result(name)
-            .unwrap_or_else(|| panic!("missing {name}"));
-        assert_eq!(result.details, EXPENSIVE_SKIP, "{name}");
-        assert_eq!(result.score, 0.5, "{name}");
-    }
+    assert_eq!(profile.one_shot_tool_plan.details, ONE_SHOT_SKIP);
+    assert_eq!(profile.multi_turn_task_sequencing.details, PROMOTED_SKIP);
+    assert_eq!(profile.context_faithfulness.details, DIAGNOSTIC_SKIP);
+    assert_eq!(profile.multi_turn_memory.details, DIAGNOSTIC_SKIP);
 }
 
 const NOT_PROBED: &str = "Not probed (cached before this probe existed)";
@@ -843,8 +917,8 @@ async fn cheap_run_attempts_at_most_4k_rung() {
             "cheap 4k pass must publish a floor; throttled={throttled} envelope={envelope}"
         );
         assert_eq!(
-            profile.context_faithfulness.details, EXPENSIVE_SKIP,
-            "cheap must still skip context_faithfulness"
+            profile.context_faithfulness.details, DIAGNOSTIC_SKIP,
+            "policy must skip context_faithfulness"
         );
         let rec = requests.lock().expect("lock");
         let ladder = ladder_requests(&rec);
