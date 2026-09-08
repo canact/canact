@@ -3230,4 +3230,32 @@ mod tests {
             "non-11434 must not POST /api/show, got {seen:?}"
         );
     }
+
+    #[test]
+    fn apply_cloud_auth_sets_anthropic_version_and_oauth_beta() {
+        let http = reqwest::Client::new();
+        let req = apply_cloud_auth(
+            http.get("http://127.0.0.1/"),
+            Some("k"),
+            crate::ANTHROPIC_BASE_URL,
+        )
+        .build()
+        .unwrap();
+        assert_eq!(req.headers()["anthropic-version"], ANTHROPIC_VERSION);
+        assert_eq!(req.headers()["anthropic-beta"], ANTHROPIC_OAUTH_BETA);
+    }
+
+    #[test]
+    fn apply_cloud_auth_skips_anthropic_headers_for_xai() {
+        let http = reqwest::Client::new();
+        let req = apply_cloud_auth(
+            http.get("http://127.0.0.1/"),
+            Some("k"),
+            crate::XAI_BASE_URL,
+        )
+        .build()
+        .unwrap();
+        assert!(req.headers().get("anthropic-version").is_none());
+        assert!(req.headers().get("anthropic-beta").is_none());
+    }
 }
