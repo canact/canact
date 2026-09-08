@@ -88,8 +88,12 @@ jobs:
       - run: python3 scripts/test_publish_crates.py
 
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -119,6 +123,7 @@ jobs:
         if: >-
           github.event_name != 'pull_request' ||
           !startsWith(github.head_ref, 'release-please')
+        shell: bash
         run: |
           set -euo pipefail
           out="${CARGO_TARGET_DIR}/junit"
@@ -152,6 +157,19 @@ jobs:
         with:
           paths: target/ci-test/junit/*.xml
           show: all
+
+  test-gate:
+    name: Test
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
+      - name: All OS tests passed
+        run: test "${{ needs.test.result }}" = "success"
 
   fuzz:
     name: Fuzz smoke

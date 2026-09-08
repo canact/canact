@@ -111,6 +111,7 @@ class WorkflowTriggerTests(unittest.TestCase):
         sec = (WORKFLOWS / "security.yml").read_text(encoding="utf-8")
         self.assertIn("name: Lint", ci)
         self.assertIn("name: Test", ci)
+        self.assertIn("ubuntu-latest, macos-latest, windows-latest", ci)
         self.assertIn("name: CodeQL (${{ matrix.language }})", sec)
         # Job-level skip would drop the required check name.
         lint = ci[ci.index("name: Lint") : ci.index("name: Test")]
