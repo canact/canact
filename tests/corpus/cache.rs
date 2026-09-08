@@ -1003,6 +1003,52 @@ fn matrix_profiles_prefers_all_suite() {
 }
 
 #[test]
+fn matrix_profiles_collapses_provider_prefixed_model_id() {
+    let mut cache = ProbeCache::default();
+    let mut policy = sample_profile();
+    policy.model_id = "qwen".into();
+    policy.provider = "localhost".into();
+    policy.tool_calling.details = "policy".into();
+    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    let mut all = sample_profile();
+    all.model_id = "localhost/qwen".into();
+    all.provider = "localhost".into();
+    all.tool_calling.details = "all".into();
+    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    let rows = cache.matrix_profiles("ollama");
+    assert_eq!(
+        rows.len(),
+        1,
+        "qwen and localhost/qwen must collapse: {:?}",
+        rows.iter().map(|p| &p.model_id).collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0].tool_calling.details, "all");
+}
+
+#[test]
+fn matrix_profiles_collapses_openrouter_vendor_prefix() {
+    let mut cache = ProbeCache::default();
+    let mut policy = sample_profile();
+    policy.model_id = "anthropic/claude-3.5-sonnet".into();
+    policy.provider = "openrouter".into();
+    policy.tool_calling.details = "policy".into();
+    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    let mut all = sample_profile();
+    all.model_id = "openrouter/anthropic/claude-3.5-sonnet".into();
+    all.provider = "openrouter".into();
+    all.tool_calling.details = "all".into();
+    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    let rows = cache.matrix_profiles("openrouter");
+    assert_eq!(
+        rows.len(),
+        1,
+        "vendor and openrouter/vendor prefixes must collapse: {:?}",
+        rows.iter().map(|p| &p.model_id).collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0].tool_calling.details, "all");
+}
+
+#[test]
 fn suite_all_key_is_isolated_from_full() {
     let mut cache = ProbeCache::default();
     cache.put_with_suite(sample_profile(), canact::SuiteTier::All, false, None);

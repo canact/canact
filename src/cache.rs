@@ -779,7 +779,10 @@ impl ProbeCache {
                 SuiteTier::Full => 2,
                 SuiteTier::Policy => 1,
             };
-            let model = entry.profile.model_id.clone();
+            let model =
+                strip_normalized_provider_prefix(&entry.profile.model_id, &entry.profile.provider)
+                    .unwrap_or(entry.profile.model_id.as_str())
+                    .to_owned();
             let keep = match best.get(&model) {
                 Some((old_rank, old_at, _)) => {
                     rank > *old_rank || (rank == *old_rank && entry.cached_at > *old_at)
