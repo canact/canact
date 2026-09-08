@@ -24,9 +24,9 @@ a shell installer. Extra taps (`brew install canact/tap/canact`, Scoop
 
 ## Host contract
 
-- Library entry: `ProbeRunner::new` (paid) or `ProbeRunner::new_throttled` / `.cheap()` (free or local). Feature `runtime`. Call `run()` or `run_detailed()`. Persist only with `ProbeRun::persist` / `ProbeRunner::persist` when the run is cacheable.
-- Disk cache (`probes.json`) is `ProbeCache`: pretty JSON, 30-day TTL, key includes model, provider, effort, and `PROBE_SUITE_VERSION`. That file is not the CLI envelope.
-- CLI `canact probe --json` prints a host-policy envelope (`maxTools`, `fromCache`, `cacheable`, `recommendedContextTokens`, per-probe `status`). `recommendedContextTokens` is a verified floor (`min(advertised, measured)`), not a window to copy into Cline or Aider. `fromCache` is a cache hit. `cacheable` is persist-for-30-days.
+- Library entry: `ProbeRunner::new` (paid) or `ProbeRunner::new_throttled` / `.cheap()` (policy). Feature `runtime`. Call `.suite(SuiteTier::Policy|Full|All)` then `run()` or `run_detailed()`. Persist only with `ProbeRun::persist` / `ProbeRunner::persist` when the run is cacheable.
+- Disk cache (`probes.json`) is `ProbeCache`: pretty JSON, 30-day TTL, key includes model, provider, effort, `PROBE_SUITE_VERSION`, suite (`policy`/`full`/`all`), vision, and advertised context. Per-dimension `grader_versions` reset only the stale dim. That file is not the CLI envelope.
+- CLI `canact probe --json` prints a host-policy envelope (`maxTools`, `fromCache`, `cacheable`, `suite`, `recommendedContextTokens`, `probes`, `diagnostics`). `--cheap` is `--suite=policy`. `--full` adds sequencing and the 8k/16k ladder. `--suite=all` adds diagnostics. `recommendedContextTokens` is a verified floor (`min(advertised, measured)`), not a window to copy into Cline or Aider. `fromCache` is a cache hit. `cacheable` is persist-for-30-days.
 - `maxTools` follows completed `tool_selection` only: Strong unlimited (`null`), Medium 20, Weak 10. Transient or skipped cores do not collapse overall and do not force JSON repair.
 - Auth, missing model, and connect failures abort the suite. Timeouts and 429/5xx are Transient and must not be stored as a 30-day Weak or Medium card.
 - CLI `canact mcp` is a stdio MCP server. The tool is `probe_model`. It returns the same host-policy JSON as `canact probe --json`, not TTFT. Pass `api_key_env` (env var name), never the key.

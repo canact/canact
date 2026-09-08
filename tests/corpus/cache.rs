@@ -48,8 +48,8 @@ fn cache_key_includes_effort_and_suite() {
 }
 
 #[test]
-fn cache_key_format_is_model_provider_unset_v96() {
-    assert_eq!(PROBE_SUITE_VERSION, 96);
+fn cache_key_format_is_model_provider_unset_v97() {
+    assert_eq!(PROBE_SUITE_VERSION, 97);
     assert_eq!(CACHE_TTL_SECS, 30 * 24 * 60 * 60);
     let k = ProbeCache::cache_key(
         "model",
@@ -57,7 +57,7 @@ fn cache_key_format_is_model_provider_unset_v96() {
         DEFAULT_PROBE_EFFORT,
         PROBE_SUITE_VERSION,
     );
-    assert_eq!(k, "model|provider|unset|v96|full|novision|ctxnone");
+    assert_eq!(k, "model|provider|unset|v97|full|novision|ctxnone");
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn cache_key_includes_cheap_and_vision_knobs() {
     let vision = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, true, None);
     assert_ne!(cheap, full);
     assert_ne!(full, vision);
-    assert_eq!(cheap, "m|p|unset|v7|cheap|novision|ctxnone");
+    assert_eq!(cheap, "m|p|unset|v7|policy|novision|ctxnone");
     assert_eq!(full, "m|p|unset|v7|full|novision|ctxnone");
     assert_eq!(vision, "m|p|unset|v7|full|vision|ctxnone");
 }
@@ -166,6 +166,7 @@ fn find_profile_prefers_newer_cached_at() {
             cached_at: now.saturating_sub(60),
             reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
             probe_suite_version: PROBE_SUITE_VERSION,
+            grader_versions: Default::default(),
         },
     );
     cache.profiles.insert(
@@ -175,6 +176,7 @@ fn find_profile_prefers_newer_cached_at() {
             cached_at: now,
             reasoning_effort: DEFAULT_PROBE_EFFORT.into(),
             probe_suite_version: PROBE_SUITE_VERSION,
+            grader_versions: Default::default(),
         },
     );
     let found = cache.find_profile("m", "p").expect("row");
@@ -651,6 +653,7 @@ fn get_misses_when_ttl_expired() {
             cached_at: 0,
             reasoning_effort: DEFAULT_PROBE_EFFORT.to_owned(),
             probe_suite_version: PROBE_SUITE_VERSION,
+            grader_versions: Default::default(),
         },
     );
     assert!(cache.get("m", "p").is_none(), "expired TTL must miss");
@@ -831,4 +834,46 @@ fn legacy_json_deserializes_with_defaults() {
     let entry: CacheEntry = serde_json::from_value(entry_json).unwrap();
     assert_eq!(entry.reasoning_effort, "unset");
     assert_eq!(entry.probe_suite_version, 1);
+    assert!(entry.grader_versions.is_empty());
+}
+
+#[test]
+fn stale_vision_grader_keeps_tool_calling() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    cache.put(sample_profile());
+    for entry in cache.profiles.values_mut() {
+        entry.grader_versions.insert("vision".into(), 0);
+    }
+    cache.save(&path).expect("save mixed versions");
+    let loaded = ProbeCache::load(&path).expect("load");
+    let got = loaded.get("m", "p").expect("hit");
+    assert_eq!(got.tool_calling.level, CapabilityLevel::Strong);
+    assert_eq!(got.tool_calling.score, 0.9);
+    assert!(
+        got.vision.is_unprobed_default(),
+        "stale vision must reset: {:?}",
+        got.vision
+    );
+    assert_eq!(got.vision.name, "vision");
+}
+
+#[test]
+fn suite_all_key_is_isolated_from_full() {
+    let mut cache = ProbeCache::default();
+    cache.put_with_suite(sample_profile(), canact::SuiteTier::All, false, None);
+    assert!(
+        cache
+            .get_with_suite("m", "p", canact::SuiteTier::All, false, None)
+            .is_some()
+    );
+    assert!(
+        cache.get("m", "p").is_none(),
+        "full default must not return an all-suite row"
+    );
+    assert!(
+        cache.get_with_knobs("m", "p", true, false, None).is_none(),
+        "policy must not return an all-suite row"
+    );
 }

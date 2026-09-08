@@ -28,6 +28,7 @@ pub use json_output::{probe_instruction_following, probe_json_output};
 pub use max_tokens_compliance::probe_max_tokens_compliance;
 pub use multi_turn_memory::probe_multi_turn_memory;
 pub use multi_turn_task_sequencing::probe_multi_turn_task_sequencing;
+#[allow(unused_imports)] // serde/cache field stays; runner never calls this probe
 pub use one_shot_tool_plan::probe_one_shot_tool_plan;
 pub use parallel_tool_scale::probe_parallel_tool_scale;
 pub use streaming_tool_calls::probe_streaming_tool_calls;

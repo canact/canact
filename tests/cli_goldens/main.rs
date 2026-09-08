@@ -71,6 +71,7 @@ fn probe_help_lists_cheap_full_vision() {
     let help = stdout_of(&["probe", "--help"]);
     assert!(help.contains("--cheap"), "{help}");
     assert!(help.contains("--full"), "{help}");
+    assert!(help.contains("--suite"), "{help}");
     assert!(help.contains("--vision"), "{help}");
     assert!(help.contains("--advertised-context"), "{help}");
 }

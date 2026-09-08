@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
-    ProbeError, ProbeRun, ProbeRunner, claude_code_access_token, list_model_ids, looks_cheap,
-    missing_model_message, provider_from_base_url, refuse_cloud_without_key, resolve_api_key_from,
-    resolve_host_catalog, run_mcp_stdio,
+    ProbeError, ProbeRun, ProbeRunner, SuiteTier, claude_code_access_token, list_model_ids,
+    looks_cheap, missing_model_message, provider_from_base_url, refuse_cloud_without_key,
+    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -71,11 +71,15 @@ struct ProbeArgs {
     #[arg(long)]
     force: bool,
 
-    /// Alias of new_throttled
+    /// Suite tier: policy (host-policy only), full (+ sequencing/ladder), all (+ diagnostics)
+    #[arg(long, value_name = "policy|full|all")]
+    suite: Option<String>,
+
+    /// Alias of `--suite=policy`
     #[arg(long, conflicts_with = "full")]
     cheap: bool,
 
-    /// Alias of new (paid suite even on local/free)
+    /// Alias of `--suite=full`
     #[arg(long)]
     full: bool,
 
@@ -159,31 +163,26 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         1u8
     })?;
     let vision = args.vision;
+    let suite = match resolve_suite(&args) {
+        Ok(s) => s,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Err(1);
+        }
+    };
 
     if !args.force {
         if let Some(model) = args.model.as_deref().filter(|s| !s.is_empty()) {
-            let cheap = if args.full {
-                false
-            } else if args.cheap {
-                true
-            } else {
-                looks_cheap(&provider, model, &base_url)
-            };
             if vision_catalog_flag(&args).is_none() && args.advertised_context.is_none() {
-                if let Some((profile, skip_expensive, advertised)) = cache
-                    .find_profile_unspecified_catalog(model, &provider, cheap)
+                if let Some((profile, _skip_expensive, advertised)) = cache
+                    .find_profile_unspecified_catalog_suite(model, &provider, suite)
                     .map(|(p, c, a)| (p.clone(), c, a))
                 {
                     return emit_profile(
                         &profile,
                         args.json,
                         args.verbose,
-                        HostPolicyMeta {
-                            cacheable: true,
-                            from_cache: true,
-                            skip_expensive,
-                            advertised_context_tokens: advertised,
-                        },
+                        HostPolicyMeta::for_suite(true, true, suite, advertised),
                     );
                 }
             }
@@ -191,21 +190,20 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                 &cache,
                 model,
                 &provider,
-                cheap,
+                suite,
                 vision,
                 args.advertised_context,
-                args.full,
             ) {
+                let hit_suite = if skip_expensive {
+                    SuiteTier::Policy
+                } else {
+                    suite
+                };
                 return emit_profile(
                     &profile,
                     args.json,
                     args.verbose,
-                    HostPolicyMeta {
-                        cacheable: true,
-                        from_cache: true,
-                        skip_expensive,
-                        advertised_context_tokens: advertised,
-                    },
+                    HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
                 );
             }
         }
@@ -228,27 +226,20 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     .await;
     let advertised = hints.advertised_context_tokens;
     let vision = hints.supports_vision == Some(true);
-    let cheap = if args.full {
-        false
-    } else if args.cheap {
-        true
-    } else {
-        looks_cheap(&provider, &model, &base_url)
-    };
     if !args.force {
-        if let Some((profile, skip_expensive, advertised)) = cached_probe(
-            &cache, &model, &provider, cheap, vision, advertised, args.full,
-        ) {
+        if let Some((profile, skip_expensive, advertised)) =
+            cached_probe(&cache, &model, &provider, suite, vision, advertised)
+        {
+            let hit_suite = if skip_expensive {
+                SuiteTier::Policy
+            } else {
+                suite
+            };
             return emit_profile(
                 &profile,
                 args.json,
                 args.verbose,
-                HostPolicyMeta {
-                    cacheable: true,
-                    from_cache: true,
-                    skip_expensive,
-                    advertised_context_tokens: advertised,
-                },
+                HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
             );
         }
     }
@@ -270,11 +261,10 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         1u8
     })?;
 
-    let runner = if cheap {
-        ProbeRunner::new_throttled(client)
-    } else {
-        ProbeRunner::new(client)
-    };
+    let mut runner = ProbeRunner::new(client).suite(suite);
+    if looks_cheap(&provider, &model, &base_url) {
+        runner = runner.throttled();
+    }
 
     if !args.json {
         println!("Probing {model} ({provider})...");
@@ -478,21 +468,32 @@ fn cached_probe(
     cache: &ProbeCache,
     model: &str,
     provider: &str,
-    skip_expensive: bool,
+    suite: SuiteTier,
     vision: bool,
     advertised: Option<u32>,
-    full: bool,
 ) -> Option<(CapabilityProfile, bool, Option<u32>)> {
-    if let Some(profile) = cache.get_with_knobs(model, provider, skip_expensive, vision, advertised)
-    {
-        return Some((profile.clone(), skip_expensive, advertised));
+    if let Some(profile) = cache.get_with_suite(model, provider, suite, vision, advertised) {
+        return Some((profile.clone(), suite.skip_expensive(), advertised));
     }
-    if full || vision {
+    if !matches!(suite, SuiteTier::Policy) || vision {
         return None;
     }
     cache
         .find_profile_with_cost_and_advertised(model, provider, advertised)
         .map(|(profile, cheap_row)| (profile.clone(), cheap_row, advertised))
+}
+
+fn resolve_suite(args: &ProbeArgs) -> Result<SuiteTier, String> {
+    if let Some(raw) = args.suite.as_deref() {
+        return SuiteTier::parse(raw)
+            .ok_or_else(|| format!("unknown --suite={raw} (expected policy, full, or all)"));
+    }
+    if args.full {
+        Ok(SuiteTier::Full)
+    } else {
+        // `--cheap` and the no-flag default are the policy tier.
+        Ok(SuiteTier::Policy)
+    }
 }
 
 fn expand_tilde(path: PathBuf) -> PathBuf {

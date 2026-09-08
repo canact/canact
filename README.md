@@ -60,6 +60,11 @@ Rust 1.85.
 canact probe --provider ollama --model llama3.2:3b --cheap --json
 ```
 
+`--cheap` is `--suite=policy` (host-policy fields, 4k ladder).
+`--full` adds sequencing and the 8k/16k ladder. `--suite=all`
+adds diagnostics (`code_syntax`, token efficiency, system
+message, memory).
+
 Cloud hosts need a key before any HTTP call (`OPENAI_API_KEY`,
 `OPENROUTER_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
 `--api-key`). Auth, a missing model, and connect failures abort the

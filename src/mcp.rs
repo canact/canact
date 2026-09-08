@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRunner, claude_code_access_token, looks_cheap, provider_from_base_url,
+    ProbeRunner, SuiteTier, claude_code_access_token, looks_cheap, provider_from_base_url,
     refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
 };
 
@@ -101,8 +101,12 @@ fn tools_list() -> Value {
                     "base_url": { "type": "string", "description": "OpenAI-compatible base URL" },
                     "api_key_env": { "type": "string", "description": "Env var holding the API key (never pass the key itself)" },
                     "cache": { "type": "string", "description": "Probe cache path" },
-                    "cheap": { "type": "boolean" },
-                    "full": { "type": "boolean" },
+                    "suite": {
+                        "type": "string",
+                        "description": "policy (default), full, or all. cheap/full remain aliases."
+                    },
+                    "cheap": { "type": "boolean", "description": "Alias of suite=policy" },
+                    "full": { "type": "boolean", "description": "Alias of suite=full" },
                     "vision": {
                         "type": "boolean",
                         "description": "true runs vision; false skips it. Omit to use the host catalog."
@@ -181,6 +185,13 @@ async fn probe_model_with_route(
     let advertised = json_u32(args.get("advertised_context"));
     let cheap = json_bool(args.get("cheap")).unwrap_or(false);
     let full = json_bool(args.get("full")).unwrap_or(false);
+    let suite = match args.get("suite").and_then(Value::as_str) {
+        Some(raw) => SuiteTier::parse(raw)
+            .ok_or_else(|| format!("unknown suite={raw} (expected policy, full, or all)"))?,
+        None if full => SuiteTier::Full,
+        None if cheap => SuiteTier::Policy,
+        None => SuiteTier::Policy,
+    };
     let vision_flag = json_bool(args.get("vision"));
     let vision = vision_flag.unwrap_or(false);
     let force = json_bool(args.get("force")).unwrap_or(false);
@@ -206,46 +217,32 @@ async fn probe_model_with_route(
         .map(str::to_owned)
         .unwrap_or_else(|| route.default_base_url(provider_given.as_deref().unwrap_or("")));
     let provider = provider_given.unwrap_or_else(|| provider_from_base_url(&base_url));
-    let skip_expensive = if full {
-        false
-    } else if cheap {
-        true
-    } else {
-        looks_cheap(&provider, &model, &base_url)
-    };
     if !force {
-        if let Some(profile) =
-            cache.get_with_knobs(&model, &provider, skip_expensive, vision, advertised)
-        {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
-                cacheable: true,
-                from_cache: true,
-                skip_expensive,
-                advertised_context_tokens: advertised,
-            }));
+        if let Some(profile) = cache.get_with_suite(&model, &provider, suite, vision, advertised) {
+            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                true, true, suite, advertised,
+            )));
         }
         if advertised.is_none() && vision_flag.is_none() {
-            if let Some((profile, cheap_row, stored_advertised)) =
-                cache.find_profile_unspecified_catalog(&model, &provider, skip_expensive)
+            if let Some((profile, _cheap_row, stored_advertised)) =
+                cache.find_profile_unspecified_catalog_suite(&model, &provider, suite)
             {
-                return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
-                    cacheable: true,
-                    from_cache: true,
-                    skip_expensive: cheap_row,
-                    advertised_context_tokens: stored_advertised,
-                }));
+                return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                    true,
+                    true,
+                    suite,
+                    stored_advertised,
+                )));
             }
         }
-        if !full && !vision {
+        if matches!(suite, SuiteTier::Policy) && !vision {
             if let Some((profile, cheap_row)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
             {
-                return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
-                    cacheable: true,
-                    from_cache: true,
-                    skip_expensive: cheap_row,
-                    advertised_context_tokens: advertised,
-                }));
+                let hit = if cheap_row { SuiteTier::Policy } else { suite };
+                return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                    true, true, hit, advertised,
+                )));
             }
         }
     }
@@ -263,26 +260,19 @@ async fn probe_model_with_route(
     let advertised = hints.advertised_context_tokens;
     let vision = hints.supports_vision == Some(true);
     if !force {
-        if let Some(profile) =
-            cache.get_with_knobs(&model, &provider, skip_expensive, vision, advertised)
-        {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
-                cacheable: true,
-                from_cache: true,
-                skip_expensive,
-                advertised_context_tokens: advertised,
-            }));
+        if let Some(profile) = cache.get_with_suite(&model, &provider, suite, vision, advertised) {
+            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                true, true, suite, advertised,
+            )));
         }
-        if !full && !vision {
+        if matches!(suite, SuiteTier::Policy) && !vision {
             if let Some((profile, cheap_row)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
             {
-                return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
-                    cacheable: true,
-                    from_cache: true,
-                    skip_expensive: cheap_row,
-                    advertised_context_tokens: advertised,
-                }));
+                let hit = if cheap_row { SuiteTier::Policy } else { suite };
+                return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                    true, true, hit, advertised,
+                )));
             }
         }
     }
@@ -291,13 +281,13 @@ async fn probe_model_with_route(
         supports_vision: hints.supports_vision,
         supports_tools: None,
     };
+    let throttle = looks_cheap(&provider, &model, &base_url);
     let client = OpenAiCompatClient::new(base_url, api_key, model, provider, catalog)
         .map_err(|e| e.to_string())?;
-    let runner = if skip_expensive {
-        ProbeRunner::new_throttled(client)
-    } else {
-        ProbeRunner::new(client)
-    };
+    let mut runner = ProbeRunner::new(client).suite(suite);
+    if throttle {
+        runner = runner.throttled();
+    }
     let run = runner.run_detailed().await.map_err(|e| match e {
         ProbeError::Auth(msg) => format!("authentication error: {msg}"),
         other => other.to_string(),
