@@ -297,6 +297,46 @@ fn probe_json_cache_hit_includes_flags() {
 }
 
 #[test]
+fn probe_json_reuses_catalog_filled_row_without_flags() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(
+        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+        false,
+        true,
+        Some(200_000),
+    );
+    cache.save(&cache_path).expect("save cache");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--full",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn canact probe --json");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "catalog-filled cache must hit without a key or GET /models: stdout={stdout}\nstderr={stderr}"
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["advertisedContextTokens"], 200_000, "{value}");
+}
+
+#[test]
 fn probe_json_cache_hit_includes_advertised_context() {
     let value = probe_json_from_cache(
         &["--cheap", "--advertised-context", "40960"],

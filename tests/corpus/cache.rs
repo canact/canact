@@ -73,6 +73,43 @@ fn cache_key_includes_cheap_and_vision_knobs() {
 }
 
 #[test]
+fn unspecified_catalog_reuses_ctx_and_vision_row() {
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.effective_context_tokens = Some(8192);
+    cache.put_with_knobs(profile, false, true, Some(200_000));
+    assert!(
+        cache.get_with_knobs("m", "p", false, false, None).is_none(),
+        "default knobs must miss a catalog-filled key"
+    );
+    let (found, cheap, advertised) = cache
+        .find_profile_unspecified_catalog("m", "p", false)
+        .expect("catalog-filled row");
+    assert!(!cheap);
+    assert_eq!(advertised, Some(200_000));
+    assert_eq!(found.effective_context_tokens, Some(8192));
+}
+
+#[test]
+fn unspecified_catalog_keeps_cheap_full_isolation() {
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(sample_profile(), true, true, Some(200_000));
+    assert!(
+        cache
+            .find_profile_unspecified_catalog("m", "p", false)
+            .is_none(),
+        "full lookup must not reuse a cheap catalog row"
+    );
+    let mut full = ProbeCache::default();
+    full.put_with_knobs(sample_profile(), false, true, Some(200_000));
+    assert!(
+        full.find_profile_unspecified_catalog("m", "p", true)
+            .is_none(),
+        "cheap lookup must not reuse a full catalog row"
+    );
+}
+
+#[test]
 fn cache_key_includes_advertised_context() {
     let none = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, false, None);
     let cap = ProbeCache::cache_key_with_knobs("m", "p", "unset", 7, false, false, Some(2000));

@@ -224,6 +224,18 @@ async fn probe_model_with_route(
                 advertised_context_tokens: advertised,
             }));
         }
+        if advertised.is_none() && vision_flag.is_none() {
+            if let Some((profile, cheap_row, stored_advertised)) =
+                cache.find_profile_unspecified_catalog(&model, &provider, skip_expensive)
+            {
+                return Ok(profile.host_policy_envelope_with(HostPolicyMeta {
+                    cacheable: true,
+                    from_cache: true,
+                    skip_expensive: cheap_row,
+                    advertised_context_tokens: stored_advertised,
+                }));
+            }
+        }
         if !full && !vision {
             if let Some((profile, cheap_row)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
