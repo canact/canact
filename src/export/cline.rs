@@ -31,7 +31,7 @@ impl ClineModelInfo {
     pub fn from_profile(profile: &CapabilityProfile, advertised: Option<u32>) -> Self {
         Self {
             context_window: overlay_context_tokens(profile, advertised),
-            max_tokens: None,
+            max_tokens: profile.max_output_tokens,
             supports_images: profile.supports_vision(),
             supports_prompt_cache: false,
         }
@@ -83,6 +83,20 @@ mod tests {
         let value = serde_json::to_value(&info).expect("json");
         assert!(value.get("contextWindow").is_none(), "{value}");
         assert!(value.get("maxTokens").is_none(), "{value}");
+    }
+
+    #[test]
+    fn cline_export_writes_measured_output_cap() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.max_output_tokens = Some(4096);
+        let info = ClineModelInfo::from_profile(&p, Some(200_000));
+        assert_eq!(info.max_tokens, Some(4096));
+        assert_eq!(info.context_window, Some(200_000));
+        assert_ne!(info.max_tokens, info.context_window);
     }
 
     #[test]

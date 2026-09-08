@@ -37,25 +37,30 @@ pub async fn probe_max_tokens_compliance<C: ProbeClient>(
     }
     let char_count = response.text.len();
 
-    let (score, details) = if response.text.trim().is_empty() {
+    let (score, details) = if response.finish == ProbeFinish::Length {
+        (
+            1.0,
+            format!("finish=Length after {char_count} chars with max_tokens=40 (honored)"),
+        )
+    } else if response.text.trim().is_empty() {
         (
             0.0,
             format!("Response {char_count} chars with max_tokens=40 (empty)"),
+        )
+    } else if char_count > 800 {
+        (
+            0.0,
+            format!("finish=Stop after {char_count} chars with max_tokens=40 (limit ignored)"),
         )
     } else if char_count <= 400 {
         (
             1.0,
             format!("Response {char_count} chars with max_tokens=40 (compliant)"),
         )
-    } else if char_count <= 800 {
+    } else {
         (
             0.5,
             format!("Response {char_count} chars with max_tokens=40 (borderline)"),
-        )
-    } else {
-        (
-            0.0,
-            format!("Response {char_count} chars with max_tokens=40 (limit ignored)"),
         )
     };
 
@@ -111,6 +116,17 @@ mod tests {
         };
         let result = probe_max_tokens_compliance(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn length_finish_is_compliant_even_when_long() {
+        let long = "x".repeat(2000);
+        let llm = MockLlm {
+            response: length_text_response(&long),
+        };
+        let result = probe_max_tokens_compliance(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong);
+        assert!(result.details.contains("Length"), "{}", result.details);
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use canact::OVERSIZE_MAX_TOKENS;
 use canact::{
     CapabilityLevel, CapabilityProfile, CatalogPriors, DIMENSION_NAMES, MockLlm, ProbeCache,
     ProbeClient, ProbeContent, ProbeContentPart, ProbeError, ProbeFinish, ProbeRequest,
@@ -42,6 +43,7 @@ fn sample_profile() -> CapabilityProfile {
         probed_at: 1,
         effective_context_tokens: None,
         probed_context_floor: None,
+        max_output_tokens: None,
     }
 }
 
@@ -497,6 +499,16 @@ async fn policy_suite_does_not_call_diagnostics_or_one_shot() {
     assert!(env["diagnostics"].as_object().unwrap().is_empty(), "{env}");
     assert!(env["probes"].get("oneShotToolPlan").is_none(), "{env}");
     assert!(env["probes"].get("codeSyntax").is_none(), "{env}");
+    assert!(
+        rec.iter()
+            .any(|r| r.max_tokens == Some(OVERSIZE_MAX_TOKENS)),
+        "policy must ask an oversize max_tokens to measure the cap"
+    );
+    assert!(
+        !requests_contain(&rec, "1 through 200"),
+        "policy must not run the long max_tokens_compliance generation"
+    );
+    assert!(env.get("maxOutputTokens").is_none(), "{env}");
 }
 
 #[tokio::test]

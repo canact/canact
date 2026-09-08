@@ -38,6 +38,7 @@ fn sample_profile() -> CapabilityProfile {
         probed_at: 1,
         effective_context_tokens: None,
         probed_context_floor: None,
+        max_output_tokens: None,
     }
 }
 

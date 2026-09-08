@@ -127,6 +127,7 @@ fn cached_profile(tool: CapabilityLevel, xml: CapabilityLevel) -> CapabilityProf
         probed_at: 1_700_000_000,
         effective_context_tokens: Some(8192),
         probed_context_floor: Some(8192),
+        max_output_tokens: None,
     }
 }
 

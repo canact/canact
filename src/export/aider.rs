@@ -58,7 +58,7 @@ impl AiderOverlay {
             name,
             AiderMetadataEntry {
                 max_input_tokens: overlay_context_tokens(profile, advertised),
-                max_output_tokens: None,
+                max_output_tokens: profile.max_output_tokens,
                 litellm_provider: super::normalize_overlay_provider(
                     &profile.provider.to_ascii_lowercase(),
                 )
@@ -157,6 +157,22 @@ mod tests {
         let value = serde_json::to_value(meta).expect("json");
         assert!(value.get("max_input_tokens").is_none(), "{value}");
         assert!(value.get("max_output_tokens").is_none(), "{value}");
+    }
+
+    #[test]
+    fn aider_export_writes_measured_output_cap() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.max_output_tokens = Some(4096);
+        p.probed_context_floor = Some(16384);
+        let overlay = AiderOverlay::from_profile(&p, Some(200_000));
+        let meta = overlay.metadata.get("ollama/qwen2.5-coder").expect("meta");
+        assert_eq!(meta.max_output_tokens, Some(4096));
+        assert_eq!(meta.max_input_tokens, Some(200_000));
+        assert_ne!(meta.max_output_tokens, meta.max_input_tokens);
     }
 
     #[test]
