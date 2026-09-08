@@ -50,21 +50,28 @@ auto-merge it. Merging it creates the git tag and starts cargo-dist
 (GitHub Release archives, Homebrew, Scoop). crates.io is still a
 manual `cargo publish` by the maintainer.
 
-Optional curated GitHub Release notes: add `docs/releases/vX.Y.Z.md`
-on `main` (a `docs:` PR is enough). The file stays. There is no
-cleanup PR and no `RELEASE_NOTES.md` at the repo root. cargo-dist
-host copies that file onto the Release page if it exists; otherwise
-the auto changelog stays. To change notes after the tag without
-rebuilding archives:
+Optional curated GitHub Release notes. Do not put them on `main`
+and do not open a PR for them (that would start CI). Push a
+one-file branch named after the version, then merge the release PR:
 
 ```bash
-gh workflow run "Apply release notes" -f tag=vX.Y.Z
+# tag v0.1.2 -> branch release-note-0.1.2
+git checkout --orphan release-note-0.1.2
+git rm -rf --cached .
+printf '%s\n' '# canact 0.1.2' > RELEASE_NOTES.md
+git add RELEASE_NOTES.md
+git commit -s -m "docs: notes for 0.1.2"
+git push -u origin release-note-0.1.2
 ```
 
-A `docs:` notes PR does not rewrite the release-please changelog.
-Merge the notes PR, then merge the release PR when you want the cut.
-Do not put notes on the `release-please--*` branch (that head is
-force-pushed).
+cargo-dist host copies that file onto the Release page and deletes
+the branch. No cleanup PR. A later `gh workflow run "Apply release
+notes" -f tag=v0.1.2` does the same without rebuilding archives.
+
+Or skip git: set Actions variables `RELEASE_NOTES` (markdown) and
+`RELEASE_NOTES_TAG` (`v0.1.2` or `0.1.2`). The tag pin stops leftover
+text applying to the next cut. Variables are not auto-deleted
+(`GITHUB_TOKEN` cannot manage them).
 
 ## License
 

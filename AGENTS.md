@@ -14,8 +14,10 @@ DCO: `git commit -s`
 PR titles must be conventional (`feat` / `fix` / `perf` bump a
 release; `docs` / `chore` / `test` / `ci` do not). Do not merge a
 release-please PR (`autorelease: pending`) without an explicit
-human yes. Curated GitHub Release notes are
-`docs/releases/vX.Y.Z.md` (file stays; no cleanup PR).
+human yes. Curated GitHub Release notes are branch
+`release-note-0.1.2` (`RELEASE_NOTES.md`, no PR) or Actions vars
+`RELEASE_NOTES` plus `RELEASE_NOTES_TAG`. Host applies them and
+deletes the notes branch. Do not commit notes to `main`.
 
 Keep GitHub About, topics, and README in sync with the launched
 product. Do not publish to crates.io until the maintainer publishes.

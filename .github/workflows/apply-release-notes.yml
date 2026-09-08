@@ -1,6 +1,7 @@
-# Cheap re-apply of docs/releases/<tag>.md onto a GitHub Release.
-# Does not compile and does not start cargo-dist. Use after landing
-# or editing a notes file, or when host already finished with auto notes.
+# Cheap apply of curated notes onto a GitHub Release.
+# Reads branch release-note-<semver> or vars RELEASE_NOTES +
+# RELEASE_NOTES_TAG. Deletes the notes branch after a successful
+# apply. Does not compile and does not start cargo-dist.
 name: Apply release notes
 
 on:
@@ -29,6 +30,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       TAG: ${{ inputs.tag }}
+      RELEASE_NOTES: ${{ vars.RELEASE_NOTES }}
+      RELEASE_NOTES_TAG: ${{ vars.RELEASE_NOTES_TAG }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
