@@ -22,8 +22,9 @@ mod vision;
 mod xml_fallback;
 
 pub use code_syntax::probe_code_syntax;
+#[allow(unused_imports)] // standalone probe retired; tests keep the module
 pub use context_faithfulness::probe_context_faithfulness;
-pub use context_ladder::{ContextLadder, probe_effective_context_tokens};
+pub use context_ladder::{ContextLadder, faithfulness_from_ladder, probe_effective_context_tokens};
 pub use edit_format::{probe_search_replace, probe_unified_diff};
 pub use json_output::{probe_instruction_following, probe_json_output};
 pub use max_output_tokens::{OVERSIZE_MAX_TOKENS, parse_max_output_cap, probe_max_output_tokens};

@@ -35,6 +35,7 @@ timeout of 3 seconds.";
 /// - `0.67` - 2 of 3 correct
 /// - `0.33` - 1 of 3 correct
 /// - `0.0` - 0 correct or refused to answer
+#[allow(dead_code)] // retired live call; ladder derives this dimension
 pub async fn probe_context_faithfulness<C: ProbeClient>(
     llm: &C,
 ) -> Result<ProbeResult, ProbeError> {

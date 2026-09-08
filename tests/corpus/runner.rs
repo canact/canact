@@ -500,6 +500,16 @@ async fn policy_suite_does_not_call_diagnostics_or_one_shot() {
     assert!(env["probes"].get("oneShotToolPlan").is_none(), "{env}");
     assert!(env["probes"].get("codeSyntax").is_none(), "{env}");
     assert!(
+        env["probes"].get("contextFaithfulness").is_some(),
+        "derived faithfulness stays a policy probe: {env}"
+    );
+    assert!(
+        !requests_contain(&rec, "9847"),
+        "policy must not issue the standalone faithfulness call"
+    );
+    assert!(run.profile.dimension_result("multi_turn_memory").is_some());
+    assert!(env.get("agentLoop").is_some(), "{env}");
+    assert!(
         rec.iter()
             .any(|r| r.max_tokens == Some(OVERSIZE_MAX_TOKENS)),
         "policy must ask an oversize max_tokens to measure the cap"
@@ -651,9 +661,13 @@ async fn new_throttled_sets_expensive_dims_to_free_tier_skip() {
         profile.multi_turn_task_sequencing.details, PROMOTED_SKIP,
         "sequencing"
     );
-    assert_eq!(
-        profile.context_faithfulness.details, DIAGNOSTIC_SKIP,
-        "faithfulness"
+    assert!(
+        profile
+            .context_faithfulness
+            .details
+            .contains("ladder facts"),
+        "faithfulness is derived from the ladder: {}",
+        profile.context_faithfulness.details
     );
     assert_eq!(profile.multi_turn_memory.details, DIAGNOSTIC_SKIP, "memory");
     assert!(
@@ -680,7 +694,14 @@ async fn cheap_sets_expensive_dims_to_free_tier_skip() {
         .expect("run");
     assert_eq!(profile.one_shot_tool_plan.details, ONE_SHOT_SKIP);
     assert_eq!(profile.multi_turn_task_sequencing.details, PROMOTED_SKIP);
-    assert_eq!(profile.context_faithfulness.details, DIAGNOSTIC_SKIP);
+    assert!(
+        profile
+            .context_faithfulness
+            .details
+            .contains("ladder facts"),
+        "{}",
+        profile.context_faithfulness.details
+    );
     assert_eq!(profile.multi_turn_memory.details, DIAGNOSTIC_SKIP);
 }
 
@@ -928,9 +949,13 @@ async fn cheap_run_attempts_at_most_4k_rung() {
             envelope["probedContextFloor"], 4096,
             "cheap 4k pass must publish a floor; throttled={throttled} envelope={envelope}"
         );
-        assert_eq!(
-            profile.context_faithfulness.details, DIAGNOSTIC_SKIP,
-            "policy must skip context_faithfulness"
+        assert!(
+            profile
+                .context_faithfulness
+                .details
+                .contains("ladder facts"),
+            "policy derives faithfulness from the 4k ladder: {}",
+            profile.context_faithfulness.details
         );
         let rec = requests.lock().expect("lock");
         let ladder = ladder_requests(&rec);
