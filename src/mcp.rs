@@ -239,7 +239,11 @@ async fn probe_model_with_route(
             if let Some((profile, cheap_row)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
             {
-                let hit = if cheap_row { SuiteTier::Policy } else { suite };
+                let hit = if cheap_row {
+                    SuiteTier::Policy
+                } else {
+                    SuiteTier::Full
+                };
                 return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
                     true, true, hit, advertised,
                 )));
@@ -269,7 +273,11 @@ async fn probe_model_with_route(
             if let Some((profile, cheap_row)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
             {
-                let hit = if cheap_row { SuiteTier::Policy } else { suite };
+                let hit = if cheap_row {
+                    SuiteTier::Policy
+                } else {
+                    SuiteTier::Full
+                };
                 return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
                     true, true, hit, advertised,
                 )));

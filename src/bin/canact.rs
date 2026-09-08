@@ -186,7 +186,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                     );
                 }
             }
-            if let Some((profile, skip_expensive, advertised)) = cached_probe(
+            if let Some((profile, hit_suite, advertised)) = cached_probe(
                 &cache,
                 model,
                 &provider,
@@ -194,11 +194,6 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                 vision,
                 args.advertised_context,
             ) {
-                let hit_suite = if skip_expensive {
-                    SuiteTier::Policy
-                } else {
-                    suite
-                };
                 return emit_profile(
                     &profile,
                     args.json,
@@ -227,14 +222,9 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let advertised = hints.advertised_context_tokens;
     let vision = hints.supports_vision == Some(true);
     if !args.force {
-        if let Some((profile, skip_expensive, advertised)) =
+        if let Some((profile, hit_suite, advertised)) =
             cached_probe(&cache, &model, &provider, suite, vision, advertised)
         {
-            let hit_suite = if skip_expensive {
-                SuiteTier::Policy
-            } else {
-                suite
-            };
             return emit_profile(
                 &profile,
                 args.json,
@@ -471,16 +461,26 @@ fn cached_probe(
     suite: SuiteTier,
     vision: bool,
     advertised: Option<u32>,
-) -> Option<(CapabilityProfile, bool, Option<u32>)> {
+) -> Option<(CapabilityProfile, SuiteTier, Option<u32>)> {
     if let Some(profile) = cache.get_with_suite(model, provider, suite, vision, advertised) {
-        return Some((profile.clone(), suite.skip_expensive(), advertised));
+        return Some((profile.clone(), suite, advertised));
     }
     if !matches!(suite, SuiteTier::Policy) || vision {
         return None;
     }
     cache
         .find_profile_with_cost_and_advertised(model, provider, advertised)
-        .map(|(profile, cheap_row)| (profile.clone(), cheap_row, advertised))
+        .map(|(profile, cheap_row)| {
+            (
+                profile.clone(),
+                if cheap_row {
+                    SuiteTier::Policy
+                } else {
+                    SuiteTier::Full
+                },
+                advertised,
+            )
+        })
 }
 
 fn resolve_suite(args: &ProbeArgs) -> Result<SuiteTier, String> {
