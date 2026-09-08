@@ -50,6 +50,22 @@ auto-merge it. Merging it creates the git tag and starts cargo-dist
 (GitHub Release archives, Homebrew, Scoop). crates.io is still a
 manual `cargo publish` by the maintainer.
 
+Optional curated GitHub Release notes: add `docs/releases/vX.Y.Z.md`
+on `main` (a `docs:` PR is enough). The file stays. There is no
+cleanup PR and no `RELEASE_NOTES.md` at the repo root. cargo-dist
+host copies that file onto the Release page if it exists; otherwise
+the auto changelog stays. To change notes after the tag without
+rebuilding archives:
+
+```bash
+gh workflow run "Apply release notes" -f tag=vX.Y.Z
+```
+
+A `docs:` notes PR does not rewrite the release-please changelog.
+Merge the notes PR, then merge the release PR when you want the cut.
+Do not put notes on the `release-please--*` branch (that head is
+force-pushed).
+
 ## License
 
 This project is dual-licensed under MIT or Apache-2.0. You may choose
