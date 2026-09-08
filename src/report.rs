@@ -121,7 +121,7 @@ fn display_name(dim: &str) -> String {
 
 /// `--model` is required because `GET /models` did not return exactly one id.
 ///
-/// Includes the count and up to [`MISSING_MODEL_ID_PREVIEW`] ids.
+/// Includes the count and up to eight preview ids.
 pub fn missing_model_message<S: AsRef<str>>(ids: &[S]) -> String {
     let n = ids.len();
     let mut msg =

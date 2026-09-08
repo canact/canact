@@ -24,6 +24,7 @@ check: ## fmt, clippy, test, deny (same as CI lint+test)
 	RUSTFLAGS="-D warnings" cargo clippy --locked --all-targets -- -D warnings
 	RUSTFLAGS="-D warnings" cargo clippy --locked --all-targets --features runtime -- -D warnings
 	RUSTFLAGS="-D warnings" cargo clippy --locked --all-targets --features cli -- -D warnings
+	RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features
 	RUSTFLAGS="-D warnings" cargo test --locked
 	RUSTFLAGS="-D warnings" cargo test --locked --features runtime
 	RUSTFLAGS="-D warnings" cargo test --locked --features cli

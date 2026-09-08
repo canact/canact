@@ -65,6 +65,11 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo clippy --locked --all-targets --features runtime -- -D warnings
           cargo clippy --locked --all-targets --features cli -- -D warnings
+      - name: Rustdoc
+        if: >-
+          github.event_name != 'pull_request' ||
+          !startsWith(github.head_ref, 'release-please')
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features
       - name: Release-please check
         if: >-
           github.event_name == 'pull_request' &&
