@@ -978,6 +978,38 @@ fn host_policy_envelope_default_meta_is_cacheable_full() {
 }
 
 #[test]
+fn constraint_placement_weak_is_user_only_on_all() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.system_message_adherence =
+        make_probe("system_message_adherence", CapabilityLevel::Weak);
+    let all = profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+        true,
+        false,
+        canact::SuiteTier::All,
+        None,
+    ));
+    assert_eq!(all["constraintPlacement"], "user", "{all}");
+    assert!(
+        all["constraintPlacement"].as_str().is_some(),
+        "placement is an action, not a score: {all}"
+    );
+    let policy = profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+        true,
+        false,
+        canact::SuiteTier::Policy,
+        None,
+    ));
+    assert!(
+        policy.get("constraintPlacement").is_none(),
+        "policy isolation: {policy}"
+    );
+}
+
+#[test]
 fn plumbing_fields_are_independent_of_diagnostic_weak() {
     let mut profile = make_profile(
         CapabilityLevel::Strong,

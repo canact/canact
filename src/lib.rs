@@ -22,7 +22,7 @@ pub use error::ProbeError;
 pub use matrix::{PlumbingCell, PlumbingMatrix, PlumbingRow};
 pub use report::missing_model_message;
 pub use types::{
-    AgentLoop, CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile,
+    AgentLoop, CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, ConstraintPlacement,
     DIAGNOSTIC_DIMENSION_NAMES, DIMENSION_NAMES, EditFormatRecommendation, HostPolicyMeta,
     POLICY_DIMENSION_NAMES, ProbeResult, REQUIREMENT_DIMENSION_NAMES, SuiteTier, TOOL_PROBE_NAMES,
     classify,

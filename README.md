@@ -129,6 +129,7 @@ on-disk `probes.json` file.
 | `recommendedContextTokens` | Verified floor: `min(advertised, measured)`. Not a host window. Advertised alone is never used. |
 | `cacheable` | Safe to persist for 30 days |
 | `fromCache` | This print came from disk |
+| `constraintPlacement` | `--suite=all` only. `system` if the model follows the system prompt (Medium or stronger). `user` if Weak: put hard constraints in the user turn. Not a rank. |
 
 Agents that only have the repo URL should start at [`llms.txt`](llms.txt).
 

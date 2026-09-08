@@ -81,6 +81,20 @@ pub enum EditFormatRecommendation {
     DiffFenced,
 }
 
+/// Where a host should put hard constraints.
+///
+/// Medium or stronger [`CapabilityProfile::system_message_adherence`]
+/// means the system prompt is enough. Weak means repeat critical
+/// constraints in the user turn. Not a capability rank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintPlacement {
+    /// Constraints can live in the system prompt.
+    System,
+    /// Repeat critical constraints in the user turn.
+    User,
+}
+
 /// How far a host should run an agent loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -539,6 +553,17 @@ impl CapabilityProfile {
         Some(parallel_floor_from_score(self.parallel_tool_scale.score))
     }
 
+    /// Where to put hard constraints. `None` when unmeasured.
+    ///
+    /// Medium or stronger system-message adherence is [`ConstraintPlacement::System`].
+    /// Weak is [`ConstraintPlacement::User`].
+    pub fn constraint_placement(&self) -> Option<ConstraintPlacement> {
+        match self.system_message_adherence.measured_level()? {
+            CapabilityLevel::Strong | CapabilityLevel::Medium => Some(ConstraintPlacement::System),
+            CapabilityLevel::Weak => Some(ConstraintPlacement::User),
+        }
+    }
+
     /// Agent-loop recommendation from sequencing. `None` when unmeasured.
     pub fn agent_loop(&self) -> Option<AgentLoop> {
         match self.multi_turn_task_sequencing.measured_level()? {
@@ -637,6 +662,16 @@ impl CapabilityProfile {
         if self.max_output_tokens.is_none() {
             if let Some(obj) = value.as_object_mut() {
                 obj.remove("maxOutputTokens");
+            }
+        }
+        if meta.suite.run_diagnostics() {
+            if let Some(placement) = self.constraint_placement() {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert(
+                        "constraintPlacement".to_owned(),
+                        serde_json::json!(placement),
+                    );
+                }
             }
         }
         value
@@ -903,6 +938,10 @@ mod recommended_context_tests {
         assert!(env["probes"].get("oneShotToolPlan").is_none(), "{env}");
         assert!(env["probes"].get("codeSyntax").is_none(), "{env}");
         assert!(env["diagnostics"].as_object().unwrap().is_empty(), "{env}");
+        assert!(
+            env.get("constraintPlacement").is_none(),
+            "constraintPlacement stays off the policy tier: {env}"
+        );
     }
 
     #[test]
@@ -921,5 +960,74 @@ mod recommended_context_tests {
         assert_eq!(value["maxOutputTokens"], 4096, "{value}");
         assert_ne!(value["maxOutputTokens"], value["advertisedContextTokens"]);
         assert_ne!(value["maxOutputTokens"], value["probedContextFloor"]);
+    }
+
+    #[test]
+    fn constraint_placement_weak_is_user_on_all_suite() {
+        let mut p = profile();
+        p.system_message_adherence = ProbeResult {
+            name: "system_message_adherence".into(),
+            score: 0.1,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "ignored the system prompt".into(),
+        };
+        let all = p.host_policy_envelope_with(HostPolicyMeta::for_suite(
+            true,
+            false,
+            SuiteTier::All,
+            None,
+        ));
+        assert_eq!(all["constraintPlacement"], "user", "{all}");
+        assert_ne!(
+            all["constraintPlacement"],
+            all["diagnostics"]["systemMessageAdherence"]["score"]
+        );
+        let policy = p.host_policy_envelope_with(HostPolicyMeta::for_suite(
+            true,
+            false,
+            SuiteTier::Policy,
+            None,
+        ));
+        assert!(policy.get("constraintPlacement").is_none(), "{policy}");
+    }
+
+    #[test]
+    fn constraint_placement_medium_is_system() {
+        let mut p = profile();
+        p.system_message_adherence = ProbeResult {
+            name: "system_message_adherence".into(),
+            score: 0.5,
+            max_score: 1.0,
+            level: CapabilityLevel::Medium,
+            details: "followed the system prompt".into(),
+        };
+        let all = p.host_policy_envelope_with(HostPolicyMeta::for_suite(
+            true,
+            false,
+            SuiteTier::All,
+            None,
+        ));
+        assert_eq!(all["constraintPlacement"], "system", "{all}");
+    }
+
+    #[test]
+    fn constraint_placement_omits_unmeasured() {
+        let mut p = profile();
+        p.system_message_adherence = ProbeResult {
+            name: "system_message_adherence".into(),
+            score: 0.5,
+            max_score: 1.0,
+            level: CapabilityLevel::Medium,
+            details: "Skipped: diagnostic suite (use --suite=all)".into(),
+        };
+        let all = p.host_policy_envelope_with(HostPolicyMeta::for_suite(
+            true,
+            false,
+            SuiteTier::All,
+            None,
+        ));
+        assert!(all.get("constraintPlacement").is_none(), "{all}");
+        assert_eq!(p.constraint_placement(), None);
     }
 }

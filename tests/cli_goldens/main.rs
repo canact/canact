@@ -6,7 +6,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use canact::{CapabilityLevel, CapabilityProfile, ProbeCache, ProbeResult};
+use canact::{CapabilityLevel, CapabilityProfile, ProbeCache, ProbeResult, SuiteTier};
 
 fn canact() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_canact"));
@@ -300,6 +300,54 @@ fn probe_json_cache_hit_includes_flags() {
     assert_eq!(full["skipExpensive"], false, "{full}");
     assert_eq!(full["suite"], "full", "{full}");
     assert_eq!(cheap["suite"], "policy", "{cheap}");
+    assert!(
+        cheap.get("constraintPlacement").is_none(),
+        "policy must omit constraintPlacement: {cheap}"
+    );
+    assert!(
+        full.get("constraintPlacement").is_none(),
+        "full must omit constraintPlacement: {full}"
+    );
+}
+
+#[test]
+fn probe_json_all_suite_emits_constraint_placement() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".to_owned(),
+        score: 0.1,
+        max_score: 1.0,
+        level: CapabilityLevel::Weak,
+        details: "ignored the system prompt".to_owned(),
+    };
+    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    cache.save(&cache_path).expect("save cache");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--suite=all",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn canact probe --json");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["suite"], "all", "{value}");
+    assert_eq!(value["constraintPlacement"], "user", "{value}");
 }
 
 #[test]
