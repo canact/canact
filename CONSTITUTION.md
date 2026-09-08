@@ -3,7 +3,8 @@
 Immutable. Amending this file is a human-visible change
 (`chore: amend constitution`).
 
-1. MIT OR Apache-2.0. Rust. Crate + CLI. MCP later, not v1.
+1. MIT OR Apache-2.0. Rust. Crate + CLI + stdio MCP (`canact mcp`).
+   MCP is a v0 CLI surface, not a separate product.
 2. Independent org `canact` (not `blineai`). canact does not
    depend on Bline (`bline-*` crates or Bline runtime). Do not
    open pull requests or issues on `blineai/bline`. Bline may

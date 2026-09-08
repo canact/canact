@@ -10,7 +10,7 @@ src/lib.rs          public types and re-exports
   error             Auth / NotFound abort; Transient stays session-local
   runtime           ProbeClient, ProbeRunner, graders
   adapters/openai   OpenAI-compat, Anthropic, Ollama, xAI
-src/bin/canact.rs   CLI and MCP (feature `cli`)
+src/bin/canact.rs   CLI, export, and `canact mcp` (feature `cli`)
   export            Aider / Cline overlays
 ```
 

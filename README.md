@@ -84,6 +84,10 @@ After a cached probe:
 canact export --aider --model llama3.2:3b --provider ollama --dir /tmp/overlays
 ```
 
+`canact mcp` is a stdio MCP server. The tool is `probe_model`. It
+returns the same host-policy JSON as `canact probe --json`. Pass
+`api_key_env` (the name of an env var), never the key itself.
+
 ## Library
 
 Hosts implement `ProbeClient` and run `ProbeRunner`:

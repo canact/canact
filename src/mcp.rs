@@ -1,4 +1,4 @@
-//! Stdio MCP server. Tool name `probe_model` is stolen from Jwrede/llmprobe;
+//! Stdio MCP server. Tool name `probe_model` matches Jwrede/llmprobe;
 //! the payload is canact host-policy JSON, not TTFT.
 
 use std::io::{BufRead, Read, Write};
