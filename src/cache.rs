@@ -758,6 +758,43 @@ impl ProbeCache {
         self.profiles.insert(key, entry);
     }
 
+    /// Cached profiles for one provider, richest suite per model.
+    ///
+    /// Expired rows are skipped. Same-model policy/full/all rows collapse
+    /// to all, then full, then policy. Ties keep the newer `cached_at`.
+    pub fn matrix_profiles(&self, provider: &str) -> Vec<&CapabilityProfile> {
+        let mut best: HashMap<String, (u8, u64, &CapabilityProfile)> = HashMap::new();
+        for (key, entry) in &self.profiles {
+            if !Self::is_valid(entry) {
+                continue;
+            }
+            if entry.probe_suite_version != PROBE_SUITE_VERSION {
+                continue;
+            }
+            if !providers_equivalent(&entry.profile.provider, provider) {
+                continue;
+            }
+            let rank = match key_suite(key) {
+                SuiteTier::All => 3,
+                SuiteTier::Full => 2,
+                SuiteTier::Policy => 1,
+            };
+            let model = entry.profile.model_id.clone();
+            let keep = match best.get(&model) {
+                Some((old_rank, old_at, _)) => {
+                    rank > *old_rank || (rank == *old_rank && entry.cached_at > *old_at)
+                }
+                None => true,
+            };
+            if keep {
+                best.insert(model, (rank, entry.cached_at, &entry.profile));
+            }
+        }
+        let mut rows: Vec<&CapabilityProfile> = best.into_values().map(|(_, _, p)| p).collect();
+        rows.sort_by(|a, b| a.model_id.cmp(&b.model_id));
+        rows
+    }
+
     /// Store a profile under an explicit suite tier.
     pub fn put_with_suite(
         &mut self,

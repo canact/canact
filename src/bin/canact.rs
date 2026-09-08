@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient, ProbeCache,
-    ProbeError, ProbeRun, ProbeRunner, SuiteTier, claude_code_access_token, list_model_ids,
-    looks_cheap, missing_model_message, provider_from_base_url, refuse_cloud_without_key,
-    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
+    CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient,
+    PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
+    claude_code_access_token, list_model_ids, looks_cheap, missing_model_message,
+    provider_from_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -29,6 +30,8 @@ enum Command {
     Probe(ProbeArgs),
     /// Write Aider or Cline overlay files from a cached probe
     Export(ExportArgs),
+    /// Plumbing table from cached probes (pass / degraded / fail, no rank)
+    Matrix(MatrixArgs),
     /// Serve MCP stdio (`probe_model` returns host-policy JSON, not TTFT)
     Mcp,
 }
@@ -123,6 +126,17 @@ struct ExportArgs {
     advertised_context: Option<u32>,
 }
 
+#[derive(clap::Args)]
+struct MatrixArgs {
+    /// Provider whose cached models appear in the table
+    #[arg(long)]
+    provider: String,
+
+    /// Probe cache file [default: platform cache dir / canact / probes.json]
+    #[arg(long)]
+    cache: Option<PathBuf>,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
@@ -137,6 +151,10 @@ fn main() -> ExitCode {
             }
         }
         Command::Export(args) => match run_export(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
+        Command::Matrix(args) => match run_matrix(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
@@ -330,6 +348,36 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         print!("{}", first.body);
     }
     Ok(())
+}
+
+fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
+    if args.provider.trim().is_empty() {
+        eprintln!("error: --provider is required");
+        return Err(1);
+    }
+    let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
+    let cache = ProbeCache::load(&cache_path).map_err(|e| {
+        eprintln!("error: failed to load cache {}: {e}", cache_path.display());
+        1u8
+    })?;
+    let matrix = PlumbingMatrix::from_cache(&cache, &args.provider);
+    if matrix.rows.is_empty() {
+        eprintln!(
+            "error: no cached probes for {} (run `canact probe` first)",
+            args.provider
+        );
+        return Err(1);
+    }
+    match serde_json::to_string_pretty(&matrix) {
+        Ok(s) => {
+            println!("{s}");
+            Ok(())
+        }
+        Err(err) => {
+            eprintln!("error: failed to serialize matrix JSON: {err}");
+            Err(1)
+        }
+    }
 }
 
 fn emit_run(run: &ProbeRun, json: bool, verbose: bool) -> Result<(), u8> {

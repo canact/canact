@@ -87,7 +87,11 @@ After a cached probe:
 
 ```bash
 canact export --aider --model llama3.2:3b --provider ollama --dir /tmp/overlays
+canact matrix --provider ollama
 ```
+
+`canact matrix` prints a plumbing table (pass / degraded / fail) from
+the cache. It does not call a model and has no composite score.
 
 `canact mcp` is a stdio MCP server. The tool is `probe_model`. It
 returns the same host-policy JSON as `canact probe --json`. Pass

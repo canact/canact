@@ -3,6 +3,7 @@
 mod cache;
 mod endpoint;
 mod error;
+mod matrix;
 mod report;
 mod types;
 
@@ -18,6 +19,7 @@ pub use endpoint::{
     resolve_api_key_from,
 };
 pub use error::ProbeError;
+pub use matrix::{PlumbingCell, PlumbingMatrix, PlumbingRow};
 pub use report::missing_model_message;
 pub use types::{
     AgentLoop, CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile,
