@@ -263,28 +263,50 @@ fn find_profile_accepts_overlay_provider_aliases() {
     openai.model_id = "gpt-4o".into();
     openai.provider = "api.openai.com".into();
     cache.put(openai);
-    assert!(
-        cache.find_profile("gpt-4o", "openai").is_some(),
-        "--provider openai must find a row stored as api.openai.com"
-    );
-    assert!(
-        cache.find_profile("gpt-4o", "OpenAI").is_some(),
-        "provider aliases must compare case-insensitively"
-    );
+    let hit = cache
+        .find_profile("gpt-4o", "openai")
+        .expect("--provider openai must find a row stored as api.openai.com");
+    assert_eq!(hit.model_id, "gpt-4o");
+    assert_eq!(hit.provider, "api.openai.com");
+    let hit = cache
+        .find_profile("gpt-4o", "OpenAI")
+        .expect("provider aliases must compare case-insensitively");
+    assert_eq!(hit.model_id, "gpt-4o");
+    assert_eq!(hit.provider, "api.openai.com");
 
     let mut openrouter = sample_profile();
     openrouter.model_id = "claude".into();
     openrouter.provider = "openrouter.ai".into();
     cache.put(openrouter);
-    assert!(cache.find_profile("claude", "openrouter").is_some());
+    let hit = cache
+        .find_profile("claude", "openrouter")
+        .expect("openrouter alias");
+    assert_eq!(hit.model_id, "claude");
+    assert_eq!(hit.provider, "openrouter.ai");
 
     let mut ollama = sample_profile();
     ollama.model_id = "qwen".into();
     ollama.provider = "127.0.0.1".into();
     cache.put(ollama);
-    assert!(cache.find_profile("qwen", "ollama").is_some());
-    assert!(cache.find_profile("qwen", "localhost").is_some());
-    assert!(cache.find_profile("qwen", "::1").is_some());
+    let hit = cache.find_profile("qwen", "ollama").expect("ollama alias");
+    assert_eq!(hit.model_id, "qwen");
+    assert_eq!(hit.provider, "127.0.0.1");
+    let hit = cache
+        .find_profile("qwen", "localhost")
+        .expect("localhost alias");
+    assert_eq!(hit.model_id, "qwen");
+    assert_eq!(hit.provider, "127.0.0.1");
+    let hit = cache.find_profile("qwen", "::1").expect("::1 alias");
+    assert_eq!(hit.model_id, "qwen");
+    assert_eq!(hit.provider, "127.0.0.1");
+    assert!(
+        cache.find_profile("gpt-4o", "openrouter").is_none(),
+        "openai must not share the openrouter family"
+    );
+    assert!(
+        cache.find_profile("qwen", "openai").is_none(),
+        "ollama must not share the openai family"
+    );
 }
 
 #[test]
