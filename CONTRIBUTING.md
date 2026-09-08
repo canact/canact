@@ -11,8 +11,7 @@ straight to a pull request.
 ## Local gate
 
 The commands in `AGENTS.md` must pass on your workspace before you
-open a pull request. Put user-visible changes under Unreleased in
-`CHANGELOG.md`. In short:
+open a pull request. In short:
 
 ```bash
 make check
@@ -36,9 +35,20 @@ required checks (Lint, Test, Stealth, Workflow sanity, DCO).
 
 PR titles must be a conventional type (`feat`, `fix`, `docs`, `ci`,
 `chore`, `test`, `refactor`, `perf`, `build`, `style`, `revert`).
-The Semantic PR Title check enforces that.
+The Semantic PR Title check enforces that. After squash-merge, that
+title is what release-please reads:
 
-Do not publish to crates.io until the maintainer publishes.
+| Title prefix | Next version |
+|--------------|--------------|
+| `feat` / `feat!` | minor (0.x while pre-1.0) |
+| `fix` / `perf` | patch |
+| `docs` / `chore` / `test` / `ci` / `refactor` | changelog only, no bump |
+
+release-please opens a `chore(main): release X.Y.Z` PR and writes
+`CHANGELOG.md`. That PR is labeled `autorelease: pending`. Do not
+auto-merge it. Merging it creates the git tag and starts cargo-dist
+(GitHub Release archives, Homebrew, Scoop). crates.io is still a
+manual `cargo publish` by the maintainer.
 
 ## License
 

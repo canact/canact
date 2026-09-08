@@ -15,7 +15,8 @@ targets = [
 tap = "canact/homebrew-tap"
 publish-jobs = ["homebrew"]
 hosting = "github"
-pr-run-mode = "plan"
+# Feature PRs already ran CI. Do not start cargo-dist plan there.
+pr-run-mode = "skip"
 allow-dirty = ["ci"]
 github-release = "host"
 install-path = "CARGO_HOME"

@@ -22,11 +22,20 @@ jobs:
       pull-requests: write
     # Same-repo heads only. Fork PRs get a read-only GITHUB_TOKEN on
     # pull_request, so createReview(APPROVE) fails. Approve still runs
-    # for constitution and release titles. Auto-merge is gated later.
+    # for constitution and release-please titles. Auto-merge is gated
+    # later. release-please PRs are opened by the App, so actor is not
+    # SebTardif; still approve (GITHUB_TOKEN) so last-push approval
+    # passes, but do not auto-merge.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login != 'github-actions[bot]' &&
-      github.actor == 'SebTardif'
+      (
+        (
+          github.event.pull_request.user.login != 'github-actions[bot]' &&
+          github.actor == 'SebTardif'
+        ) ||
+        startsWith(github.head_ref, 'release-please') ||
+        contains(github.event.pull_request.labels.*.name, 'autorelease: pending')
+      )
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
         with:

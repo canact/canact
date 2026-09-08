@@ -1,20 +1,7 @@
 # Changelog
 
-Record user-visible changes here. Add a dated version heading when a
-release ships. Until then, put work under Unreleased.
-
-## [Unreleased]
-
-- MCP `probe_model` does not GET a cloud catalog without an API key.
-- Claude Code login token refresh tries the second host on connect failure as well as HTTP 404.
-- HTTP error bodies redact `xai-` keys the same way as `sk-` / `gsk_`.
-- `canact mcp` `probe_model` picks the API key from `provider`, not from
-  whichever `*_API_KEY` is set first.
-- MCP `api_key_env` that is unset or empty names that variable in the
-  error instead of listing unused fallbacks.
-- Dual-licensed as MIT OR Apache-2.0 (`LICENSE` plus `LICENSE-APACHE`).
-- GitHub Release archives include Cosign `.sigstore.json` bundles and
-  SLSA `.intoto.jsonl` provenance.
+release-please writes version headings from conventional commit
+titles on `main`. Do not keep an Unreleased section.
 
 ## [0.1.1] - 2026-09-07
 
