@@ -139,6 +139,8 @@ fn resolve_probe_non_listed_no_tools_is_medium_and_cacheable() {
     let (result, cacheable) = resolve_probe(err, "json_output").expect("synthesized");
     assert_eq!(result.level, CapabilityLevel::Medium);
     assert_eq!(result.score, 0.5);
+    assert!(result.details.starts_with("Probe failed:"), "{result:?}");
+    assert_eq!(result.completed_level(), CapabilityLevel::Weak);
     assert!(cacheable, "non-listed no-tools is still cacheable");
 }
 

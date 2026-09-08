@@ -14,5 +14,9 @@ fuzz_target!(|data: &str| {
     let _ = profile.can_use_tools();
     let _ = profile.supports_vision();
     let _ = profile.recommended_context_tokens(None);
+    let _ = profile.use_streaming_for_tool_calls();
+    let _ = profile.supports_nested_tool_args();
+    let _ = profile.verified_parallel_tool_calls();
+    let _ = profile.agent_loop();
     let _ = profile.host_policy_envelope();
 });

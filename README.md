@@ -113,6 +113,10 @@ on-disk `probes.json` file.
 | `probeLadderEditFormat` | Search/replace, unified diff, or whole file |
 | `needsXmlFallback` | Native tools were Weak |
 | `needsJsonRepair` | Completed JSON score is Medium or weaker |
+| `useStreamingForToolCalls` | Streaming tool-call probe completed Medium or stronger |
+| `supportsNestedToolArgs` | Nested-argument probe completed Medium or stronger |
+| `verifiedParallelToolCalls` | Floor: at least N parallel `read_file` calls (probe asks for 5) |
+| `agentLoop` | `full` / `assisted` / `single` from sequencing |
 | `recommendedContextTokens` | Verified floor: `min(advertised, measured)`. Not a host window. Advertised alone is never used. |
 | `cacheable` | Safe to persist for 30 days |
 | `fromCache` | This print came from disk |

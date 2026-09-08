@@ -438,10 +438,11 @@ pub fn is_unreachable_host(err: &ProbeError) -> bool {
 
 /// Resolve a probe result and whether it is safe to write into the 30-day cache.
 ///
-/// Auth and unreachable hosts abort the suite (`Err`). Definitive "does not
-/// support tools" is Weak (tool-named) or Medium (other) and cacheable.
-/// Transient errors (timeout, 429, 5xx, other Err) stay Medium for this
-/// session and must not be persisted as a capability score.
+/// Auth and unreachable hosts abort the suite (`Err`). Definitive "does
+/// not support tools" on a tool-named probe is Weak and cacheable. Other
+/// errors store Medium with `Probe failed:` details. Policy uses
+/// [`crate::ProbeResult::completed_level`], which treats that prefix as
+/// Weak. Transient errors must not be persisted as a capability score.
 pub fn resolve_probe(
     result: Result<ProbeResult, ProbeError>,
     name: &str,
