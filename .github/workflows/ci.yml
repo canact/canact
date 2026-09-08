@@ -57,9 +57,22 @@ jobs:
         with:
           save-if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' }}
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo clippy --locked --all-targets --features runtime -- -D warnings
-      - run: cargo clippy --locked --all-targets --features cli -- -D warnings
+      - name: Full clippy
+        if: >-
+          github.event_name != 'pull_request' ||
+          !startsWith(github.head_ref, 'release-please')
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --all-targets --features runtime -- -D warnings
+          cargo clippy --locked --all-targets --features cli -- -D warnings
+      - name: Release-please check
+        if: >-
+          github.event_name == 'pull_request' &&
+          startsWith(github.head_ref, 'release-please')
+        run: |
+          cargo check --locked --all-targets
+          cargo check --locked --all-targets --features runtime
+          cargo check --locked --all-targets --features cli
       - run: bash scripts/deny-check.sh
       - run: python3 scripts/test_fossa_filter.py
       - run: python3 scripts/test_update_scoop_manifest.py
@@ -89,12 +102,18 @@ jobs:
         with:
           toolchain: "1.85"
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        if: >-
+          github.event_name != 'pull_request' ||
+          !startsWith(github.head_ref, 'release-please')
         with:
           tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' }}
       - name: Unit and integration tests
+        if: >-
+          github.event_name != 'pull_request' ||
+          !startsWith(github.head_ref, 'release-please')
         run: |
           set -euo pipefail
           out="${CARGO_TARGET_DIR}/junit"
@@ -106,9 +125,24 @@ jobs:
           cp target/nextest/ci/junit.xml "${out}/runtime.xml"
           cargo nextest run --locked --features cli --profile ci
           cp target/nextest/ci/junit.xml "${out}/cli.xml"
-      - run: cargo test --locked --doc
+      - name: Doc tests
+        if: >-
+          github.event_name != 'pull_request' ||
+          !startsWith(github.head_ref, 'release-please')
+        run: cargo test --locked --doc
+      - name: Release-please check
+        if: >-
+          github.event_name == 'pull_request' &&
+          startsWith(github.head_ref, 'release-please')
+        run: |
+          cargo check --locked --all-targets
+          cargo check --locked --all-targets --features runtime
+          cargo check --locked --all-targets --features cli
       - name: Test summary
-        if: always()
+        if: >-
+          always() &&
+          (github.event_name != 'pull_request' ||
+           !startsWith(github.head_ref, 'release-please'))
         uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: target/ci-test/junit/*.xml
