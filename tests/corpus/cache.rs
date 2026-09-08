@@ -679,6 +679,32 @@ fn put_then_load_round_trip() {
 }
 
 #[test]
+fn save_overwrites_existing_file_and_leaves_no_bak() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probes.json");
+    let mut first = ProbeCache::default();
+    let mut a = sample_profile();
+    a.model_id = "first".into();
+    first.put(a);
+    first.save(&path).expect("first save");
+    let mut second = ProbeCache::default();
+    let mut b = sample_profile();
+    b.model_id = "second".into();
+    second.put(b);
+    second.save(&path).expect("overwrite existing dest");
+    let bak = path.with_extension("bak");
+    assert!(
+        !bak.exists(),
+        "Windows rename-with-backup must remove the bak after success"
+    );
+    let loaded = ProbeCache::load(&path).expect("load after overwrite");
+    assert!(
+        loaded.find_profile("second", "p").is_some(),
+        "second save must replace the dest file"
+    );
+}
+
+#[test]
 fn put_then_load_preserves_effective_context_tokens() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");

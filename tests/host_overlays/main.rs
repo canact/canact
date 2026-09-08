@@ -96,7 +96,7 @@ fn aider_model_settings_dataclass_accepts_export_row() {
             child.wait_with_output()
         })
         .expect("run aider ModelSettings helper");
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),
@@ -424,6 +424,7 @@ fn cli_export_dir_expands_tilde() {
 
     let export = canact()
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .args([
             "export",
             "--aider",

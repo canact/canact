@@ -355,13 +355,23 @@ fn default_cache_path() -> PathBuf {
         .join("probes.json")
 }
 
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            return Some(PathBuf::from(home));
+        }
+    }
+    dirs::home_dir()
+}
+
 fn expand_tilde(path: PathBuf) -> PathBuf {
     let raw = path.to_string_lossy();
     if raw == "~" {
-        return dirs::home_dir().unwrap_or(path);
+        return home_dir().unwrap_or(path);
     }
     if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = home_dir() {
             return home.join(rest);
         }
     }
