@@ -79,6 +79,15 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertIn("crates-io-auth-action", text)
         self.assertNotIn("CARGO_REGISTRY_TOKEN: ${{ secrets.", text)
         self.assertNotRegex(text, r"cargo (test|nextest|clippy|fuzz)")
+        # Dispatch of an older tag must not run the wrapper from that
+        # tree (v0.1.2 has no scripts/publish-crates.sh).
+        self.assertIn("path: publisher", text)
+        self.assertIn("path: crate", text)
+        self.assertIn("ref: ${{ github.sha }}", text)
+        self.assertIn("ref: ${{ inputs.tag || github.ref }}", text)
+        self.assertIn("working-directory: crate", text)
+        self.assertIn("bash ../publisher/scripts/publish-crates.sh", text)
+        self.assertNotIn("run: bash scripts/publish-crates.sh", text)
 
     def test_apply_release_notes_is_dispatch_only(self) -> None:
         text = (WORKFLOWS / "apply-release-notes.yml").read_text(encoding="utf-8")
