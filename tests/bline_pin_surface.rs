@@ -12,4 +12,7 @@ fn bline_pin_sees_profile_and_cache() {
         std::any::type_name::<CapabilityProfile>(),
         "canact::types::CapabilityProfile"
     );
+    let p = CapabilityProfile::unprobed("m", "p");
+    assert_eq!(p.model_id, "m");
+    assert_eq!(p.max_output_tokens, None);
 }

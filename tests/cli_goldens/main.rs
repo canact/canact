@@ -103,34 +103,31 @@ fn cached_profile(tool: CapabilityLevel, xml: CapabilityLevel) -> CapabilityProf
         level,
         details: "test".to_owned(),
     };
-    CapabilityProfile {
-        model_id: "weak-tools".to_owned(),
-        provider: "test".to_owned(),
-        tool_calling: pr("tool_calling", tool),
-        json_output: pr("json_output", CapabilityLevel::Strong),
-        instruction_following: pr("instruction_following", CapabilityLevel::Strong),
-        search_replace: pr("search_replace", CapabilityLevel::Strong),
-        unified_diff: pr("unified_diff", CapabilityLevel::Medium),
-        xml_tool_calling: pr("xml_tool_calling", xml),
-        complex_tool_calling: pr("complex_tool_calling", CapabilityLevel::Weak),
-        nested_arguments: pr("nested_arguments", CapabilityLevel::Weak),
-        vision: pr("vision", CapabilityLevel::Weak),
-        tool_selection: pr("tool_selection", CapabilityLevel::Weak),
-        streaming_tool_calls: pr("streaming_tool_calls", CapabilityLevel::Weak),
-        one_shot_tool_plan: pr("one_shot_tool_plan", CapabilityLevel::Weak),
-        multi_turn_task_sequencing: pr("multi_turn_task_sequencing", CapabilityLevel::Weak),
-        context_faithfulness: pr("context_faithfulness", CapabilityLevel::Strong),
-        code_syntax: pr("code_syntax", CapabilityLevel::Strong),
-        max_tokens_compliance: pr("max_tokens_compliance", CapabilityLevel::Strong),
-        multi_turn_memory: pr("multi_turn_memory", CapabilityLevel::Strong),
-        system_message_adherence: pr("system_message_adherence", CapabilityLevel::Strong),
-        token_efficiency: pr("token_efficiency", CapabilityLevel::Strong),
-        parallel_tool_scale: pr("parallel_tool_scale", CapabilityLevel::Weak),
-        probed_at: 1_700_000_000,
-        effective_context_tokens: Some(8192),
-        probed_context_floor: Some(8192),
-        max_output_tokens: None,
-    }
+    let mut p = CapabilityProfile::unprobed("weak-tools", "test");
+    p.tool_calling = pr("tool_calling", tool);
+    p.json_output = pr("json_output", CapabilityLevel::Strong);
+    p.instruction_following = pr("instruction_following", CapabilityLevel::Strong);
+    p.search_replace = pr("search_replace", CapabilityLevel::Strong);
+    p.unified_diff = pr("unified_diff", CapabilityLevel::Medium);
+    p.xml_tool_calling = pr("xml_tool_calling", xml);
+    p.complex_tool_calling = pr("complex_tool_calling", CapabilityLevel::Weak);
+    p.nested_arguments = pr("nested_arguments", CapabilityLevel::Weak);
+    p.vision = pr("vision", CapabilityLevel::Weak);
+    p.tool_selection = pr("tool_selection", CapabilityLevel::Weak);
+    p.streaming_tool_calls = pr("streaming_tool_calls", CapabilityLevel::Weak);
+    p.one_shot_tool_plan = pr("one_shot_tool_plan", CapabilityLevel::Weak);
+    p.multi_turn_task_sequencing = pr("multi_turn_task_sequencing", CapabilityLevel::Weak);
+    p.context_faithfulness = pr("context_faithfulness", CapabilityLevel::Strong);
+    p.code_syntax = pr("code_syntax", CapabilityLevel::Strong);
+    p.max_tokens_compliance = pr("max_tokens_compliance", CapabilityLevel::Strong);
+    p.multi_turn_memory = pr("multi_turn_memory", CapabilityLevel::Strong);
+    p.system_message_adherence = pr("system_message_adherence", CapabilityLevel::Strong);
+    p.token_efficiency = pr("token_efficiency", CapabilityLevel::Strong);
+    p.parallel_tool_scale = pr("parallel_tool_scale", CapabilityLevel::Weak);
+    p.probed_at = 1_700_000_000;
+    p.effective_context_tokens = Some(8192);
+    p.probed_context_floor = Some(8192);
+    p
 }
 
 #[test]

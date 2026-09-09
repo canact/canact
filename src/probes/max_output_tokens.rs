@@ -44,6 +44,9 @@ fn mentions_output_budget(lower: &str) -> bool {
     lower.contains("max_tokens")
         || lower.contains("max_completion_tokens")
         || lower.contains("maxoutputtokens")
+        || lower.contains("completion_tokens")
+        || lower.contains("output token limit")
+        || lower.contains("output_token_limit")
 }
 
 fn parse_greater_than(err: &str) -> Option<u32> {
@@ -78,6 +81,10 @@ fn parse_named_maximum(err: &str) -> Option<u32> {
         "less than or equal to ",
         "must be <= ",
         "must be <=",
+        "token limit is ",
+        "limit is ",
+        "limit of ",
+        "capped at ",
     ] {
         if let Some(idx) = lower.find(needle) {
             let rest = &err[idx + needle.len()..];
@@ -151,6 +158,40 @@ mod tests {
     #[test]
     fn parse_ignores_the_oversize_ask_as_the_cap() {
         assert_eq!(parse_max_output_cap("max_tokens: 32768 > 32768"), None);
+    }
+
+    #[test]
+    fn parse_json_400_body_that_names_an_output_budget() {
+        assert_eq!(
+            parse_max_output_cap(
+                r#"{"error":{"message":"max_tokens is too large: 32768. This model's maximum is 4096","code":"invalid_request_error"}}"#
+            ),
+            Some(4096)
+        );
+    }
+
+    #[test]
+    fn parse_output_token_limit_is() {
+        assert_eq!(
+            parse_max_output_cap("output token limit is 8192"),
+            Some(8192)
+        );
+        assert_eq!(
+            parse_max_output_cap("completion_tokens exceeds the limit of 4096"),
+            Some(4096)
+        );
+        assert_eq!(
+            parse_max_output_cap("output_token_limit capped at 2048"),
+            Some(2048)
+        );
+    }
+
+    #[test]
+    fn parse_wrapped_reject_one_layer_down() {
+        assert_eq!(
+            parse_max_output_cap("error decoding response body: max_tokens: 32768 > 8192"),
+            Some(8192)
+        );
     }
 
     struct RejectLlm(&'static str);

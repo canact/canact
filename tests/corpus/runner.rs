@@ -17,34 +17,29 @@ fn sample_profile() -> CapabilityProfile {
         level: classify(0.9),
         details: "test".to_owned(),
     };
-    CapabilityProfile {
-        model_id: "m".to_owned(),
-        provider: "p".to_owned(),
-        tool_calling: pr("tool_calling"),
-        json_output: pr("json_output"),
-        instruction_following: pr("instruction_following"),
-        search_replace: pr("search_replace"),
-        unified_diff: pr("unified_diff"),
-        complex_tool_calling: pr("complex_tool_calling"),
-        nested_arguments: pr("nested_arguments"),
-        vision: pr("vision"),
-        tool_selection: pr("tool_selection"),
-        xml_tool_calling: pr("xml_tool_calling"),
-        streaming_tool_calls: pr("streaming_tool_calls"),
-        one_shot_tool_plan: pr("one_shot_tool_plan"),
-        multi_turn_task_sequencing: pr("multi_turn_task_sequencing"),
-        context_faithfulness: pr("context_faithfulness"),
-        code_syntax: pr("code_syntax"),
-        max_tokens_compliance: pr("max_tokens_compliance"),
-        multi_turn_memory: pr("multi_turn_memory"),
-        system_message_adherence: pr("system_message_adherence"),
-        token_efficiency: pr("token_efficiency"),
-        parallel_tool_scale: pr("parallel_tool_scale"),
-        probed_at: 1,
-        effective_context_tokens: None,
-        probed_context_floor: None,
-        max_output_tokens: None,
-    }
+    let mut p = CapabilityProfile::unprobed("m", "p");
+    p.tool_calling = pr("tool_calling");
+    p.json_output = pr("json_output");
+    p.instruction_following = pr("instruction_following");
+    p.search_replace = pr("search_replace");
+    p.unified_diff = pr("unified_diff");
+    p.complex_tool_calling = pr("complex_tool_calling");
+    p.nested_arguments = pr("nested_arguments");
+    p.vision = pr("vision");
+    p.tool_selection = pr("tool_selection");
+    p.xml_tool_calling = pr("xml_tool_calling");
+    p.streaming_tool_calls = pr("streaming_tool_calls");
+    p.one_shot_tool_plan = pr("one_shot_tool_plan");
+    p.multi_turn_task_sequencing = pr("multi_turn_task_sequencing");
+    p.context_faithfulness = pr("context_faithfulness");
+    p.code_syntax = pr("code_syntax");
+    p.max_tokens_compliance = pr("max_tokens_compliance");
+    p.multi_turn_memory = pr("multi_turn_memory");
+    p.system_message_adherence = pr("system_message_adherence");
+    p.token_efficiency = pr("token_efficiency");
+    p.parallel_tool_scale = pr("parallel_tool_scale");
+    p.probed_at = 1;
+    p
 }
 
 fn tool_request() -> ProbeRequest {
