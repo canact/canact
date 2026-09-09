@@ -1,7 +1,7 @@
 use canact::{
-    CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
-    EditFormatRecommendation, HostPolicyMeta, ProbeResult, REQUIREMENT_DIMENSION_NAMES, classify,
-    missing_model_message,
+    CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIAGNOSTIC_DIMENSION_NAMES,
+    DIMENSION_NAMES, EditFormatRecommendation, HostPolicyMeta, POLICY_DIMENSION_NAMES, ProbeResult,
+    REQUIREMENT_DIMENSION_NAMES, classify, missing_model_message,
 };
 
 fn make_probe(name: &str, level: CapabilityLevel) -> ProbeResult {
@@ -65,6 +65,34 @@ fn dimension_names_count_matches_probe_fields() {
         assert!(
             profile.dimension_level(name).is_some(),
             "missing dimension_level for {name}"
+        );
+    }
+}
+
+#[test]
+fn dimension_names_are_policy_diagnostic_or_explicit_omit() {
+    // one_shot_tool_plan is serde-only; do not derive policy from DIMENSION_NAMES.
+    const OMIT_FROM_HOST_ENVELOPE: &[&str] = &["one_shot_tool_plan"];
+
+    fn disjoint(left: &[&str], right: &[&str]) {
+        for &name in left {
+            assert!(
+                !right.contains(&name),
+                "{name} must not appear in two envelope sets"
+            );
+        }
+    }
+    disjoint(POLICY_DIMENSION_NAMES, DIAGNOSTIC_DIMENSION_NAMES);
+    disjoint(POLICY_DIMENSION_NAMES, OMIT_FROM_HOST_ENVELOPE);
+    disjoint(DIAGNOSTIC_DIMENSION_NAMES, OMIT_FROM_HOST_ENVELOPE);
+
+    for &name in DIMENSION_NAMES {
+        let covered = POLICY_DIMENSION_NAMES.contains(&name)
+            || DIAGNOSTIC_DIMENSION_NAMES.contains(&name)
+            || OMIT_FROM_HOST_ENVELOPE.contains(&name);
+        assert!(
+            covered,
+            "{name} must be in POLICY_DIMENSION_NAMES, DIAGNOSTIC_DIMENSION_NAMES, or the explicit omit set"
         );
     }
 }

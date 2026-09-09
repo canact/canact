@@ -666,7 +666,6 @@ impl CapabilityProfile {
             "effectiveContextTokens": self.effective_context_tokens,
             "probedContextFloor": self.probed_context_floor,
             "recommendedContextTokens": self.recommended_context_tokens(meta.advertised_context_tokens),
-            "maxOutputTokens": self.max_output_tokens,
             "cacheable": meta.cacheable,
             "fromCache": meta.from_cache,
             "skipExpensive": meta.skip_expensive,
@@ -682,14 +681,12 @@ impl CapabilityProfile {
             "probes": probes,
             "diagnostics": diagnostics,
         });
-        if self.max_output_tokens.is_none() {
-            if let Some(obj) = value.as_object_mut() {
-                obj.remove("maxOutputTokens");
+        if let Some(obj) = value.as_object_mut() {
+            if let Some(max_output) = self.max_output_tokens {
+                obj.insert("maxOutputTokens".to_owned(), serde_json::json!(max_output));
             }
-        }
-        if meta.suite.run_diagnostics() {
-            if let Some(placement) = self.constraint_placement() {
-                if let Some(obj) = value.as_object_mut() {
+            if meta.suite.run_diagnostics() {
+                if let Some(placement) = self.constraint_placement() {
                     obj.insert(
                         "constraintPlacement".to_owned(),
                         serde_json::json!(placement),
