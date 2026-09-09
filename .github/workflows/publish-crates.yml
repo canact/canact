@@ -24,6 +24,8 @@ permissions:
 jobs:
   publish:
     name: Publish crates.io
+    # Skip when an existing tag is force-updated (GPG re-sign).
+    if: github.event_name != 'push' || github.event.created
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

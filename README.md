@@ -8,6 +8,7 @@
 
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14503/badge)](https://www.bestpractices.dev/projects/14503)
 [![FOSSA](https://github.com/canact/canact/actions/workflows/fossa.yml/badge.svg)](https://github.com/canact/canact/actions/workflows/fossa.yml)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://canact.github.io/canact/)
 
 Probe an LLM against this host's tools and return a capability card the
 host can use: how many tools to send, which edit format to pick, whether
@@ -48,7 +49,7 @@ scoop install canact/canact
 Library (runtime only, no CLI):
 
 ```toml
-canact = { version = "0.1", default-features = false, features = ["runtime"] }
+canact = { version = "0.2", default-features = false, features = ["runtime"] }
 ```
 
 Default features are empty so a host pin does not pull clap. MSRV is

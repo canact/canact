@@ -1,4 +1,4 @@
-.PHONY: help check brand python-test scoop-manifest-test
+.PHONY: help check brand docs python-test scoop-manifest-test
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -6,6 +6,9 @@ help: ## Show this help
 
 brand: ## Rasterize docs/brand/canact.svg into /tmp/canact-brand
 	bash scripts/render-brand.sh
+
+docs: ## Build the GitHub Pages book into book-output/
+	mdbook build
 
 python-test: ## FOSSA filter, Scoop generator, and workflow trigger tests
 	python3 scripts/test_fossa_filter.py
@@ -15,6 +18,7 @@ python-test: ## FOSSA filter, Scoop generator, and workflow trigger tests
 	python3 scripts/test_workflow_triggers.py
 	python3 scripts/test_rerun_cancelled_pr_checks.py
 	python3 scripts/test_publish_crates.py
+	python3 scripts/test_sign_git_tag.py
 
 scoop-manifest-test: ## Scoop manifest generator tests
 	python3 scripts/test_update_scoop_manifest.py
@@ -36,3 +40,4 @@ check: ## fmt, clippy, test, deny (same as CI lint+test)
 	python3 scripts/test_workflow_triggers.py
 	python3 scripts/test_rerun_cancelled_pr_checks.py
 	python3 scripts/test_publish_crates.py
+	python3 scripts/test_sign_git_tag.py

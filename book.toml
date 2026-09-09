@@ -1,0 +1,15 @@
+[book]
+title = "canact"
+description = "Probe an LLM and return host policy"
+authors = ["Sebastien Tardif"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book-output"
+
+[output.html]
+git-repository-url = "https://github.com/canact/canact"
+edit-url-template = "https://github.com/canact/canact/edit/main/{path}"
+no-section-label = true
+site-url = "/canact/"
