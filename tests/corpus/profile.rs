@@ -812,6 +812,86 @@ fn human_table_omits_effective_context_tokens_when_none() {
     );
 }
 
+#[test]
+fn human_table_prints_max_output_tokens_when_some() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.max_output_tokens = Some(4096);
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Max output tokens:"), "{table}");
+    assert!(table.contains("4096"), "{table}");
+}
+
+#[test]
+fn human_table_omits_max_output_tokens_when_none() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert!(profile.max_output_tokens.is_none());
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("max output tokens"),
+        "{table}"
+    );
+}
+
+#[test]
+fn human_table_prints_constraint_placement_when_measured() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Constraint placement:"), "{table}");
+    assert!(table.contains("system"), "{table}");
+
+    profile.system_message_adherence =
+        make_probe("system_message_adherence", CapabilityLevel::Weak);
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Constraint placement:"), "{table}");
+    assert!(table.contains("user"), "{table}");
+}
+
+#[test]
+fn human_table_omits_constraint_placement_when_unprobed_or_skipped() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Not probed (cached before this probe existed)".to_string(),
+    };
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("constraint placement"),
+        "{table}"
+    );
+
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Skipped: diagnostic suite (use --suite=all)".to_string(),
+    };
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("constraint placement"),
+        "{table}"
+    );
+}
+
 const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
 const XML_INFERRED: &str = "Not tested (native tool calling is Strong; XML fallback unused)";
 
