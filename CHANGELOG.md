@@ -3,6 +3,18 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.3.0](https://github.com/canact/canact/compare/v0.2.0...v0.3.0) (2026-09-09)
+
+
+### Features
+
+* public CapabilityProfile constructor and 0.2 matrix cells ([#204](https://github.com/canact/canact/issues/204)) ([aef5c9c](https://github.com/canact/canact/commit/aef5c9c90623b2ef417780655d40ea1c77794810))
+
+
+### Bug Fixes
+
+* keep 0.2 host-policy fields honest ([#206](https://github.com/canact/canact/issues/206)) ([3628e46](https://github.com/canact/canact/commit/3628e46b4b2e12df43e726f55e6ca4dc99b2c289))
+
 ## [0.2.0](https://github.com/canact/canact/compare/v0.1.2...v0.2.0) (2026-09-08)
 
 
