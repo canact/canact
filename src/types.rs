@@ -261,6 +261,9 @@ macro_rules! define_probe_dimensions {
         }
     ) => {
         /// Complete capability profile for a model.
+        ///
+        /// Hosts and tests should start from [`Self::unprobed`] instead of
+        /// listing every probe field.
         #[derive(Debug, Clone, Serialize, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct CapabilityProfile {
@@ -300,6 +303,26 @@ macro_rules! define_probe_dimensions {
         ];
 
         impl CapabilityProfile {
+            /// Unprobed card for `model_id` / `provider`.
+            ///
+            /// Every probe dimension is the unprobed default. Context floors
+            /// and [`Self::max_output_tokens`] stay `None`.
+            pub fn unprobed(
+                model_id: impl Into<String>,
+                provider: impl Into<String>,
+            ) -> Self {
+                Self {
+                    model_id: model_id.into(),
+                    provider: provider.into(),
+                    $($req_field: default_probe_named(stringify!($req_field)),)*
+                    $($def_field: default_probe_named(stringify!($def_field)),)*
+                    probed_at: 0,
+                    effective_context_tokens: None,
+                    probed_context_floor: None,
+                    max_output_tokens: None,
+                }
+            }
+
             /// Look up the completed capability level for a named probe dimension.
             ///
             /// Accepts snake_case (`tool_calling`) and host-envelope camelCase
@@ -795,34 +818,53 @@ mod recommended_context_tests {
     }
 
     fn profile() -> CapabilityProfile {
-        CapabilityProfile {
-            model_id: "m".to_string(),
-            provider: "p".to_string(),
-            tool_calling: probe("tool_calling"),
-            json_output: probe("json_output"),
-            instruction_following: probe("instruction_following"),
-            search_replace: probe("search_replace"),
-            unified_diff: probe("unified_diff"),
-            complex_tool_calling: probe("complex_tool_calling"),
-            nested_arguments: probe("nested_arguments"),
-            vision: probe("vision"),
-            tool_selection: probe("tool_selection"),
-            xml_tool_calling: probe("xml_tool_calling"),
-            streaming_tool_calls: probe("streaming_tool_calls"),
-            one_shot_tool_plan: probe("one_shot_tool_plan"),
-            multi_turn_task_sequencing: probe("multi_turn_task_sequencing"),
-            context_faithfulness: probe("context_faithfulness"),
-            code_syntax: probe("code_syntax"),
-            max_tokens_compliance: probe("max_tokens_compliance"),
-            multi_turn_memory: probe("multi_turn_memory"),
-            system_message_adherence: probe("system_message_adherence"),
-            token_efficiency: probe("token_efficiency"),
-            parallel_tool_scale: probe("parallel_tool_scale"),
-            probed_at: 1,
-            effective_context_tokens: None,
-            probed_context_floor: None,
-            max_output_tokens: None,
+        let mut p = CapabilityProfile::unprobed("m", "p");
+        p.tool_calling = probe("tool_calling");
+        p.json_output = probe("json_output");
+        p.instruction_following = probe("instruction_following");
+        p.search_replace = probe("search_replace");
+        p.unified_diff = probe("unified_diff");
+        p.complex_tool_calling = probe("complex_tool_calling");
+        p.nested_arguments = probe("nested_arguments");
+        p.vision = probe("vision");
+        p.tool_selection = probe("tool_selection");
+        p.xml_tool_calling = probe("xml_tool_calling");
+        p.streaming_tool_calls = probe("streaming_tool_calls");
+        p.one_shot_tool_plan = probe("one_shot_tool_plan");
+        p.multi_turn_task_sequencing = probe("multi_turn_task_sequencing");
+        p.context_faithfulness = probe("context_faithfulness");
+        p.code_syntax = probe("code_syntax");
+        p.max_tokens_compliance = probe("max_tokens_compliance");
+        p.multi_turn_memory = probe("multi_turn_memory");
+        p.system_message_adherence = probe("system_message_adherence");
+        p.token_efficiency = probe("token_efficiency");
+        p.parallel_tool_scale = probe("parallel_tool_scale");
+        p.probed_at = 1;
+        p
+    }
+
+    #[test]
+    fn unprobed_fills_every_dimension_without_a_struct_literal() {
+        let p = CapabilityProfile::unprobed("qwen2.5-coder", "ollama");
+        assert_eq!(p.model_id, "qwen2.5-coder");
+        assert_eq!(p.provider, "ollama");
+        assert_eq!(p.probed_at, 0);
+        assert_eq!(p.effective_context_tokens, None);
+        assert_eq!(p.probed_context_floor, None);
+        assert_eq!(p.max_output_tokens, None);
+        assert!(p.constraint_placement().is_none());
+        for &name in DIMENSION_NAMES {
+            let result = p
+                .dimension_result(name)
+                .unwrap_or_else(|| panic!("unprobed missing {name}"));
+            assert!(
+                result.is_unprobed_default(),
+                "{name} must be the unprobed default: {result:?}"
+            );
+            assert_eq!(result.name, name);
         }
+        let value = p.host_policy_envelope();
+        assert!(value.get("maxOutputTokens").is_none(), "{value}");
     }
 
     #[test]

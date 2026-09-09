@@ -43,6 +43,13 @@ pub struct PlumbingRow {
     pub edit_format: PlumbingCell,
     /// A measured context floor exists.
     pub measured_context_floor: PlumbingCell,
+    /// A measured provider output cap exists.
+    pub max_output_tokens: PlumbingCell,
+    /// `constraintPlacement` was measured (`system` or `user`).
+    ///
+    /// Fail when unprobed, skipped (policy/full), or error. Never invent
+    /// `system`.
+    pub constraint_placement: PlumbingCell,
 }
 
 /// Compatibility table for one provider. No overall score.
@@ -72,6 +79,16 @@ impl PlumbingRow {
             measured_context_floor: if profile.effective_context_tokens.is_some()
                 || profile.probed_context_floor.is_some()
             {
+                PlumbingCell::Pass
+            } else {
+                PlumbingCell::Fail
+            },
+            max_output_tokens: if profile.max_output_tokens.is_some() {
+                PlumbingCell::Pass
+            } else {
+                PlumbingCell::Fail
+            },
+            constraint_placement: if profile.constraint_placement().is_some() {
                 PlumbingCell::Pass
             } else {
                 PlumbingCell::Fail
@@ -162,37 +179,31 @@ mod tests {
     }
 
     fn profile() -> CapabilityProfile {
-        CapabilityProfile {
-            model_id: "m".to_owned(),
-            provider: "ollama".to_owned(),
-            tool_calling: probe("tool_calling", CapabilityLevel::Strong),
-            json_output: probe("json_output", CapabilityLevel::Strong),
-            instruction_following: probe("instruction_following", CapabilityLevel::Strong),
-            search_replace: probe("search_replace", CapabilityLevel::Strong),
-            unified_diff: probe("unified_diff", CapabilityLevel::Medium),
-            xml_tool_calling: probe("xml_tool_calling", CapabilityLevel::Weak),
-            complex_tool_calling: probe("complex_tool_calling", CapabilityLevel::Strong),
-            nested_arguments: probe("nested_arguments", CapabilityLevel::Strong),
-            vision: probe("vision", CapabilityLevel::Weak),
-            tool_selection: probe("tool_selection", CapabilityLevel::Medium),
-            streaming_tool_calls: probe("streaming_tool_calls", CapabilityLevel::Strong),
-            one_shot_tool_plan: probe("one_shot_tool_plan", CapabilityLevel::Strong),
-            multi_turn_task_sequencing: probe(
-                "multi_turn_task_sequencing",
-                CapabilityLevel::Strong,
-            ),
-            context_faithfulness: probe("context_faithfulness", CapabilityLevel::Strong),
-            code_syntax: probe("code_syntax", CapabilityLevel::Strong),
-            max_tokens_compliance: probe("max_tokens_compliance", CapabilityLevel::Strong),
-            multi_turn_memory: probe("multi_turn_memory", CapabilityLevel::Strong),
-            system_message_adherence: probe("system_message_adherence", CapabilityLevel::Strong),
-            token_efficiency: probe("token_efficiency", CapabilityLevel::Strong),
-            parallel_tool_scale: probe("parallel_tool_scale", CapabilityLevel::Strong),
-            probed_at: 1,
-            effective_context_tokens: Some(8192),
-            probed_context_floor: Some(8192),
-            max_output_tokens: None,
-        }
+        let mut p = CapabilityProfile::unprobed("m", "ollama");
+        p.tool_calling = probe("tool_calling", CapabilityLevel::Strong);
+        p.json_output = probe("json_output", CapabilityLevel::Strong);
+        p.instruction_following = probe("instruction_following", CapabilityLevel::Strong);
+        p.search_replace = probe("search_replace", CapabilityLevel::Strong);
+        p.unified_diff = probe("unified_diff", CapabilityLevel::Medium);
+        p.xml_tool_calling = probe("xml_tool_calling", CapabilityLevel::Weak);
+        p.complex_tool_calling = probe("complex_tool_calling", CapabilityLevel::Strong);
+        p.nested_arguments = probe("nested_arguments", CapabilityLevel::Strong);
+        p.vision = probe("vision", CapabilityLevel::Weak);
+        p.tool_selection = probe("tool_selection", CapabilityLevel::Medium);
+        p.streaming_tool_calls = probe("streaming_tool_calls", CapabilityLevel::Strong);
+        p.one_shot_tool_plan = probe("one_shot_tool_plan", CapabilityLevel::Strong);
+        p.multi_turn_task_sequencing = probe("multi_turn_task_sequencing", CapabilityLevel::Strong);
+        p.context_faithfulness = probe("context_faithfulness", CapabilityLevel::Strong);
+        p.code_syntax = probe("code_syntax", CapabilityLevel::Strong);
+        p.max_tokens_compliance = probe("max_tokens_compliance", CapabilityLevel::Strong);
+        p.multi_turn_memory = probe("multi_turn_memory", CapabilityLevel::Strong);
+        p.system_message_adherence = probe("system_message_adherence", CapabilityLevel::Strong);
+        p.token_efficiency = probe("token_efficiency", CapabilityLevel::Strong);
+        p.parallel_tool_scale = probe("parallel_tool_scale", CapabilityLevel::Strong);
+        p.probed_at = 1;
+        p.effective_context_tokens = Some(8192);
+        p.probed_context_floor = Some(8192);
+        p
     }
 
     #[test]
@@ -207,6 +218,39 @@ mod tests {
         assert_eq!(row.json_output, PlumbingCell::Pass);
         assert_eq!(row.edit_format, PlumbingCell::Pass);
         assert_eq!(row.measured_context_floor, PlumbingCell::Pass);
+        assert_eq!(row.max_output_tokens, PlumbingCell::Fail);
+        assert_eq!(row.constraint_placement, PlumbingCell::Pass);
+    }
+
+    #[test]
+    fn measured_output_cap_is_pass() {
+        let mut p = profile();
+        p.max_output_tokens = Some(4096);
+        let row = PlumbingRow::from_profile(&p);
+        assert_eq!(row.max_output_tokens, PlumbingCell::Pass);
+    }
+
+    #[test]
+    fn omitted_output_cap_is_fail() {
+        let p = profile();
+        assert!(p.max_output_tokens.is_none());
+        let row = PlumbingRow::from_profile(&p);
+        assert_eq!(row.max_output_tokens, PlumbingCell::Fail);
+    }
+
+    #[test]
+    fn skipped_constraint_placement_is_fail() {
+        let mut p = profile();
+        p.system_message_adherence = ProbeResult {
+            name: "system_message_adherence".into(),
+            score: 0.5,
+            max_score: 1.0,
+            level: CapabilityLevel::Medium,
+            details: "Skipped: policy suite (use --suite=full or --suite=all)".into(),
+        };
+        assert!(p.constraint_placement().is_none());
+        let row = PlumbingRow::from_profile(&p);
+        assert_eq!(row.constraint_placement, PlumbingCell::Fail);
     }
 
     #[test]

@@ -44,6 +44,8 @@ fn mentions_output_budget(lower: &str) -> bool {
     lower.contains("max_tokens")
         || lower.contains("max_completion_tokens")
         || lower.contains("maxoutputtokens")
+        || lower.contains("output token limit")
+        || lower.contains("output_token_limit")
 }
 
 fn parse_greater_than(err: &str) -> Option<u32> {
@@ -78,6 +80,8 @@ fn parse_named_maximum(err: &str) -> Option<u32> {
         "less than or equal to ",
         "must be <= ",
         "must be <=",
+        "output token limit is ",
+        "output_token_limit is ",
     ] {
         if let Some(idx) = lower.find(needle) {
             let rest = &err[idx + needle.len()..];
@@ -134,6 +138,10 @@ mod tests {
     fn parse_ignores_unrelated_errors() {
         assert_eq!(parse_max_output_cap("rate limited"), None);
         assert_eq!(parse_max_output_cap("context_length 200000"), None);
+        assert_eq!(
+            parse_max_output_cap("max_tokens request failed; rate limit is 10000 TPM"),
+            None
+        );
     }
 
     #[test]
@@ -146,11 +154,51 @@ mod tests {
             parse_max_output_cap("prompt exceeds maximum context 32768 > 8192"),
             None
         );
+        assert_eq!(
+            parse_max_output_cap("prompt + completion_tokens exceed maximum context 32768 > 8192"),
+            None
+        );
+        assert_eq!(
+            parse_max_output_cap(
+                r#"{"error":{"message":"context token limit is 128000","param":"max_tokens"}}"#
+            ),
+            None
+        );
     }
 
     #[test]
     fn parse_ignores_the_oversize_ask_as_the_cap() {
         assert_eq!(parse_max_output_cap("max_tokens: 32768 > 32768"), None);
+    }
+
+    #[test]
+    fn parse_json_400_body_that_names_an_output_budget() {
+        assert_eq!(
+            parse_max_output_cap(
+                r#"{"error":{"message":"max_tokens is too large: 32768. This model's maximum is 4096","code":"invalid_request_error"}}"#
+            ),
+            Some(4096)
+        );
+    }
+
+    #[test]
+    fn parse_output_token_limit_is() {
+        assert_eq!(
+            parse_max_output_cap("output token limit is 8192"),
+            Some(8192)
+        );
+        assert_eq!(
+            parse_max_output_cap("output_token_limit is 2048"),
+            Some(2048)
+        );
+    }
+
+    #[test]
+    fn parse_wrapped_reject_one_layer_down() {
+        assert_eq!(
+            parse_max_output_cap("error decoding response body: max_tokens: 32768 > 8192"),
+            Some(8192)
+        );
     }
 
     struct RejectLlm(&'static str);

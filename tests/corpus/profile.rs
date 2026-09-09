@@ -23,37 +23,30 @@ fn make_profile(
     json: CapabilityLevel,
     instr: CapabilityLevel,
 ) -> CapabilityProfile {
-    CapabilityProfile {
-        model_id: "test-model".to_string(),
-        provider: "test-provider".to_string(),
-        tool_calling: make_probe("tool_calling", tool),
-        json_output: make_probe("json_output", json),
-        instruction_following: make_probe("instruction_following", instr),
-        search_replace: make_probe("search_replace", CapabilityLevel::Strong),
-        unified_diff: make_probe("unified_diff", CapabilityLevel::Medium),
-        xml_tool_calling: make_probe("xml_tool_calling", CapabilityLevel::Medium),
-        complex_tool_calling: make_probe("complex_tool_calling", CapabilityLevel::Strong),
-        nested_arguments: make_probe("nested_arguments", CapabilityLevel::Strong),
-        vision: make_probe("vision", CapabilityLevel::Medium),
-        tool_selection: make_probe("tool_selection", CapabilityLevel::Strong),
-        streaming_tool_calls: make_probe("streaming_tool_calls", CapabilityLevel::Strong),
-        one_shot_tool_plan: make_probe("one_shot_tool_plan", CapabilityLevel::Strong),
-        multi_turn_task_sequencing: make_probe(
-            "multi_turn_task_sequencing",
-            CapabilityLevel::Strong,
-        ),
-        context_faithfulness: make_probe("context_faithfulness", CapabilityLevel::Strong),
-        code_syntax: make_probe("code_syntax", CapabilityLevel::Strong),
-        max_tokens_compliance: make_probe("max_tokens_compliance", CapabilityLevel::Strong),
-        multi_turn_memory: make_probe("multi_turn_memory", CapabilityLevel::Strong),
-        system_message_adherence: make_probe("system_message_adherence", CapabilityLevel::Strong),
-        token_efficiency: make_probe("token_efficiency", CapabilityLevel::Strong),
-        parallel_tool_scale: make_probe("parallel_tool_scale", CapabilityLevel::Strong),
-        probed_at: 1_700_000_000,
-        effective_context_tokens: None,
-        probed_context_floor: None,
-        max_output_tokens: None,
-    }
+    let mut p = CapabilityProfile::unprobed("test-model", "test-provider");
+    p.tool_calling = make_probe("tool_calling", tool);
+    p.json_output = make_probe("json_output", json);
+    p.instruction_following = make_probe("instruction_following", instr);
+    p.search_replace = make_probe("search_replace", CapabilityLevel::Strong);
+    p.unified_diff = make_probe("unified_diff", CapabilityLevel::Medium);
+    p.xml_tool_calling = make_probe("xml_tool_calling", CapabilityLevel::Medium);
+    p.complex_tool_calling = make_probe("complex_tool_calling", CapabilityLevel::Strong);
+    p.nested_arguments = make_probe("nested_arguments", CapabilityLevel::Strong);
+    p.vision = make_probe("vision", CapabilityLevel::Medium);
+    p.tool_selection = make_probe("tool_selection", CapabilityLevel::Strong);
+    p.streaming_tool_calls = make_probe("streaming_tool_calls", CapabilityLevel::Strong);
+    p.one_shot_tool_plan = make_probe("one_shot_tool_plan", CapabilityLevel::Strong);
+    p.multi_turn_task_sequencing =
+        make_probe("multi_turn_task_sequencing", CapabilityLevel::Strong);
+    p.context_faithfulness = make_probe("context_faithfulness", CapabilityLevel::Strong);
+    p.code_syntax = make_probe("code_syntax", CapabilityLevel::Strong);
+    p.max_tokens_compliance = make_probe("max_tokens_compliance", CapabilityLevel::Strong);
+    p.multi_turn_memory = make_probe("multi_turn_memory", CapabilityLevel::Strong);
+    p.system_message_adherence = make_probe("system_message_adherence", CapabilityLevel::Strong);
+    p.token_efficiency = make_probe("token_efficiency", CapabilityLevel::Strong);
+    p.parallel_tool_scale = make_probe("parallel_tool_scale", CapabilityLevel::Strong);
+    p.probed_at = 1_700_000_000;
+    p
 }
 
 #[test]
