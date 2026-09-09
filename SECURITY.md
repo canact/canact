@@ -25,6 +25,7 @@ login store; they are not written to `probes.json`.
 | Supply chain | cargo-deny, Dependabot, CodeQL, Scorecard, FOSSA |
 | Private reports | GitHub Security Advisories, not public issues |
 | Release archives | Cosign `.sigstore.json` plus SLSA `.intoto.jsonl` on the GitHub Release |
+| Git release tags | GPG-signed annotated tags (`git verify-tag vX.Y.Z`) |
 
 ## Verifying a GitHub Release archive
 
@@ -47,5 +48,12 @@ cosign verify-blob \
   ./canact-x86_64-unknown-linux-gnu.tar.xz
 ```
 
-Git tags are not GPG-signed. These signatures cover Release assets, not
-the git tag object.
+Cosign and SLSA cover Release archives, not the git tag object. Release
+tags (`vX.Y.Z`) are GPG-signed annotated tags. The public key is on the
+maintainer GitHub account
+(https://github.com/SebTardif.gpg).
+
+```bash
+git fetch --tags
+git verify-tag v0.2.0
+```

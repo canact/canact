@@ -149,6 +149,33 @@ class WorkflowTriggerTests(unittest.TestCase):
             window = sec[max(0, idx - 400) : idx]
             self.assertIn("!startsWith(github.head_ref, 'release-please')", window, pin)
 
+    def test_docs_is_cheap_pages_promote(self) -> None:
+        text = (WORKFLOWS / "docs.yml").read_text(encoding="utf-8")
+        on_block = _on_block(text)
+        self.assertIn("workflow_dispatch:", on_block)
+        self.assertIn("pull_request:", on_block)
+        self.assertIn("push:", on_block)
+        self.assertNotIn("merge_group:", on_block)
+        self.assertNotRegex(text, r"cargo (test|nextest|clippy|fuzz)")
+        self.assertIn("mdbook build", text)
+        self.assertIn("actions/deploy-pages@", text)
+
+    def test_tag_update_does_not_republish(self) -> None:
+        rel = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        crates = (WORKFLOWS / "publish-crates.yml").read_text(encoding="utf-8")
+        self.assertIn("github.event.created", rel)
+        self.assertIn("github.event.created", crates)
+        self.assertIn("needs.plan.result == 'success'", rel)
+
+    def test_sign_tags_is_gpg_not_cosign(self) -> None:
+        text = (WORKFLOWS / "sign-tags.yml").read_text(encoding="utf-8")
+        on_block = _on_block(text)
+        self.assertIn("workflow_dispatch:", on_block)
+        self.assertIn("release:", on_block)
+        self.assertNotIn("cosign-installer", text)
+        self.assertIn("ghaction-import-gpg@", text)
+        self.assertIn("scripts/sign-git-tag.sh", text)
+
     def test_fossa_push_and_pr_share_cargo_path_filter(self) -> None:
         on_block = _on_block((WORKFLOWS / "fossa.yml").read_text(encoding="utf-8"))
         self.assertIn("push:", on_block)

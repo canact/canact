@@ -17,6 +17,9 @@ open a pull request. In short:
 make check
 ```
 
+Hosted docs are an mdBook. `make docs` writes `book-output/`. GitHub
+Pages deploys from `main` via `.github/workflows/docs.yml`.
+
 Copy-paste runs that do not call a model live in `examples/`.
 
 Every commit needs a Developer Certificate of Origin trailer:
