@@ -128,6 +128,7 @@ on-disk `probes.json` file.
 | `verifiedParallelToolCalls` | Floor: at least N parallel `read_file` calls (probe asks for 5) |
 | `agentLoop` | `full` / `assisted` / `single` from sequencing |
 | `recommendedContextTokens` | Verified floor: `min(advertised, measured)`. Not a host window. Advertised alone is never used. |
+| `maxOutputTokens` | Measured provider output cap. Never the input window. Omitted until measured. |
 | `cacheable` | Safe to persist for 30 days |
 | `fromCache` | This print came from disk |
 | `constraintPlacement` | `--suite=all` only. `system` if the model follows the system prompt (Medium or stronger). `user` if Weak: put hard constraints in the user turn. Not a rank. |

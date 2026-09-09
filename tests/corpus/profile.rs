@@ -1,7 +1,7 @@
 use canact::{
-    CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIMENSION_NAMES,
-    EditFormatRecommendation, HostPolicyMeta, ProbeResult, REQUIREMENT_DIMENSION_NAMES, classify,
-    missing_model_message,
+    CORE_DIMENSION_NAMES, CapabilityLevel, CapabilityProfile, DIAGNOSTIC_DIMENSION_NAMES,
+    DIMENSION_NAMES, EditFormatRecommendation, HostPolicyMeta, POLICY_DIMENSION_NAMES, ProbeResult,
+    REQUIREMENT_DIMENSION_NAMES, classify, missing_model_message,
 };
 
 fn make_probe(name: &str, level: CapabilityLevel) -> ProbeResult {
@@ -65,6 +65,34 @@ fn dimension_names_count_matches_probe_fields() {
         assert!(
             profile.dimension_level(name).is_some(),
             "missing dimension_level for {name}"
+        );
+    }
+}
+
+#[test]
+fn dimension_names_are_policy_diagnostic_or_explicit_omit() {
+    // one_shot_tool_plan is serde-only; do not derive policy from DIMENSION_NAMES.
+    const OMIT_FROM_HOST_ENVELOPE: &[&str] = &["one_shot_tool_plan"];
+
+    fn disjoint(left: &[&str], right: &[&str]) {
+        for &name in left {
+            assert!(
+                !right.contains(&name),
+                "{name} must not appear in two envelope sets"
+            );
+        }
+    }
+    disjoint(POLICY_DIMENSION_NAMES, DIAGNOSTIC_DIMENSION_NAMES);
+    disjoint(POLICY_DIMENSION_NAMES, OMIT_FROM_HOST_ENVELOPE);
+    disjoint(DIAGNOSTIC_DIMENSION_NAMES, OMIT_FROM_HOST_ENVELOPE);
+
+    for &name in DIMENSION_NAMES {
+        let covered = POLICY_DIMENSION_NAMES.contains(&name)
+            || DIAGNOSTIC_DIMENSION_NAMES.contains(&name)
+            || OMIT_FROM_HOST_ENVELOPE.contains(&name);
+        assert!(
+            covered,
+            "{name} must be in POLICY_DIMENSION_NAMES, DIAGNOSTIC_DIMENSION_NAMES, or the explicit omit set"
         );
     }
 }
@@ -780,6 +808,86 @@ fn human_table_omits_effective_context_tokens_when_none() {
     let table = profile.format_human_table(false);
     assert!(
         !table.to_ascii_lowercase().contains("effective context"),
+        "{table}"
+    );
+}
+
+#[test]
+fn human_table_prints_max_output_tokens_when_some() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.max_output_tokens = Some(4096);
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Max output tokens:"), "{table}");
+    assert!(table.contains("4096"), "{table}");
+}
+
+#[test]
+fn human_table_omits_max_output_tokens_when_none() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert!(profile.max_output_tokens.is_none());
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("max output tokens"),
+        "{table}"
+    );
+}
+
+#[test]
+fn human_table_prints_constraint_placement_when_measured() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Constraint placement:"), "{table}");
+    assert!(table.contains("system"), "{table}");
+
+    profile.system_message_adherence =
+        make_probe("system_message_adherence", CapabilityLevel::Weak);
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Constraint placement:"), "{table}");
+    assert!(table.contains("user"), "{table}");
+}
+
+#[test]
+fn human_table_omits_constraint_placement_when_unprobed_or_skipped() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Not probed (cached before this probe existed)".to_string(),
+    };
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("constraint placement"),
+        "{table}"
+    );
+
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".to_string(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Skipped: diagnostic suite (use --suite=all)".to_string(),
+    };
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("constraint placement"),
         "{table}"
     );
 }

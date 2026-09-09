@@ -1,7 +1,7 @@
 use canact::{
     CACHE_TTL_SECS, CacheEntry, CapabilityLevel, CapabilityProfile, DEFAULT_PROBE_EFFORT,
-    DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, PROBE_SUITE_VERSION, ProbeCache, ProbeResult, classify,
-    provider_from_base_url,
+    DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, HostPolicyMeta, PROBE_SUITE_VERSION, ProbeCache,
+    ProbeResult, SuiteTier, classify, provider_from_base_url,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -251,6 +251,47 @@ fn get_misses_when_suite_differs() {
             )
             .is_none(),
         "suite v73 must not hit v6 cache entry"
+    );
+}
+
+#[test]
+fn find_profile_with_cost_and_advertised_reports_all_suite() {
+    let mut cache = ProbeCache::default();
+    let mut profile = sample_profile();
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".into(),
+        score: 1.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Strong,
+        details: "followed the system prompt".into(),
+    };
+    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    let (found, suite) = cache
+        .find_profile_with_cost_and_advertised("m", "p", None)
+        .expect("all-suite row");
+    assert_eq!(
+        suite,
+        SuiteTier::All,
+        "stored all must not collapse to full"
+    );
+    let env = found.host_policy_envelope_with(HostPolicyMeta::for_suite(true, true, suite, None));
+    assert_eq!(env["suite"], "all", "{env}");
+    assert_eq!(env["constraintPlacement"], "system", "{env}");
+}
+
+#[test]
+fn find_profile_with_cost_and_advertised_policy_omits_placement() {
+    let mut cache = ProbeCache::default();
+    cache.put_with_suite(sample_profile(), SuiteTier::Policy, false, None);
+    let (found, suite) = cache
+        .find_profile_with_cost_and_advertised("m", "p", None)
+        .expect("policy row");
+    assert_eq!(suite, SuiteTier::Policy);
+    let env = found.host_policy_envelope_with(HostPolicyMeta::for_suite(true, true, suite, None));
+    assert_eq!(env["suite"], "policy", "{env}");
+    assert!(
+        env.get("constraintPlacement").is_none(),
+        "policy-only row must omit constraintPlacement: {env}"
     );
 }
 

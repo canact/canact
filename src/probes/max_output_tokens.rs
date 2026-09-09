@@ -23,7 +23,8 @@ pub async fn probe_max_output_tokens<C: ProbeClient>(llm: &C) -> Result<Option<u
     match llm.chat(request).await {
         Ok(_) => Ok(None),
         Err(err @ ProbeError::Auth(_)) | Err(err @ ProbeError::NotFound(_)) => Err(err),
-        Err(err) => Ok(parse_max_output_cap(&err.to_string())),
+        Err(err @ ProbeError::Llm(_)) => Ok(parse_max_output_cap(&err.to_string())),
+        Err(err) => Err(err),
     }
 }
 
@@ -49,23 +50,22 @@ fn mentions_output_budget(lower: &str) -> bool {
 }
 
 fn parse_greater_than(err: &str) -> Option<u32> {
-    let bytes = err.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
+    for (i, _) in err.char_indices() {
         if let Some((left, after_left)) = take_u32(&err[i..]) {
             let rest = err[i + after_left..].trim_start();
             if let Some(rest) = rest.strip_prefix('>') {
                 let rest = rest.trim_start();
                 if let Some((right, _)) = take_u32(rest) {
+                    // Status-code pairs (HTTP 502 > 400) are not the output cap.
+                    if left != OVERSIZE_MAX_TOKENS && right != OVERSIZE_MAX_TOKENS {
+                        continue;
+                    }
                     let cap = left.min(right);
                     if cap > 0 {
                         return Some(cap);
                     }
                 }
             }
-            i += after_left.max(1);
-        } else {
-            i += 1;
         }
     }
     None
@@ -172,6 +172,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_greater_than_skips_non_ascii_without_panic() {
+        assert_eq!(
+            parse_max_output_cap("max_tokens \u{2014} 32768 > 8192"),
+            Some(8192)
+        );
+    }
+
+    #[test]
+    fn parse_skips_http_status_greater_than_for_named_maximum() {
+        assert_eq!(
+            parse_max_output_cap(
+                "LLM error: HTTP 502 > 400; max_tokens is too large. This model's maximum is 8192"
+            ),
+            Some(8192)
+        );
+    }
+
+    #[test]
     fn parse_json_400_body_that_names_an_output_budget() {
         assert_eq!(
             parse_max_output_cap(
@@ -246,5 +264,25 @@ mod tests {
         let llm = MockLlm::new("m", "p").with_error(ProbeError::Auth("no".into()));
         let err = probe_max_output_tokens(&llm).await.unwrap_err();
         assert!(matches!(err, ProbeError::Auth(_)));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_is_err_not_unmeasured() {
+        let llm = MockLlm::new("m", "p").with_error(ProbeError::RateLimit { retry_after: None });
+        let err = probe_max_output_tokens(&llm).await.unwrap_err();
+        assert!(
+            matches!(err, ProbeError::RateLimit { .. }),
+            "429 on the oversize ask must not become Ok(None): {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_is_err_not_unmeasured() {
+        let llm = MockLlm::new("m", "p").with_error(ProbeError::Transient("overload".into()));
+        let err = probe_max_output_tokens(&llm).await.unwrap_err();
+        assert!(
+            matches!(err, ProbeError::Transient(_)),
+            "transient on the oversize ask must not become Ok(None): {err:?}"
+        );
     }
 }

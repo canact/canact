@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use canact::{CapabilityLevel, CapabilityProfile, ProbeCache, ProbeResult};
+use canact::{CapabilityLevel, CapabilityProfile, ProbeCache, ProbeResult, SuiteTier};
 use serde_json::{Value, json};
 
 fn sample() -> CapabilityProfile {
@@ -276,6 +276,141 @@ fn mcp_ndjson_initialize_gets_jsonrpc_reply() {
     assert_eq!(init["result"]["serverInfo"]["name"], "canact", "{init}");
     assert_eq!(init["result"]["protocolVersion"], "2024-11-05", "{init}");
 
+    drop(stdin);
+    let _ = child.wait_timeout();
+}
+
+#[test]
+fn mcp_policy_fallback_reports_all_row_suite() {
+    let dir = tempfile::tempdir().expect("temp");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut profile = sample();
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".to_owned(),
+        score: 1.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Strong,
+        details: "followed the system prompt".to_owned(),
+    };
+    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    cache.save(&cache_path).expect("save");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+        .arg("mcp")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "canact-test", "version": "0" }
+            }
+        }),
+    );
+    let _ = read_rpc(&mut stdout);
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "probe_model",
+                "arguments": {
+                    "model": "qwen2.5-coder",
+                    "provider": "ollama",
+                    "cache": cache_path.to_str().expect("utf8")
+                }
+            }
+        }),
+    );
+    let called = read_rpc(&mut stdout);
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    assert_eq!(called["result"]["isError"], false, "{called}");
+    let envelope: Value = serde_json::from_str(text).expect("envelope");
+    assert_eq!(envelope["fromCache"], true, "{envelope}");
+    assert_eq!(envelope["suite"], "all", "{envelope}");
+    assert_eq!(envelope["constraintPlacement"], "system", "{envelope}");
+    drop(stdin);
+    let _ = child.wait_timeout();
+}
+
+#[test]
+fn mcp_policy_only_row_omits_constraint_placement() {
+    let dir = tempfile::tempdir().expect("temp");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_suite(sample(), SuiteTier::Policy, false, None);
+    cache.save(&cache_path).expect("save");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+        .arg("mcp")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "canact-test", "version": "0" }
+            }
+        }),
+    );
+    let _ = read_rpc(&mut stdout);
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "probe_model",
+                "arguments": {
+                    "model": "qwen2.5-coder",
+                    "provider": "ollama",
+                    "cache": cache_path.to_str().expect("utf8")
+                }
+            }
+        }),
+    );
+    let called = read_rpc(&mut stdout);
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    assert_eq!(called["result"]["isError"], false, "{called}");
+    let envelope: Value = serde_json::from_str(text).expect("envelope");
+    assert_eq!(envelope["fromCache"], true, "{envelope}");
+    assert_eq!(envelope["suite"], "policy", "{envelope}");
+    assert!(
+        envelope.get("constraintPlacement").is_none(),
+        "policy-only row must omit constraintPlacement: {envelope}"
+    );
     drop(stdin);
     let _ = child.wait_timeout();
 }

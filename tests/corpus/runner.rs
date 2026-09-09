@@ -334,6 +334,75 @@ impl ProbeClient for TruncatedToolLlm {
     }
 }
 
+struct OversizeErrLlm(ProbeError);
+
+impl ProbeClient for OversizeErrLlm {
+    fn chat(
+        &self,
+        req: ProbeRequest,
+    ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
+        let oversize_err = if req.max_tokens == Some(OVERSIZE_MAX_TOKENS) {
+            Some(match &self.0 {
+                ProbeError::RateLimit { retry_after } => ProbeError::RateLimit {
+                    retry_after: *retry_after,
+                },
+                ProbeError::Transient(msg) => ProbeError::Transient(msg.clone()),
+                other => ProbeError::Internal(format!("unexpected oversize mock: {other}")),
+            })
+        } else {
+            None
+        };
+        let inner = MockLlm::new("m", "p");
+        async move {
+            if let Some(err) = oversize_err {
+                return Err(err);
+            }
+            inner.chat(req).await
+        }
+    }
+
+    fn stream_chat(
+        &self,
+        _req: ProbeRequest,
+    ) -> impl futures::Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
+        futures::stream::empty()
+    }
+
+    fn model_id(&self) -> &str {
+        "m"
+    }
+
+    fn provider(&self) -> &str {
+        "p"
+    }
+}
+
+#[tokio::test]
+async fn oversize_rate_limit_is_uncacheable() {
+    let runner = ProbeRunner::new(OversizeErrLlm(ProbeError::RateLimit { retry_after: None }))
+        .suite(SuiteTier::Policy);
+    let run = runner.run_detailed().await.expect("run_detailed");
+    assert!(
+        run.profile.max_output_tokens.is_none(),
+        "rate-limit must not invent a cap: {:?}",
+        run.profile.max_output_tokens
+    );
+    assert!(
+        !run.cacheable,
+        "429 on the oversize ask must not persist a 30-day unmeasured omit"
+    );
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = run.persist(&mut cache, &path).expect("persist");
+    assert!(!wrote, "persist must skip rate-limited max_output");
+    assert!(
+        !path.exists(),
+        "cache file must not be written when max_output is rate-limited"
+    );
+}
+
 #[tokio::test]
 async fn truncated_tool_calling_is_not_written_to_cache() {
     let runner = ProbeRunner::new(TruncatedToolLlm);

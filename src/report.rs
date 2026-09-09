@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use crate::types::{CORE_DIMENSION_NAMES, CapabilityProfile, DIMENSION_NAMES};
+use crate::types::{CORE_DIMENSION_NAMES, CapabilityProfile, ConstraintPlacement, DIMENSION_NAMES};
 
 /// How many `/models` ids to include in the missing-`--model` error.
 const MISSING_MODEL_ID_PREVIEW: usize = 8;
@@ -89,6 +89,16 @@ impl CapabilityProfile {
             let _ = writeln!(out, "{:<28}{n}", "Effective context tokens:");
         } else if let Some(n) = self.probed_context_floor {
             let _ = writeln!(out, "{:<28}{n}", "Probed context floor:");
+        }
+        if let Some(n) = self.max_output_tokens {
+            let _ = writeln!(out, "{:<28}{n}", "Max output tokens:");
+        }
+        if let Some(placement) = self.constraint_placement() {
+            let value = match placement {
+                ConstraintPlacement::System => "system",
+                ConstraintPlacement::User => "user",
+            };
+            let _ = writeln!(out, "{:<28}{value}", "Constraint placement:");
         }
         if self.needs_xml_fallback() {
             let _ = writeln!(out, "{:<28}XML fallback needed", "");

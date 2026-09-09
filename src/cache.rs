@@ -460,7 +460,7 @@ impl ProbeCache {
             .map(|(key, entry)| (&entry.profile, key_is_policy(key), key_advertised(key)))
     }
 
-    /// Newest matching row for probe cache hits (cheap/full fallback).
+    /// Newest matching row for probe cache hits, with the stored suite.
     ///
     /// Keeps advertised isolation. Export uses [`Self::find_profile_with_cost`],
     /// which may still return a loose advertised row.
@@ -469,7 +469,7 @@ impl ProbeCache {
         model_id: &str,
         provider: &str,
         advertised: Option<u32>,
-    ) -> Option<(&CapabilityProfile, bool)> {
+    ) -> Option<(&CapabilityProfile, SuiteTier)> {
         if let Some(profile) = self.get_with_knobs(
             model_id,
             provider,
@@ -477,7 +477,7 @@ impl ProbeCache {
             DEFAULT_VISION,
             advertised,
         ) {
-            return Some((profile, DEFAULT_SKIP_EXPENSIVE));
+            return Some((profile, suite_from_skip(DEFAULT_SKIP_EXPENSIVE)));
         }
         self.profiles
             .iter()
@@ -494,7 +494,7 @@ impl ProbeCache {
                     && key_advertised(key) == advertised
             })
             .max_by_key(|(_, entry)| entry.cached_at)
-            .map(|(key, entry)| (&entry.profile, key_is_policy(key)))
+            .map(|(key, entry)| (&entry.profile, key_suite(key)))
     }
 
     /// Get a cached profile for the current suite, default effort, and default knobs.
