@@ -49,23 +49,22 @@ fn mentions_output_budget(lower: &str) -> bool {
 }
 
 fn parse_greater_than(err: &str) -> Option<u32> {
-    let bytes = err.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
+    for (i, _) in err.char_indices() {
         if let Some((left, after_left)) = take_u32(&err[i..]) {
             let rest = err[i + after_left..].trim_start();
             if let Some(rest) = rest.strip_prefix('>') {
                 let rest = rest.trim_start();
                 if let Some((right, _)) = take_u32(rest) {
+                    // Status-code pairs (HTTP 502 > 400) are not the output cap.
+                    if left != OVERSIZE_MAX_TOKENS && right != OVERSIZE_MAX_TOKENS {
+                        continue;
+                    }
                     let cap = left.min(right);
                     if cap > 0 {
                         return Some(cap);
                     }
                 }
             }
-            i += after_left.max(1);
-        } else {
-            i += 1;
         }
     }
     None
@@ -169,6 +168,24 @@ mod tests {
     #[test]
     fn parse_ignores_the_oversize_ask_as_the_cap() {
         assert_eq!(parse_max_output_cap("max_tokens: 32768 > 32768"), None);
+    }
+
+    #[test]
+    fn parse_greater_than_skips_non_ascii_without_panic() {
+        assert_eq!(
+            parse_max_output_cap("max_tokens \u{2014} 32768 > 8192"),
+            Some(8192)
+        );
+    }
+
+    #[test]
+    fn parse_skips_http_status_greater_than_for_named_maximum() {
+        assert_eq!(
+            parse_max_output_cap(
+                "LLM error: HTTP 502 > 400; max_tokens is too large. This model's maximum is 8192"
+            ),
+            Some(8192)
+        );
     }
 
     #[test]
