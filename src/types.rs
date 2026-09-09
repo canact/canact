@@ -305,10 +305,8 @@ macro_rules! define_probe_dimensions {
         impl CapabilityProfile {
             /// Unprobed card for `model_id` / `provider`.
             ///
-            /// Fills every probe dimension with the unprobed default.
-            /// Context floors and [`Self::max_output_tokens`] stay `None`.
-            /// `probed_at` is 0. Not a valid measured card; there is no
-            /// [`Default`] impl because an empty model or provider is not a card.
+            /// Every probe dimension is the unprobed default. Context floors
+            /// and [`Self::max_output_tokens`] stay `None`.
             pub fn unprobed(
                 model_id: impl Into<String>,
                 provider: impl Into<String>,

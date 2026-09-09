@@ -44,7 +44,6 @@ fn mentions_output_budget(lower: &str) -> bool {
     lower.contains("max_tokens")
         || lower.contains("max_completion_tokens")
         || lower.contains("maxoutputtokens")
-        || lower.contains("completion_tokens")
         || lower.contains("output token limit")
         || lower.contains("output_token_limit")
 }
@@ -81,10 +80,8 @@ fn parse_named_maximum(err: &str) -> Option<u32> {
         "less than or equal to ",
         "must be <= ",
         "must be <=",
-        "token limit is ",
-        "limit is ",
-        "limit of ",
-        "capped at ",
+        "output token limit is ",
+        "output_token_limit is ",
     ] {
         if let Some(idx) = lower.find(needle) {
             let rest = &err[idx + needle.len()..];
@@ -141,6 +138,10 @@ mod tests {
     fn parse_ignores_unrelated_errors() {
         assert_eq!(parse_max_output_cap("rate limited"), None);
         assert_eq!(parse_max_output_cap("context_length 200000"), None);
+        assert_eq!(
+            parse_max_output_cap("max_tokens request failed; rate limit is 10000 TPM"),
+            None
+        );
     }
 
     #[test]
@@ -151,6 +152,16 @@ mod tests {
         );
         assert_eq!(
             parse_max_output_cap("prompt exceeds maximum context 32768 > 8192"),
+            None
+        );
+        assert_eq!(
+            parse_max_output_cap("prompt + completion_tokens exceed maximum context 32768 > 8192"),
+            None
+        );
+        assert_eq!(
+            parse_max_output_cap(
+                r#"{"error":{"message":"context token limit is 128000","param":"max_tokens"}}"#
+            ),
             None
         );
     }
@@ -177,11 +188,7 @@ mod tests {
             Some(8192)
         );
         assert_eq!(
-            parse_max_output_cap("completion_tokens exceeds the limit of 4096"),
-            Some(4096)
-        );
-        assert_eq!(
-            parse_max_output_cap("output_token_limit capped at 2048"),
+            parse_max_output_cap("output_token_limit is 2048"),
             Some(2048)
         );
     }
