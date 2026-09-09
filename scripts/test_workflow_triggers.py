@@ -167,6 +167,24 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertIn("github.event.created", crates)
         self.assertIn("needs.plan.result == 'success'", rel)
 
+    def test_lint_runs_makefile_python_tests(self) -> None:
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        lint = ci[ci.index("name: Lint") : ci.index("name: Test")]
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        start = makefile.index("python-test:")
+        end = makefile.index("\nscoop-manifest-test:", start)
+        scripts = [
+            line.strip()
+            for line in makefile[start:end].splitlines()
+            if line.strip().startswith("python3 scripts/test_")
+        ]
+        self.assertIn("python3 scripts/test_sign_git_tag.py", scripts)
+        self.assertIn("python3 scripts/test_publish_crates.py", scripts)
+        check = makefile[makefile.index("check:") :]
+        for script in scripts:
+            self.assertIn(script, lint, script)
+            self.assertIn(f"\t{script}", check, script)
+
     def test_sign_tags_is_gpg_not_cosign(self) -> None:
         text = (WORKFLOWS / "sign-tags.yml").read_text(encoding="utf-8")
         on_block = _on_block(text)
