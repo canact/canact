@@ -356,6 +356,58 @@ fn probe_json_policy_fallback_reports_full_row_suite() {
 }
 
 #[test]
+fn probe_json_policy_fallback_reports_all_row_suite() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".to_owned(),
+        score: 1.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Strong,
+        details: "followed the system prompt".to_owned(),
+    };
+    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    cache.save(&cache_path).expect("save cache");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--cheap",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn canact probe --json");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["suite"], "all", "{value}");
+    assert_eq!(value["constraintPlacement"], "system", "{value}");
+}
+
+#[test]
+fn probe_json_policy_only_row_omits_constraint_placement() {
+    let value = probe_json_from_cache(&["--cheap"], true, None);
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["suite"], "policy", "{value}");
+    assert!(
+        value.get("constraintPlacement").is_none(),
+        "policy-only row must omit constraintPlacement: {value}"
+    );
+}
+
+#[test]
 fn probe_json_reuses_catalog_filled_row_without_flags() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");

@@ -518,17 +518,7 @@ fn cached_probe(
     }
     cache
         .find_profile_with_cost_and_advertised(model, provider, advertised)
-        .map(|(profile, cheap_row)| {
-            (
-                profile.clone(),
-                if cheap_row {
-                    SuiteTier::Policy
-                } else {
-                    SuiteTier::Full
-                },
-                advertised,
-            )
-        })
+        .map(|(profile, hit_suite)| (profile.clone(), hit_suite, advertised))
 }
 
 fn resolve_suite(args: &ProbeArgs) -> Result<SuiteTier, String> {

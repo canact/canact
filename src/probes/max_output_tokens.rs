@@ -23,7 +23,8 @@ pub async fn probe_max_output_tokens<C: ProbeClient>(llm: &C) -> Result<Option<u
     match llm.chat(request).await {
         Ok(_) => Ok(None),
         Err(err @ ProbeError::Auth(_)) | Err(err @ ProbeError::NotFound(_)) => Err(err),
-        Err(err) => Ok(parse_max_output_cap(&err.to_string())),
+        Err(err @ ProbeError::Llm(_)) => Ok(parse_max_output_cap(&err.to_string())),
+        Err(err) => Err(err),
     }
 }
 
@@ -263,5 +264,25 @@ mod tests {
         let llm = MockLlm::new("m", "p").with_error(ProbeError::Auth("no".into()));
         let err = probe_max_output_tokens(&llm).await.unwrap_err();
         assert!(matches!(err, ProbeError::Auth(_)));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_is_err_not_unmeasured() {
+        let llm = MockLlm::new("m", "p").with_error(ProbeError::RateLimit { retry_after: None });
+        let err = probe_max_output_tokens(&llm).await.unwrap_err();
+        assert!(
+            matches!(err, ProbeError::RateLimit { .. }),
+            "429 on the oversize ask must not become Ok(None): {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_is_err_not_unmeasured() {
+        let llm = MockLlm::new("m", "p").with_error(ProbeError::Transient("overload".into()));
+        let err = probe_max_output_tokens(&llm).await.unwrap_err();
+        assert!(
+            matches!(err, ProbeError::Transient(_)),
+            "transient on the oversize ask must not become Ok(None): {err:?}"
+        );
     }
 }

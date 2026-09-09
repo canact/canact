@@ -325,7 +325,10 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 .acquire()
                 .await
                 .map_err(|_| ProbeError::Internal("probe semaphore closed unexpectedly".into()))?;
-            take_max_output(probes::probe_max_output_tokens(&self.client).await)?
+            take_max_output(
+                &mut cacheable,
+                probes::probe_max_output_tokens(&self.client).await,
+            )?
         };
 
         let xml_tool_calling = if tool_calling.level == CapabilityLevel::Strong {
@@ -430,12 +433,19 @@ fn take_probe(
     Ok(probe)
 }
 
-fn take_max_output(result: Result<Option<u32>, ProbeError>) -> Result<Option<u32>, ProbeError> {
+fn take_max_output(
+    cacheable: &mut bool,
+    result: Result<Option<u32>, ProbeError>,
+) -> Result<Option<u32>, ProbeError> {
     match result {
         Ok(n) => Ok(n),
         Err(err @ ProbeError::Auth(_)) | Err(err @ ProbeError::NotFound(_)) => Err(err),
         Err(err) if is_unreachable_host(&err) => Err(err),
-        Err(_) => Ok(None),
+        Err(err) => {
+            let (_, ok_to_cache) = resolve_probe(Err(err), "max_output_tokens")?;
+            *cacheable &= ok_to_cache;
+            Ok(None)
+        }
     }
 }
 
