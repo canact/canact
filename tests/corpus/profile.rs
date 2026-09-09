@@ -1079,6 +1079,62 @@ fn host_policy_envelope_default_meta_is_cacheable_full() {
 }
 
 #[test]
+fn human_table_vs_json_constraint_placement_on_policy() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert_eq!(
+        profile.system_message_adherence.level,
+        CapabilityLevel::Strong
+    );
+    assert!(profile.max_output_tokens.is_none());
+
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Constraint placement"), "{table}");
+    assert!(table.contains("system"), "{table}");
+    assert!(
+        !table.to_ascii_lowercase().contains("max output tokens"),
+        "unmeasured cap omitted in the human table: {table}"
+    );
+
+    let policy = profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+        true,
+        false,
+        canact::SuiteTier::Policy,
+        None,
+    ));
+    assert!(
+        policy.get("constraintPlacement").is_none(),
+        "policy --json omits placement: {policy}"
+    );
+    assert!(
+        policy.get("maxOutputTokens").is_none(),
+        "unmeasured cap omitted in --json: {policy}"
+    );
+
+    profile.max_output_tokens = Some(4096);
+    let table = profile.format_human_table(false);
+    assert!(table.contains("Constraint placement"), "{table}");
+    assert!(table.contains("system"), "{table}");
+    assert!(table.contains("Max output tokens:"), "{table}");
+    assert!(table.contains("4096"), "{table}");
+
+    let policy = profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+        true,
+        false,
+        canact::SuiteTier::Policy,
+        None,
+    ));
+    assert!(
+        policy.get("constraintPlacement").is_none(),
+        "policy --json still omits placement: {policy}"
+    );
+    assert_eq!(policy["maxOutputTokens"], 4096, "{policy}");
+}
+
+#[test]
 fn constraint_placement_weak_is_user_only_on_all() {
     let mut profile = make_profile(
         CapabilityLevel::Strong,

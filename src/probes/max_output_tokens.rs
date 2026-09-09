@@ -277,6 +277,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unparseable_llm_is_unmeasured() {
+        let llm = RejectLlm("nope");
+        assert_eq!(probe_max_output_tokens(&llm).await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn transient_is_err_not_unmeasured() {
         let llm = MockLlm::new("m", "p").with_error(ProbeError::Transient("overload".into()));
         let err = probe_max_output_tokens(&llm).await.unwrap_err();
