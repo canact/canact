@@ -347,6 +347,7 @@ impl ProbeClient for OversizeErrLlm {
                     retry_after: *retry_after,
                 },
                 ProbeError::Transient(msg) => ProbeError::Transient(msg.clone()),
+                ProbeError::Llm(msg) => ProbeError::Llm(msg.clone()),
                 other => ProbeError::Internal(format!("unexpected oversize mock: {other}")),
             })
         } else {
@@ -400,6 +401,88 @@ async fn oversize_rate_limit_is_uncacheable() {
     assert!(
         !path.exists(),
         "cache file must not be written when max_output is rate-limited"
+    );
+}
+
+#[tokio::test]
+async fn oversize_measured_llm_reject_is_cacheable() {
+    let runner = ProbeRunner::new(OversizeErrLlm(ProbeError::Llm(
+        "max_tokens: 32768 > 4096".into(),
+    )))
+    .suite(SuiteTier::Policy);
+    let run = runner.run_detailed().await.expect("run_detailed");
+    assert_eq!(
+        run.profile.max_output_tokens,
+        Some(4096),
+        "measured reject must reach the profile"
+    );
+    assert!(
+        run.cacheable,
+        "a parsed output-cap reject is a finished measurement"
+    );
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = run.persist(&mut cache, &path).expect("persist");
+    assert!(wrote, "persist must write a measured output cap");
+    assert!(path.exists(), "cache file must exist after persist");
+    let stored = cache
+        .get_with_knobs("m", "p", true, false, None)
+        .expect("cheap persist");
+    assert_eq!(stored.max_output_tokens, Some(4096));
+}
+
+#[tokio::test]
+async fn oversize_unparseable_llm_is_cacheable() {
+    let runner =
+        ProbeRunner::new(OversizeErrLlm(ProbeError::Llm("nope".into()))).suite(SuiteTier::Policy);
+    let run = runner.run_detailed().await.expect("run_detailed");
+    assert!(
+        run.profile.max_output_tokens.is_none(),
+        "Llm miss is unmeasured, not an invented cap: {:?}",
+        run.profile.max_output_tokens
+    );
+    assert!(
+        run.cacheable,
+        "unparseable Llm on the oversize ask stays cacheable"
+    );
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = run.persist(&mut cache, &path).expect("persist");
+    assert!(wrote, "persist must write an unmeasured Llm miss");
+    assert!(path.exists(), "cache file must exist after persist");
+    let stored = cache
+        .get_with_knobs("m", "p", true, false, None)
+        .expect("cheap persist");
+    assert!(stored.max_output_tokens.is_none());
+}
+
+#[tokio::test]
+async fn oversize_transient_is_uncacheable() {
+    let runner = ProbeRunner::new(OversizeErrLlm(ProbeError::Transient("overload".into())))
+        .suite(SuiteTier::Policy);
+    let run = runner.run_detailed().await.expect("run_detailed");
+    assert!(
+        run.profile.max_output_tokens.is_none(),
+        "transient must not invent a cap: {:?}",
+        run.profile.max_output_tokens
+    );
+    assert!(
+        !run.cacheable,
+        "transient on the oversize ask must not persist a 30-day unmeasured omit"
+    );
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    let wrote = run.persist(&mut cache, &path).expect("persist");
+    assert!(!wrote, "persist must skip transient max_output");
+    assert!(
+        !path.exists(),
+        "cache file must not be written when max_output is transient"
     );
 }
 
