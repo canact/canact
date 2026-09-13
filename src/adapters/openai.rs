@@ -626,9 +626,12 @@ fn map_status(code: u16, retry_after: Option<u64>, body: &str) -> ProbeError {
         401 => ProbeError::Auth(body_or_status(code, body)),
         400 | 403 if body_looks_like_auth(body) => ProbeError::Auth(body_or_status(code, body)),
         404 => ProbeError::NotFound(body_or_status(code, body)),
-        403 => ProbeError::Llm(body_or_status(code, body)),
         429 => ProbeError::RateLimit { retry_after },
         408 | 500..=599 => ProbeError::Transient(body_or_status(code, body)),
+        _ if body_looks_like_missing_model(body) => {
+            ProbeError::NotFound(body_or_status(code, body))
+        }
+        403 => ProbeError::Llm(body_or_status(code, body)),
         _ => ProbeError::Llm(body_or_status(code, body)),
     }
 }
@@ -666,11 +669,11 @@ fn error_message(err: &Value) -> String {
 /// OpenRouter (and some proxies) return HTTP 200 with `error` instead of 5xx.
 fn classify_provider_error(err: &Value) -> ProbeError {
     let msg = error_message(err);
-    if let Some(code) = provider_error_status(err) {
-        return map_status(code, None, &msg);
-    }
     if body_looks_like_missing_model(&msg) || error_type_is_not_found(err) {
         return ProbeError::NotFound(msg);
+    }
+    if let Some(code) = provider_error_status(err) {
+        return map_status(code, None, &msg);
     }
     if body_looks_like_upstream_overload(&msg) {
         return ProbeError::Transient(msg);
@@ -1815,6 +1818,30 @@ mod tests {
             classify_provider_error(&err),
             ProbeError::NotFound(_)
         ));
+    }
+
+    #[test]
+    fn classify_200_numeric_400_model_not_found() {
+        let err = serde_json::json!({
+            "message": "The model foo does not exist",
+            "code": 400
+        });
+        assert!(matches!(
+            classify_provider_error(&err),
+            ProbeError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn chat_400_unknown_model_is_not_found() {
+        let base = spawn_http(
+            400,
+            "Bad Request",
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"error":{"message":"The model foo does not exist"}}"#.to_vec(),
+        );
+        let err = client(&base).chat(empty_req()).await.expect_err("400");
+        assert!(matches!(err, ProbeError::NotFound(_)), "{err:?}");
     }
 
     #[tokio::test]
