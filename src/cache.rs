@@ -342,14 +342,22 @@ impl ProbeCache {
         }
         let mut profiles = self.profiles.clone();
         if path.exists() {
-            if let Ok(disk) = Self::read_disk(path) {
-                for (key, theirs) in disk.profiles {
-                    match profiles.get(&key) {
-                        Some(ours) if ours.cached_at >= theirs.cached_at => {}
-                        _ => {
-                            profiles.insert(key, theirs);
+            match Self::read_disk(path) {
+                Ok(disk) => {
+                    for (key, theirs) in disk.profiles {
+                        match profiles.get(&key) {
+                            Some(ours) if ours.cached_at >= theirs.cached_at => {}
+                            _ => {
+                                profiles.insert(key, theirs);
+                            }
                         }
                     }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "warning: failed to read existing probe cache for merge ({}): {err}",
+                        path.display()
+                    );
                 }
             }
         }
@@ -1106,4 +1114,25 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_succeeds_when_existing_file_is_not_json() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("probe-cache.json");
+        std::fs::write(&path, "{not-json").expect("write corrupt");
+        ProbeCache::default()
+            .save(&path)
+            .expect("save must succeed over corrupt cache");
+        let raw = std::fs::read_to_string(&path).expect("reread");
+        let parsed: ProbeCache = serde_json::from_str(&raw).expect("valid ProbeCache JSON");
+        assert!(
+            parsed.profiles.is_empty(),
+            "default save must write an empty cache, got: {raw}"
+        );
+    }
 }

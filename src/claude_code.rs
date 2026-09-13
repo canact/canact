@@ -30,6 +30,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static LAST_PERSIST_ERROR: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
+    static LAST_REFRESH_STATUS: std::cell::RefCell<Option<u16>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[derive(Debug)]
@@ -211,6 +213,7 @@ fn token_from_store(raw: &str, store: &CredStore) -> Option<String> {
         return Some(parsed.access_token);
     };
     let Some(resp) = refresh_access_token(rt) else {
+        warn!("Claude Code refresh failed; reusing expired stored access token");
         return Some(parsed.access_token);
     };
     let new_rt = resp
@@ -331,15 +334,38 @@ fn token_urls() -> (String, Option<String>) {
 fn refresh_access_token(refresh_token: &str) -> Option<RefreshResponse> {
     let refresh_token = refresh_token.to_owned();
     let (primary, fallback) = token_urls();
-    std::thread::Builder::new()
+    // Refresh runs on a worker thread; copy test-only HTTP status back.
+    let (response, status) = std::thread::Builder::new()
         .name("canact-claude-refresh".into())
         .spawn(move || {
-            refresh_access_token_on_thread(&refresh_token, &primary, fallback.as_deref())
+            let response =
+                refresh_access_token_on_thread(&refresh_token, &primary, fallback.as_deref());
+            (response, last_refresh_status())
         })
         .ok()?
         .join()
-        .ok()?
+        .ok()?;
+    set_last_refresh_status(status);
+    response
 }
+
+#[cfg(test)]
+fn last_refresh_status() -> Option<u16> {
+    LAST_REFRESH_STATUS.with(|c| *c.borrow())
+}
+
+#[cfg(not(test))]
+fn last_refresh_status() -> Option<u16> {
+    None
+}
+
+#[cfg(test)]
+fn set_last_refresh_status(status: Option<u16>) {
+    LAST_REFRESH_STATUS.with(|c| *c.borrow_mut() = status);
+}
+
+#[cfg(not(test))]
+fn set_last_refresh_status(_status: Option<u16>) {}
 
 fn refresh_access_token_on_thread(
     refresh_token: &str,
@@ -391,9 +417,21 @@ async fn refresh_access_token_async(
         primary_result.ok()?
     };
     if !resp.status().is_success() {
+        warn!(
+            status = %resp.status(),
+            "Claude Code refresh returned non-success status"
+        );
+        #[cfg(test)]
+        LAST_REFRESH_STATUS.with(|c| *c.borrow_mut() = Some(resp.status().as_u16()));
         return None;
     }
-    let value: Value = resp.json().await.ok()?;
+    let value: Value = match resp.json().await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(error = %err, "Claude Code refresh response JSON parse failed");
+            return None;
+        }
+    };
     let access_token = value
         .get("access_token")
         .and_then(Value::as_str)
@@ -819,7 +857,14 @@ mod tests {
             .expect("primary host")
             .to_owned();
         let _urls = TokenUrlOverride::set(primary, Some(fallback));
+        LAST_REFRESH_STATUS.with(|c| *c.borrow_mut() = None);
         assert_eq!(load_from_file(&path).as_deref(), Some("sk-ant-oat01-old"));
+        let refresh_status = LAST_REFRESH_STATUS.with(|c| *c.borrow());
+        assert_eq!(
+            refresh_status,
+            Some(401),
+            "401 refresh must record LAST_REFRESH_STATUS"
+        );
         let primary_reqs = seen_primary.lock().expect("seen");
         let fallback_reqs = seen_fallback.lock().expect("seen");
         assert_eq!(
