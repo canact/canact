@@ -118,6 +118,23 @@ fn anthropic_default_ok(provider: &str) -> bool {
     provider.is_empty() || is_anthropic_provider_label(provider)
 }
 
+/// Whether to call `token_for_profile("anthropic-oauth")`.
+///
+/// Skip on named non-Anthropic routes so an expired Claude Code keychain
+/// item cannot stall an Ollama or xAI probe while wiremux refreshes.
+/// The first resolve (empty `--provider`) also skips when `--base-url` is
+/// set; `finalize_key_route` re-resolves with the URL-derived provider.
+pub fn should_load_claude_code_login(
+    provider: &str,
+    other_cloud_keys: bool,
+    explicit_base_url: bool,
+) -> bool {
+    if provider.is_empty() && explicit_base_url {
+        return false;
+    }
+    is_anthropic_provider_label(provider) || (provider.is_empty() && !other_cloud_keys)
+}
+
 /// Pick a key and host flags from injected values. Parse `provider` first.
 ///
 /// Callers read env vars (or MCP `api_key_env`) and pass the values in.
@@ -433,6 +450,23 @@ mod tests {
             Some("sk"),
             "https://api.openai.com/v1"
         ));
+    }
+
+    #[test]
+    fn should_load_claude_code_login_only_for_anthropic_or_empty_no_other_keys() {
+        assert!(should_load_claude_code_login("claude", false, false));
+        assert!(should_load_claude_code_login("anthropic", true, false));
+        assert!(should_load_claude_code_login(
+            "api.anthropic.com",
+            true,
+            true
+        ));
+        assert!(should_load_claude_code_login("", false, false));
+        assert!(!should_load_claude_code_login("", true, false));
+        assert!(!should_load_claude_code_login("", false, true));
+        assert!(!should_load_claude_code_login("xai", false, false));
+        assert!(!should_load_claude_code_login("ollama", false, false));
+        assert!(!should_load_claude_code_login("openai", false, false));
     }
 
     #[test]

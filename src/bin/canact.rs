@@ -8,7 +8,7 @@ use canact::{
     PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
     claude_code_access_token, finalize_key_route, list_model_ids, looks_cheap,
     missing_cloud_key_message, missing_model_message, refuse_cloud_without_key,
-    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
+    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio, should_load_claude_code_login,
 };
 use clap::{Parser, Subcommand};
 
@@ -164,10 +164,14 @@ fn main() -> ExitCode {
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let provider_hint = args.provider.clone().unwrap_or_default();
-    let first = resolve_api_key(args.api_key.clone(), &provider_hint);
+    let first = resolve_api_key(
+        args.api_key.clone(),
+        &provider_hint,
+        args.base_url.is_some(),
+    );
     let (route, base_url, provider) =
         finalize_key_route(&provider_hint, args.base_url.clone(), first, |provider| {
-            resolve_api_key(args.api_key.clone(), provider)
+            resolve_api_key(args.api_key.clone(), provider, false)
         });
     let api_key = route.key.clone();
     let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
@@ -444,7 +448,22 @@ fn emit_envelope(
     }
 }
 
-fn resolve_api_key(cli: Option<String>, provider: &str) -> canact::KeyRoute {
+fn resolve_api_key(
+    cli: Option<String>,
+    provider: &str,
+    explicit_base_url: bool,
+) -> canact::KeyRoute {
+    let openai = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let openrouter = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let xai = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty());
+    let other_cloud_keys = openai.is_some()
+        || openrouter.is_some()
+        || xai.is_some()
+        || cli.as_ref().is_some_and(|s| !s.is_empty());
     let anthropic = std::env::var("ANTHROPIC_AUTH_TOKEN")
         .ok()
         .filter(|s| !s.is_empty())
@@ -453,19 +472,14 @@ fn resolve_api_key(cli: Option<String>, provider: &str) -> canact::KeyRoute {
                 .ok()
                 .filter(|s| !s.is_empty())
         })
-        .or_else(claude_code_access_token);
-    resolve_api_key_from(
-        cli,
-        std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("OPENROUTER_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
-        anthropic,
-        provider,
-    )
+        .or_else(|| {
+            if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) {
+                claude_code_access_token()
+            } else {
+                None
+            }
+        });
+    resolve_api_key_from(cli, openai, openrouter, xai, anthropic, provider)
 }
 
 async fn resolve_model(

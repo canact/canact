@@ -10,7 +10,7 @@ use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
     is_anthropic_provider_label, is_xai_provider_label, looks_cheap, refuse_cloud_without_key,
-    resolve_api_key_from, resolve_host_catalog,
+    resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -156,17 +156,31 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
         _ => None,
     };
+    let openai = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let openrouter = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let xai = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty());
+    let has_explicit_base = args
+        .get("base_url")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+    let other_cloud_keys =
+        openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
+    let anthropic = if api_key_env.is_some_and(|v| !v.is_empty()) {
+        None
+    } else {
+        anthropic_key_for_route(provider_given, other_cloud_keys, has_explicit_base)
+    };
     let route = mcp_resolve_key_route(
         api_key_env,
         named_key,
-        std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("OPENROUTER_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
-        anthropic_env_key(),
+        openai,
+        openrouter,
+        xai,
+        anthropic,
         provider_given,
     );
     probe_model_with_route(args, route, api_key_env).await
@@ -221,17 +235,27 @@ async fn probe_model_with_route(
                 Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
                 _ => None,
             };
+            let openai = std::env::var("OPENAI_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty());
+            let openrouter = std::env::var("OPENROUTER_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty());
+            let xai = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty());
+            let other_cloud_keys =
+                openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
+            let anthropic = if api_key_env.is_some_and(|v| !v.is_empty()) {
+                None
+            } else {
+                anthropic_key_for_route(provider, other_cloud_keys, false)
+            };
             mcp_resolve_key_route(
                 api_key_env,
                 named_key,
-                std::env::var("OPENAI_API_KEY")
-                    .ok()
-                    .filter(|s| !s.is_empty()),
-                std::env::var("OPENROUTER_API_KEY")
-                    .ok()
-                    .filter(|s| !s.is_empty()),
-                std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
-                anthropic_env_key(),
+                openai,
+                openrouter,
+                xai,
+                anthropic,
                 provider,
             )
         });
@@ -360,7 +384,20 @@ fn anthropic_env_key() -> Option<String> {
                 .ok()
                 .filter(|s| !s.is_empty())
         })
-        .or_else(claude_code_access_token)
+}
+
+fn anthropic_key_for_route(
+    provider: &str,
+    other_cloud_keys: bool,
+    explicit_base_url: bool,
+) -> Option<String> {
+    anthropic_env_key().or_else(|| {
+        if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) {
+            claude_code_access_token()
+        } else {
+            None
+        }
+    })
 }
 
 fn default_cache_path() -> PathBuf {
