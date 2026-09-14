@@ -793,9 +793,76 @@ fn human_table_prints_recommended_not_advertised_as_measured() {
     assert!(table.contains("Recommended context tokens:"), "{table}");
     assert!(table.contains("4096"), "{table}");
     assert!(
-        !table.contains("40960"),
+        table.contains("Advertised context tokens:"),
+        "catalog window must be its own line: {table}"
+    );
+    assert!(table.contains("40960"), "{table}");
+    let recommended = table
+        .lines()
+        .find(|l| l.contains("Recommended context tokens:"))
+        .unwrap_or("");
+    assert!(
+        recommended.contains("4096") && !recommended.contains("40960"),
         "advertised must not print as measured: {table}"
     );
+}
+
+#[test]
+fn human_table_omits_advertised_context_when_none() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.probed_context_floor = Some(4096);
+    let table = profile.format_human_table(false);
+    assert!(
+        !table.to_ascii_lowercase().contains("advertised context"),
+        "{table}"
+    );
+}
+
+#[test]
+fn human_table_vision_summary_not_probed_when_skipped() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.vision = ProbeResult {
+        name: "vision".to_string(),
+        score: 0.0,
+        max_score: 1.0,
+        level: CapabilityLevel::Weak,
+        details: "Skipped: vision not requested".to_string(),
+    };
+    let table = profile.format_human_table(false);
+    let summary = table.split("Overall:").nth(1).unwrap_or("");
+    assert!(
+        summary.contains("not probed"),
+        "skipped vision must not look like a measured miss: {table}"
+    );
+    assert!(
+        !summary.contains("not supported"),
+        "not supported is for a completed Weak vision probe: {table}"
+    );
+}
+
+#[test]
+fn human_table_vision_summary_not_supported_when_measured_weak() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.vision = make_probe("vision", CapabilityLevel::Weak);
+    let table = profile.format_human_table(false);
+    let summary = table.split("Overall:").nth(1).unwrap_or("");
+    assert!(
+        summary.contains("not supported"),
+        "completed Weak vision is a measured miss: {table}"
+    );
+    assert!(!summary.contains("not probed"), "{table}");
 }
 
 #[test]
