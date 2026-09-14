@@ -3,6 +3,20 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.4.0](https://github.com/canact/canact/compare/v0.3.0...v0.4.0) (2026-09-14)
+
+
+### Features
+
+* consume wiremux 0.2.1 for LLM connect ([#211](https://github.com/canact/canact/issues/211)) ([63fc98a](https://github.com/canact/canact/commit/63fc98abb8f4eb8615a21ab3308a02e3a2bdbba9))
+
+
+### Bug Fixes
+
+* abort unknown-model 400 and log refresh merge errors ([#208](https://github.com/canact/canact/issues/208)) ([93564d5](https://github.com/canact/canact/commit/93564d5d33134bbf90de3b3653dfdfc10d1c31c8))
+* do not send OPENAI_API_KEY to xAI or Anthropic hosts ([#213](https://github.com/canact/canact/issues/213)) ([1fd7c93](https://github.com/canact/canact/commit/1fd7c9327ed8f59b0b5c80b0a0547b399e7b06a2))
+* keep send-timeouts session-local and restore think-tag strip ([#212](https://github.com/canact/canact/issues/212)) ([65ce753](https://github.com/canact/canact/commit/65ce753fe7f7f55ceb1fbafe62c7291f9f871762))
+
 ## [0.3.0](https://github.com/canact/canact/compare/v0.2.0...v0.3.0) (2026-09-09)
 
 
