@@ -767,11 +767,19 @@ fn skip_secret_key(input: &str, mut i: usize) -> usize {
 
 fn is_connect_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    lower.contains("connection refused")
+    if lower.contains("connection refused")
         || lower.contains("connect error")
         || lower.contains("error trying to connect")
         || lower.contains("tcp connect error")
         || lower.contains("dns error")
+    {
+        return true;
+    }
+    // Wiremux closed-port is often only "error sending request for url (...)".
+    // A hung-after-accept read timeout uses the same prefix plus "timed out".
+    lower.contains("error sending request")
+        && !lower.contains("timed out")
+        && !lower.contains("timeout")
 }
 
 fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
@@ -1060,6 +1068,21 @@ mod tests {
                 assert!(msg.contains("failed to connect:"), "{msg}");
             }
             other => panic!("expected connect-timeout abort, got {other:?}"),
+        }
+
+        let closed = map_client_error(ClientError::Transient {
+            status: None,
+            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions)"
+                .into(),
+        });
+        match &closed {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    msg.starts_with("failed to connect:"),
+                    "closed port without refused text must still abort: {msg}"
+                );
+            }
+            other => panic!("expected Transient closed port, got {other:?}"),
         }
     }
 
