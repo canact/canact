@@ -28,12 +28,32 @@ pub fn claude_code_access_token() -> Option<String> {
             .enable_all()
             .build()
             .ok()?;
-        rt.block_on(wiremux_auth::token_for_profile("anthropic-oauth"))
-            .ok()
+        rt.block_on(async {
+            let opts = wiremux_auth::LoadOptions::default();
+            let mut profile = wiremux_auth::load_profile("anthropic-oauth", &opts).ok()?;
+            prepend_login_user_keychain_account(&mut profile);
+            let provider = wiremux_auth::provider_from_profile(&profile).ok()?;
+            wiremux_auth::TokenProvider::get_token(&provider).await.ok()
+        })
     })
     .join()
     .ok()
     .flatten()
+}
+
+/// Claude Code stores the oat under the login `USER` account. The shipped
+/// preset only lists `Claude Code` and `credentials`.
+fn prepend_login_user_keychain_account(profile: &mut wiremux_auth::ResolvedProfile) {
+    let Some(oauth) = profile.oauth.as_mut() else {
+        return;
+    };
+    let Ok(user) = std::env::var("USER") else {
+        return;
+    };
+    if user.is_empty() || oauth.keychain_accounts.iter().any(|a| a == &user) {
+        return;
+    }
+    oauth.keychain_accounts.insert(0, user);
 }
 
 #[cfg(test)]
@@ -41,9 +61,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_catalog_token_is_none() {
-        let _guard = ClaudeCodeKeychainIsolation::hold();
-        // No planted Claude creds in this process. Absence is None, not panic.
-        let _ = claude_code_access_token();
+    fn prepends_login_user_before_shipped_keychain_accounts() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let mut profile =
+            wiremux_auth::load_profile("anthropic-oauth", &opts).expect("shipped profile");
+        let user = std::env::var("USER").expect("USER");
+        prepend_login_user_keychain_account(&mut profile);
+        let accounts = profile.oauth.expect("oauth").keychain_accounts;
+        assert_eq!(accounts.first().map(String::as_str), Some(user.as_str()));
+        assert!(accounts.iter().any(|a| a == "Claude Code"));
+        assert!(accounts.iter().any(|a| a == "credentials"));
     }
 }

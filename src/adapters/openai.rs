@@ -391,7 +391,9 @@ fn from_wire_listed(model: WireListed) -> ListedModel {
     ListedModel {
         id: model.id,
         advertised_context_tokens: model.context_tokens,
-        supports_vision: model.vision,
+        // Catalog may only promote true. Wiremux `false` (no image
+        // modality) must not look like the user passed `--no-vision`.
+        supports_vision: model.vision.filter(|v| *v),
     }
 }
 
@@ -1187,5 +1189,21 @@ mod tests {
             ir.items.first(),
             Some(IrItem::User { parts }) if matches!(parts.first(), Some(IrPart::ImageBase64 { .. }))
         ));
+    }
+
+    #[test]
+    fn from_wire_listed_drops_catalog_false_vision() {
+        let listed = from_wire_listed(WireListed {
+            id: "llama3.2:3b".into(),
+            context_tokens: Some(131_072),
+            vision: Some(false),
+        });
+        assert_eq!(listed.supports_vision, None);
+        let listed = from_wire_listed(WireListed {
+            id: "llava".into(),
+            context_tokens: None,
+            vision: Some(true),
+        });
+        assert_eq!(listed.supports_vision, Some(true));
     }
 }
