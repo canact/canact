@@ -3,6 +3,14 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.5.0](https://github.com/canact/canact/compare/v0.4.0...v0.5.0) (2026-09-14)
+
+
+### Features
+
+* add typed NotFound and ProbeResponse host constructors ([#221](https://github.com/canact/canact/issues/221)) ([41cb978](https://github.com/canact/canact/commit/41cb9786b74c54cbb37a5c06aa9135e9681767c2)), closes [#219](https://github.com/canact/canact/issues/219) [#220](https://github.com/canact/canact/issues/220)
+* export NotFound classifier and think-strip helpers ([#216](https://github.com/canact/canact/issues/216)) ([9c270c4](https://github.com/canact/canact/commit/9c270c4b51ea0fe288bde9796bc12bea4e4fb4dd))
+
 ## [0.4.0](https://github.com/canact/canact/compare/v0.3.0...v0.4.0) (2026-09-14)
 
 
