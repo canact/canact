@@ -61,6 +61,10 @@ mod tests {
             strip_think_blocks("<think>a</think>X<think>b</think>Y"),
             "XY"
         );
+        assert_eq!(
+            strip_think_blocks("Hello <think>hid</think>world"),
+            "Hello world"
+        );
         assert_eq!(strip_think_blocks("no tags"), "no tags");
         assert_eq!(strip_think_blocks(""), "");
     }
