@@ -6,8 +6,8 @@ use std::process::ExitCode;
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient,
     PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
-    claude_code_access_token, list_model_ids, looks_cheap, missing_model_message,
-    provider_from_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    claude_code_access_token, finalize_key_route, list_model_ids, looks_cheap,
+    missing_model_message, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
     run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
@@ -164,17 +164,12 @@ fn main() -> ExitCode {
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let provider_hint = args.provider.clone().unwrap_or_default();
-    let route = resolve_api_key(args.api_key.clone(), &provider_hint);
+    let first = resolve_api_key(args.api_key.clone(), &provider_hint);
+    let (route, base_url, provider) =
+        finalize_key_route(&provider_hint, args.base_url.clone(), first, |provider| {
+            resolve_api_key(args.api_key.clone(), provider)
+        });
     let api_key = route.key.clone();
-    let base_url = args
-        .base_url
-        .clone()
-        .unwrap_or_else(|| route.default_base_url(&provider_hint));
-    let provider = if provider_hint.is_empty() {
-        provider_from_base_url(&base_url)
-    } else {
-        provider_hint
-    };
     let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
     let mut cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());

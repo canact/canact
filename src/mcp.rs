@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRunner, SuiteTier, claude_code_access_token, looks_cheap, provider_from_base_url,
+    ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route, looks_cheap,
     refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
 };
 
@@ -173,7 +173,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
 
 async fn probe_model_with_route(
     args: &Value,
-    route: KeyRoute,
+    first: KeyRoute,
     api_key_env: Option<&str>,
 ) -> Result<Value, String> {
     let model = args
@@ -208,15 +208,33 @@ async fn probe_model_with_route(
         .get("provider")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(str::to_owned);
-    let api_key = route.key.clone();
-    let base_url = args
+        .unwrap_or("");
+    let explicit_base_url = args
         .get("base_url")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| route.default_base_url(provider_given.as_deref().unwrap_or("")));
-    let provider = provider_given.unwrap_or_else(|| provider_from_base_url(&base_url));
+        .map(str::to_owned);
+    let (route, base_url, provider) =
+        finalize_key_route(provider_given, explicit_base_url, first, |provider| {
+            let named_key = match api_key_env {
+                Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
+                _ => None,
+            };
+            mcp_resolve_key_route(
+                api_key_env,
+                named_key,
+                std::env::var("OPENAI_API_KEY")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
+                std::env::var("OPENROUTER_API_KEY")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
+                std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
+                anthropic_env_key(),
+                provider,
+            )
+        });
+    let api_key = route.key.clone();
     if !force {
         if let Some(profile) = cache.get_with_suite(&model, &provider, suite, vision, advertised) {
             return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(

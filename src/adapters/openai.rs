@@ -531,12 +531,35 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
     if !tool_calls.is_empty() && matches!(finish, ProbeFinish::Stop) {
         finish = ProbeFinish::ToolCalls;
     }
+    let text = strip_think_blocks(&text);
     ProbeResponse {
         text,
         tool_calls,
         finish,
         usage,
     }
+}
+
+fn strip_think_blocks(input: &str) -> String {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    let lower = input.to_ascii_lowercase();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        let Some(open_at) = lower.get(i..).and_then(|rest| rest.find(OPEN)) else {
+            out.push_str(&input[i..]);
+            break;
+        };
+        let open_at = i + open_at;
+        out.push_str(&input[i..open_at]);
+        let after_open = open_at + OPEN.len();
+        match lower.get(after_open..).and_then(|rest| rest.find(CLOSE)) {
+            Some(rel) => i = after_open + rel + CLOSE.len(),
+            None => break,
+        }
+    }
+    out
 }
 
 fn push_call(out: &mut Vec<ProbeToolCall>, (id, name, args): (String, String, String)) {
@@ -744,12 +767,19 @@ fn skip_secret_key(input: &str, mut i: usize) -> usize {
 
 fn is_connect_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    lower.contains("connection refused")
+    if lower.contains("connection refused")
         || lower.contains("connect error")
         || lower.contains("error trying to connect")
-        || lower.contains("error sending request")
         || lower.contains("tcp connect error")
         || lower.contains("dns error")
+    {
+        return true;
+    }
+    // Wiremux closed-port is often only "error sending request for url (...)".
+    // A hung-after-accept read timeout uses the same prefix plus "timed out".
+    lower.contains("error sending request")
+        && !lower.contains("timed out")
+        && !lower.contains("timeout")
 }
 
 fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
@@ -768,6 +798,7 @@ fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CapabilityLevel;
     use crate::client::ProbeMessage;
     use crate::client::ProbeTool;
     use crate::runner::resolve_probe;
@@ -965,6 +996,94 @@ mod tests {
         let resp = client(&base).chat(empty_req()).await.expect("ok");
         assert_eq!(resp.text, "visible");
         assert!(!resp.text.contains("hidden"));
+    }
+
+    #[tokio::test]
+    async fn chat_strips_think_tags() {
+        let base = spawn_http(200, "OK", chat_ok("<think>hidden chain</think>Paris"));
+        let resp = client(&base).chat(empty_req()).await.expect("ok");
+        assert_eq!(resp.text, "Paris");
+        assert!(!resp.text.contains("hidden"));
+
+        let base = spawn_http(200, "OK", chat_ok("<think>partial"));
+        let resp = client(&base).chat(empty_req()).await.expect("ok");
+        assert_eq!(resp.text, "");
+    }
+
+    #[test]
+    fn send_timeout_is_not_connect_abort() {
+        let err = map_client_error(ClientError::Transient {
+            status: None,
+            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): operation timed out".into(),
+        });
+        match &err {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    !msg.starts_with("failed to connect:"),
+                    "send timeout must not look like connect abort: {msg}"
+                );
+            }
+            other => panic!("expected Transient, got {other:?}"),
+        }
+        let (result, cacheable) =
+            resolve_probe(Err(err), "tool_calling").expect("send timeout stays scored");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert!(!cacheable, "timeout must not persist");
+
+        let connect = map_client_error(ClientError::Transient {
+            status: None,
+            message: "error trying to connect: tcp connect error: Connection refused".into(),
+        });
+        match &connect {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    msg.starts_with("failed to connect:"),
+                    "true connect must stay prefixed: {msg}"
+                );
+            }
+            other => panic!("expected Transient connect, got {other:?}"),
+        }
+        match resolve_probe(Err(connect), "tool_calling") {
+            Err(ProbeError::Transient(msg)) => {
+                assert!(msg.contains("failed to connect:"), "{msg}");
+            }
+            other => panic!("expected Transient abort, got {other:?}"),
+        }
+
+        let connect_timeout = map_client_error(ClientError::Transient {
+            status: None,
+            message: "error sending request for url (http://192.0.2.1:11434/v1/chat/completions): error trying to connect: tcp connect error: Operation timed out".into(),
+        });
+        match &connect_timeout {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    msg.starts_with("failed to connect:"),
+                    "SYN timeout must still abort: {msg}"
+                );
+            }
+            other => panic!("expected Transient connect timeout, got {other:?}"),
+        }
+        match resolve_probe(Err(connect_timeout), "tool_calling") {
+            Err(ProbeError::Transient(msg)) => {
+                assert!(msg.contains("failed to connect:"), "{msg}");
+            }
+            other => panic!("expected connect-timeout abort, got {other:?}"),
+        }
+
+        let closed = map_client_error(ClientError::Transient {
+            status: None,
+            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions)"
+                .into(),
+        });
+        match &closed {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    msg.starts_with("failed to connect:"),
+                    "closed port without refused text must still abort: {msg}"
+                );
+            }
+            other => panic!("expected Transient closed port, got {other:?}"),
+        }
     }
 
     #[tokio::test]
