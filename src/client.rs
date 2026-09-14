@@ -145,6 +145,41 @@ pub struct ProbeResponse {
     pub usage: Option<ProbeUsage>,
 }
 
+impl ProbeResponse {
+    /// Build a host [`ProbeResponse`] from raw completion text and a
+    /// provider finish string.
+    ///
+    /// Strips inline `<think>` blocks via [`crate::strip_think_blocks`]
+    /// and maps the finish string via [`finish_from_reason`]. Usage is
+    /// `None` until [`Self::with_usage`]. Tool calls stay empty; hosts
+    /// that received tools still fill `tool_calls` themselves.
+    ///
+    /// An empty or whitespace-only finish is [`ProbeFinish::Stop`],
+    /// the same as a missing stream finish
+    /// ([`ProbeStreamChunk::Finished`]).
+    #[must_use]
+    pub fn from_host_text(text: &str, finish: &str) -> Self {
+        let finish = if finish.trim().is_empty() {
+            ProbeFinish::Stop
+        } else {
+            finish_from_reason(finish)
+        };
+        Self {
+            text: crate::text::strip_think_blocks(text),
+            tool_calls: Vec::new(),
+            finish,
+            usage: None,
+        }
+    }
+
+    /// Attach provider usage reported on the wire.
+    #[must_use]
+    pub fn with_usage(mut self, usage: ProbeUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+}
+
 /// A tool call returned by the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProbeToolCall {
@@ -303,7 +338,7 @@ impl ProbeClient for MockLlm {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProbeFinish, finish_from_reason};
+    use super::{ProbeFinish, ProbeResponse, ProbeUsage, finish_from_reason};
 
     #[test]
     fn finish_from_reason_stop_family() {
@@ -330,5 +365,36 @@ mod tests {
         assert_eq!(finish_from_reason("other"), ProbeFinish::Other);
         assert_eq!(finish_from_reason("STOP"), ProbeFinish::Other);
         assert_eq!(finish_from_reason(""), ProbeFinish::Other);
+    }
+
+    #[test]
+    fn from_host_text_strips_think_and_maps_finish() {
+        let resp = ProbeResponse::from_host_text("<think>hid</think>Paris", "length");
+        assert_eq!(resp.text, "Paris");
+        assert_eq!(resp.finish, ProbeFinish::Length);
+        assert!(resp.tool_calls.is_empty());
+        assert_eq!(resp.usage, None);
+    }
+
+    #[test]
+    fn from_host_text_empty_finish_is_stop() {
+        let empty = ProbeResponse::from_host_text("ok", "");
+        assert_eq!(empty.finish, ProbeFinish::Stop);
+        let blank = ProbeResponse::from_host_text("ok", "   ");
+        assert_eq!(blank.finish, ProbeFinish::Stop);
+        let exact_other = ProbeResponse::from_host_text("ok", "STOP");
+        assert_eq!(exact_other.finish, ProbeFinish::Other);
+    }
+
+    #[test]
+    fn from_host_text_with_usage() {
+        let usage = ProbeUsage {
+            prompt_tokens: Some(3),
+            completion_tokens: Some(7),
+            reasoning_tokens: None,
+        };
+        let resp = ProbeResponse::from_host_text("ok", "stop").with_usage(usage.clone());
+        assert_eq!(resp.finish, ProbeFinish::Stop);
+        assert_eq!(resp.usage, Some(usage));
     }
 }

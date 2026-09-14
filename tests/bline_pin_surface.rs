@@ -24,6 +24,11 @@ fn bline_pin_sees_not_found_classifier() {
         Some(ProbeError::NotFound(_))
     ));
     assert!(ProbeError::not_found_from_body("invalid json schema").is_none());
+    assert!(matches!(
+        ProbeError::not_found_from_message("provider: unknown model"),
+        Some(ProbeError::NotFound(_))
+    ));
+    assert!(ProbeError::not_found_from_message("invalid json schema").is_none());
 }
 
 #[cfg(feature = "runtime")]
@@ -36,4 +41,8 @@ fn bline_pin_sees_runtime_host_helpers() {
         canact::finish_from_reason("length"),
         canact::ProbeFinish::Length
     );
+    let resp = canact::ProbeResponse::from_host_text("<think>hid</think>ok", "length");
+    assert_eq!(resp.text, "ok");
+    assert_eq!(resp.finish, canact::ProbeFinish::Length);
+    assert_eq!(resp.usage, None);
 }
