@@ -135,6 +135,21 @@ pub fn should_load_claude_code_login(
     is_anthropic_provider_label(provider) || (provider.is_empty() && !other_cloud_keys)
 }
 
+/// Whether to call `token_for_profile("xai-oauth")` (`~/.grok/auth.json`).
+///
+/// Same skip rules as [`should_load_claude_code_login`]: named non-xAI
+/// routes and a first resolve with `--base-url` must not read Grok login.
+pub fn should_load_xai_oauth(
+    provider: &str,
+    other_cloud_keys: bool,
+    explicit_base_url: bool,
+) -> bool {
+    if provider.is_empty() && explicit_base_url {
+        return false;
+    }
+    is_xai_provider_label(provider) || (provider.is_empty() && !other_cloud_keys)
+}
+
 /// Pick a key and host flags from injected values. Parse `provider` first.
 ///
 /// Callers read env vars (or MCP `api_key_env`) and pass the values in.
@@ -467,6 +482,19 @@ mod tests {
         assert!(!should_load_claude_code_login("xai", false, false));
         assert!(!should_load_claude_code_login("ollama", false, false));
         assert!(!should_load_claude_code_login("openai", false, false));
+    }
+
+    #[test]
+    fn should_load_xai_oauth_only_for_xai_or_empty_no_other_keys() {
+        assert!(should_load_xai_oauth("xai", false, false));
+        assert!(should_load_xai_oauth("grok", true, false));
+        assert!(should_load_xai_oauth("api.x.ai", true, true));
+        assert!(should_load_xai_oauth("", false, false));
+        assert!(!should_load_xai_oauth("", true, false));
+        assert!(!should_load_xai_oauth("", false, true));
+        assert!(!should_load_xai_oauth("claude", false, false));
+        assert!(!should_load_xai_oauth("ollama", false, false));
+        assert!(!should_load_xai_oauth("openai", false, false));
     }
 
     #[test]
