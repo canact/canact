@@ -6,7 +6,9 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use canact::{CapabilityLevel, CapabilityProfile, ProbeCache, ProbeResult, SuiteTier};
+use canact::{
+    CapabilityLevel, CapabilityProfile, PROBE_SUITE_VERSION, ProbeCache, ProbeResult, SuiteTier,
+};
 
 fn canact() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_canact"));
@@ -854,4 +856,167 @@ fn matrix_prints_json_without_score() {
     assert_eq!(value["rows"][0]["model"], "alpha", "{value}");
     assert_eq!(value["rows"][0]["nativeTools"], "pass", "{value}");
     assert_eq!(value["rows"][1]["nativeTools"], "fail", "{value}");
+}
+
+#[test]
+fn probe_named_xai_with_openai_env_asks_for_xai_key() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = canact()
+        .args([
+            "probe",
+            "--provider",
+            "xai",
+            "--model",
+            "grok-test",
+            "--cheap",
+            "--force",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env("OPENAI_API_KEY", "sk-openai-must-not-go-to-xai")
+        .env_remove("XAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .output()
+        .expect("spawn probe");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(stderr.contains("XAI_API_KEY"), "stderr={stderr}");
+    assert!(
+        !stderr.contains("set --api-key, OPENAI_API_KEY"),
+        "named xAI must not treat OPENAI_API_KEY as the fix: {stderr}"
+    );
+}
+
+#[test]
+fn export_uses_cached_advertised_window() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut older = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    older.model_id = "grok-window".to_owned();
+    older.provider = "xai".to_owned();
+    let newer = older.clone();
+    let mut cache = ProbeCache::default();
+    cache.put(older);
+    for entry in cache.profiles.values_mut() {
+        entry.cached_at = 1;
+    }
+    cache.put_with_knobs(newer, true, false, Some(1_000_000));
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "grok-window",
+            "--provider",
+            "xai",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            dir.path().to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stderr={stderr}");
+    let metadata =
+        std::fs::read_to_string(dir.path().join(".aider.model.metadata.json")).expect("metadata");
+    let value: serde_json::Value = serde_json::from_str(&metadata).expect("parse");
+    assert_eq!(
+        value["xai/grok-window"]["max_input_tokens"], 1_000_000,
+        "{value}"
+    );
+}
+
+#[test]
+fn export_stale_suite_explains_rerun() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "llama3.2:3b".to_owned();
+    profile.provider = "ollama".to_owned();
+    let mut cache = ProbeCache::default();
+    cache.put_with_settings(
+        profile,
+        "unset",
+        PROBE_SUITE_VERSION - 1,
+        true,
+        false,
+        Some(131_072),
+    );
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "llama3.2:3b",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            dir.path().to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(
+        stderr.contains(&format!("suite {}", PROBE_SUITE_VERSION - 1)),
+        "stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("need {PROBE_SUITE_VERSION}")),
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("no cached probe"),
+        "stale suite must not look empty: {stderr}"
+    );
+}
+
+#[test]
+fn matrix_stale_suite_explains_rerun() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "llama3.2:3b".to_owned();
+    profile.provider = "ollama".to_owned();
+    let mut cache = ProbeCache::default();
+    cache.put_with_settings(
+        profile,
+        "unset",
+        PROBE_SUITE_VERSION - 1,
+        true,
+        false,
+        Some(131_072),
+    );
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(
+        stderr.contains(&format!("suite {}", PROBE_SUITE_VERSION - 1)),
+        "stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("need {PROBE_SUITE_VERSION}")),
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("no cached probes"),
+        "stale suite must not look empty: {stderr}"
+    );
 }

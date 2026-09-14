@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route, looks_cheap,
-    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
+    is_anthropic_provider_label, is_xai_provider_label, looks_cheap, refuse_cloud_without_key,
+    resolve_api_key_from, resolve_host_catalog,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -264,7 +265,7 @@ async fn probe_model_with_route(
         }
     }
     if refuse_cloud_without_key(api_key.as_deref(), &base_url) {
-        return Err(mcp_missing_key_error(api_key_env));
+        return Err(mcp_missing_key_error(api_key_env, &provider));
     }
     let hints = resolve_host_catalog(
         advertised,
@@ -336,9 +337,15 @@ fn mcp_resolve_key_route(
 }
 
 /// Named `api_key_env` does not fall back to OPENAI_API_KEY / XAI_API_KEY.
-fn mcp_missing_key_error(api_key_env: Option<&str>) -> String {
+fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
     match api_key_env {
         Some(var) if !var.is_empty() => format!("{var} is unset or empty"),
+        _ if is_xai_provider_label(provider) => {
+            "set api_key_env or XAI_API_KEY for xAI (OPENAI_API_KEY is not sent)".to_owned()
+        }
+        _ if is_anthropic_provider_label(provider) => {
+            "set api_key_env, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY for Anthropic (OPENAI_API_KEY is not sent)".to_owned()
+        }
         _ => "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
             .to_owned(),
     }
@@ -555,7 +562,7 @@ mod tests {
         let err = probe_model_with_route(&args, route, None)
             .await
             .unwrap_err();
-        assert_eq!(err, mcp_missing_key_error(None));
+        assert_eq!(err, mcp_missing_key_error(None, "openai"));
         assert!(
             crate::adapters::openai::take_catalog_lookups().is_empty(),
             "must not call catalog"
@@ -610,7 +617,7 @@ mod tests {
             route.key, None,
             "named api_key_env must not fall back to OPENAI_API_KEY / XAI_API_KEY"
         );
-        let err = mcp_missing_key_error(Some("FOO_KEY"));
+        let err = mcp_missing_key_error(Some("FOO_KEY"), "openai");
         assert_eq!(err, "FOO_KEY is unset or empty");
         assert!(
             !err.contains("OPENAI_API_KEY") && !err.contains("XAI_API_KEY"),

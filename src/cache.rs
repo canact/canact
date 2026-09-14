@@ -397,6 +397,65 @@ impl ProbeCache {
             .map(|(profile, _)| profile)
     }
 
+    /// Newest current-suite row plus the advertised window stored in its key.
+    ///
+    /// Export uses this so a later `GET /models` row (`ctx1000000`) wins
+    /// over an older default `ctxnone` row. [`Self::find_profile`] still
+    /// prefers the default knob key for alias lookups.
+    pub fn find_profile_and_advertised(
+        &self,
+        model_id: &str,
+        provider: &str,
+    ) -> Option<(&CapabilityProfile, Option<u32>)> {
+        self.profiles
+            .iter()
+            .filter(|(_, entry)| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == PROBE_SUITE_VERSION
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
+                    && providers_equivalent(&entry.profile.provider, provider)
+            })
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(key, entry)| (&entry.profile, key_advertised(key)))
+    }
+
+    /// Highest non-current suite version stored for this model and provider.
+    pub fn stale_suite_version(&self, model_id: &str, provider: &str) -> Option<u32> {
+        self.profiles
+            .values()
+            .filter(|entry| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version != PROBE_SUITE_VERSION
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
+                    && providers_equivalent(&entry.profile.provider, provider)
+            })
+            .map(|entry| entry.probe_suite_version)
+            .max()
+    }
+
+    /// Highest non-current suite version stored for this provider.
+    pub fn stale_suite_version_for_provider(&self, provider: &str) -> Option<u32> {
+        self.profiles
+            .values()
+            .filter(|entry| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version != PROBE_SUITE_VERSION
+                    && providers_equivalent(&entry.profile.provider, provider)
+            })
+            .map(|entry| entry.probe_suite_version)
+            .max()
+    }
+
     /// Newest matching row and whether that row was stored as cheap.
     pub fn find_profile_with_cost(
         &self,
@@ -1133,5 +1192,66 @@ mod tests {
             parsed.profiles.is_empty(),
             "default save must write an empty cache, got: {raw}"
         );
+    }
+
+    #[test]
+    fn find_profile_and_advertised_reads_catalog_window() {
+        let mut cache = ProbeCache::default();
+        let profile = CapabilityProfile::unprobed("grok-window", "xai");
+        cache.put_with_knobs(profile, true, false, Some(1_000_000));
+        let (got, advertised) = cache
+            .find_profile_and_advertised("grok-window", "xai")
+            .expect("row");
+        assert_eq!(got.model_id, "grok-window");
+        assert_eq!(advertised, Some(1_000_000));
+    }
+
+    #[test]
+    fn find_profile_and_advertised_omits_default_ctxnone() {
+        let mut cache = ProbeCache::default();
+        cache.put(CapabilityProfile::unprobed("m", "p"));
+        let (_, advertised) = cache.find_profile_and_advertised("m", "p").expect("row");
+        assert_eq!(advertised, None);
+    }
+
+    #[test]
+    fn find_profile_and_advertised_prefers_newer_catalog_window() {
+        let mut cache = ProbeCache::default();
+        cache.put(CapabilityProfile::unprobed("grok-window", "xai"));
+        for entry in cache.profiles.values_mut() {
+            entry.cached_at = 1;
+        }
+        cache.put_with_knobs(
+            CapabilityProfile::unprobed("grok-window", "xai"),
+            true,
+            false,
+            Some(1_000_000),
+        );
+        let (_, advertised) = cache
+            .find_profile_and_advertised("grok-window", "xai")
+            .expect("row");
+        assert_eq!(advertised, Some(1_000_000));
+    }
+
+    #[test]
+    fn stale_suite_version_reports_old_row() {
+        let mut cache = ProbeCache::default();
+        cache.put_with_settings(
+            CapabilityProfile::unprobed("llama3.2:3b", "ollama"),
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            true,
+            false,
+            Some(131_072),
+        );
+        assert_eq!(
+            cache.stale_suite_version("llama3.2:3b", "ollama"),
+            Some(PROBE_SUITE_VERSION - 1)
+        );
+        assert_eq!(
+            cache.stale_suite_version_for_provider("ollama"),
+            Some(PROBE_SUITE_VERSION - 1)
+        );
+        assert!(cache.find_profile("llama3.2:3b", "ollama").is_none());
     }
 }
