@@ -79,6 +79,26 @@ impl ProbeError {
             None
         }
     }
+
+    /// Classify a typed host error Display / provider message as
+    /// [`ProbeError::NotFound`].
+    ///
+    /// Use this when the host already mapped HTTP into something like
+    /// `LlmError::Provider(msg)` and has no status code.
+    /// [`Self::from_http`] and [`Self::not_found_from_body`] stay for
+    /// raw HTTP. Do not reimplement the needle table.
+    ///
+    /// Needles (case-insensitive): `does not exist`, `unknown model`,
+    /// `model_not_found`. Validation 400 and region-forbidden copy
+    /// return `None` so the host can keep Auth / Transient / Llm.
+    #[must_use]
+    pub fn not_found_from_message(display: &str) -> Option<Self> {
+        if looks_like_model_not_found(display) {
+            Some(Self::NotFound(display.trim().chars().take(512).collect()))
+        } else {
+            None
+        }
+    }
 }
 
 fn looks_like_model_not_found(text: &str) -> bool {
@@ -229,5 +249,38 @@ mod tests {
         ));
         assert!(msg.contains("unknown model"), "{msg}");
         assert!(ProbeError::not_found_from_body("invalid json schema").is_none());
+    }
+
+    #[test]
+    fn not_found_from_message_matches_display_needles() {
+        let msg = not_found_msg(ProbeError::not_found_from_message(
+            "provider: The model `foo` does not exist",
+        ));
+        assert_eq!(msg, "provider: The model `foo` does not exist");
+        let msg = not_found_msg(ProbeError::not_found_from_message("unknown model: bar"));
+        assert_eq!(msg, "unknown model: bar");
+        let msg = not_found_msg(ProbeError::not_found_from_message(
+            "code=model_not_found no such id",
+        ));
+        assert!(msg.contains("model_not_found"), "{msg}");
+    }
+
+    #[test]
+    fn not_found_from_message_needles_are_case_insensitive() {
+        let msg = not_found_msg(ProbeError::not_found_from_message(
+            "Provider: The model `foo` Does Not Exist",
+        ));
+        assert!(msg.contains("Does Not Exist"), "{msg}");
+    }
+
+    #[test]
+    fn not_found_from_message_validation_and_region_stay_none() {
+        assert!(ProbeError::not_found_from_message("invalid json schema for tools").is_none());
+        assert!(
+            ProbeError::not_found_from_message("this model is not available in your region")
+                .is_none()
+        );
+        assert!(ProbeError::not_found_from_message("rate limited, retry later").is_none());
+        assert!(ProbeError::not_found_from_message("").is_none());
     }
 }
