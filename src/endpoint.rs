@@ -206,6 +206,29 @@ pub fn refuse_cloud_without_key(api_key: Option<&str>, base_url: &str) -> bool {
     api_key.is_none() && cloud_endpoint_requires_key(base_url)
 }
 
+/// After an explicit base URL is known, re-resolve the key when
+/// the user omitted `--provider` / MCP `provider`.
+pub fn finalize_key_route(
+    provider_given: &str,
+    explicit_base_url: Option<String>,
+    first: KeyRoute,
+    re_resolve: impl FnOnce(&str) -> KeyRoute,
+) -> (KeyRoute, String, String) {
+    let has_explicit = explicit_base_url.is_some();
+    let base_url = explicit_base_url.unwrap_or_else(|| first.default_base_url(provider_given));
+    let provider = if provider_given.is_empty() {
+        provider_from_base_url(&base_url)
+    } else {
+        provider_given.to_owned()
+    };
+    let route = if provider_given.is_empty() && has_explicit {
+        re_resolve(&provider)
+    } else {
+        first
+    };
+    (route, base_url, provider)
+}
+
 /// True when the host or model looks local/free so the cheap suite is enough.
 /// Host label used as `provider` when the user omitted `--provider`.
 /// Loopback URLs keep `host:port` so different listeners do not share a cache row.
@@ -605,5 +628,96 @@ mod tests {
             provider_from_base_url(ANTHROPIC_BASE_URL),
             "api.anthropic.com"
         );
+    }
+
+    #[test]
+    fn finalize_key_route_empty_provider_explicit_anthropic_url_uses_anthropic_key() {
+        let first = resolve_api_key_from(
+            None,
+            None,
+            None,
+            Some("xai-env".to_owned()),
+            Some("sk-ant-env".to_owned()),
+            "",
+        );
+        assert!(first.from_xai, "precondition: empty provider prefers xAI");
+        let (route, base_url, provider) =
+            finalize_key_route("", Some(ANTHROPIC_BASE_URL.to_owned()), first, |p| {
+                resolve_api_key_from(
+                    None,
+                    None,
+                    None,
+                    Some("xai-env".to_owned()),
+                    Some("sk-ant-env".to_owned()),
+                    p,
+                )
+            });
+        assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
+        assert!(route.from_anthropic);
+        assert!(!route.from_xai);
+        assert_eq!(base_url, ANTHROPIC_BASE_URL);
+        assert_eq!(provider, "api.anthropic.com");
+    }
+
+    #[test]
+    fn finalize_key_route_empty_provider_explicit_xai_url_does_not_use_anthropic_key() {
+        let first = resolve_api_key_from(None, None, None, None, Some("sk-ant".to_owned()), "");
+        assert!(
+            first.from_anthropic,
+            "precondition: empty provider with Anthropic-only key selects Anthropic"
+        );
+        let (route, base_url, provider) =
+            finalize_key_route("", Some(XAI_BASE_URL.to_owned()), first, |p| {
+                resolve_api_key_from(None, None, None, None, Some("sk-ant".to_owned()), p)
+            });
+        assert!(
+            route.key.is_none(),
+            "must not send an Anthropic key to api.x.ai"
+        );
+        assert!(!route.from_anthropic);
+        assert_eq!(base_url, XAI_BASE_URL);
+        assert_eq!(provider, "api.x.ai");
+    }
+
+    #[test]
+    fn finalize_key_route_empty_provider_no_url_still_prefers_xai() {
+        let first = resolve_api_key_from(
+            None,
+            None,
+            None,
+            Some("xai-env".to_owned()),
+            Some("sk-ant".to_owned()),
+            "",
+        );
+        let (route, base_url, provider) = finalize_key_route("", None, first, |_| {
+            panic!("must not re-resolve when URL was omitted")
+        });
+        assert_eq!(route.key.as_deref(), Some("xai-env"));
+        assert!(route.from_xai);
+        assert!(!route.from_anthropic);
+        assert_eq!(base_url, XAI_BASE_URL);
+        assert_eq!(provider, "api.x.ai");
+    }
+
+    #[test]
+    fn finalize_key_route_explicit_provider_wins_over_url() {
+        let first = resolve_api_key_from(
+            None,
+            None,
+            None,
+            Some("xai-env".to_owned()),
+            Some("sk-ant-env".to_owned()),
+            "claude",
+        );
+        assert!(first.from_anthropic);
+        let (route, base_url, provider) =
+            finalize_key_route("claude", Some(XAI_BASE_URL.to_owned()), first, |_| {
+                panic!("must not re-resolve when --provider was given")
+            });
+        assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
+        assert!(route.from_anthropic);
+        assert!(!route.from_xai);
+        assert_eq!(base_url, XAI_BASE_URL);
+        assert_eq!(provider, "claude");
     }
 }
