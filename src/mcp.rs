@@ -11,6 +11,7 @@ use crate::{
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
     is_anthropic_provider_label, is_xai_provider_label, looks_cheap, refuse_cloud_without_key,
     resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
+    should_load_xai_oauth, xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -162,14 +163,23 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     let openrouter = std::env::var("OPENROUTER_API_KEY")
         .ok()
         .filter(|s| !s.is_empty());
-    let xai = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty());
     let has_explicit_base = args
         .get("base_url")
         .and_then(Value::as_str)
         .is_some_and(|s| !s.is_empty());
+    let skip_oauth = api_key_env.is_some_and(|v| !v.is_empty());
+    let other_before_xai = openai.is_some() || openrouter.is_some() || named_key.is_some();
+    let xai = if skip_oauth {
+        std::env::var("XAI_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
+    } else {
+        xai_key_for_route(provider_given, other_before_xai, has_explicit_base)
+    };
     let other_cloud_keys =
         openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
-    let anthropic = if api_key_env.is_some_and(|v| !v.is_empty()) {
+    let anthropic = if skip_oauth {
         None
     } else {
         anthropic_key_for_route(provider_given, other_cloud_keys, has_explicit_base)
@@ -241,10 +251,19 @@ async fn probe_model_with_route(
             let openrouter = std::env::var("OPENROUTER_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty());
-            let xai = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty());
+            let skip_oauth = api_key_env.is_some_and(|v| !v.is_empty());
+            let other_before_xai = openai.is_some() || openrouter.is_some() || named_key.is_some();
+            let xai = if skip_oauth {
+                std::env::var("XAI_API_KEY")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
+            } else {
+                xai_key_for_route(provider, other_before_xai, false)
+            };
             let other_cloud_keys =
                 openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
-            let anthropic = if api_key_env.is_some_and(|v| !v.is_empty()) {
+            let anthropic = if skip_oauth {
                 None
             } else {
                 anthropic_key_for_route(provider, other_cloud_keys, false)
@@ -383,6 +402,24 @@ fn anthropic_env_key() -> Option<String> {
             std::env::var("ANTHROPIC_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
+        })
+}
+
+fn xai_key_for_route(
+    provider: &str,
+    other_cloud_keys: bool,
+    explicit_base_url: bool,
+) -> Option<String> {
+    std::env::var("XAI_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
+        .or_else(|| {
+            if should_load_xai_oauth(provider, other_cloud_keys, explicit_base_url) {
+                xai_oauth_access_token()
+            } else {
+                None
+            }
         })
 }
 

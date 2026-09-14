@@ -38,6 +38,23 @@ pub fn claude_code_access_token() -> Option<String> {
     .flatten()
 }
 
+/// Access token from catalog id `xai-oauth` (`~/.grok/auth.json`).
+///
+/// Env `XAI_API_KEY` / `GROK_API_KEY` still win at the caller.
+pub fn xai_oauth_access_token() -> Option<String> {
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        rt.block_on(wiremux_auth::token_for_profile("xai-oauth"))
+            .ok()
+    })
+    .join()
+    .ok()
+    .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

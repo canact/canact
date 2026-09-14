@@ -9,6 +9,7 @@ use canact::{
     claude_code_access_token, finalize_key_route, list_model_ids, looks_cheap,
     missing_cloud_key_message, missing_model_message, refuse_cloud_without_key,
     resolve_api_key_from, resolve_host_catalog, run_mcp_stdio, should_load_claude_code_login,
+    should_load_xai_oauth, xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -459,7 +460,21 @@ fn resolve_api_key(
     let openrouter = std::env::var("OPENROUTER_API_KEY")
         .ok()
         .filter(|s| !s.is_empty());
-    let xai = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty());
+    let xai_env = std::env::var("XAI_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()));
+    let other_before_xai_oauth = openai.is_some()
+        || openrouter.is_some()
+        || xai_env.is_some()
+        || cli.as_ref().is_some_and(|s| !s.is_empty());
+    let xai = xai_env.or_else(|| {
+        if should_load_xai_oauth(provider, other_before_xai_oauth, explicit_base_url) {
+            xai_oauth_access_token()
+        } else {
+            None
+        }
+    });
     let other_cloud_keys = openai.is_some()
         || openrouter.is_some()
         || xai.is_some()

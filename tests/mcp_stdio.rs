@@ -4,6 +4,25 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+fn isolated_home() -> &'static std::path::Path {
+    static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("isolated HOME");
+        let path = dir.path().to_path_buf();
+        std::mem::forget(dir);
+        path
+    })
+}
+
+fn canact_cmd() -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_canact"));
+    cmd.env_remove("GROK_API_KEY");
+    cmd.env("HOME", isolated_home());
+    #[cfg(windows)]
+    cmd.env("USERPROFILE", isolated_home());
+    cmd
+}
+
 use canact::{CapabilityLevel, CapabilityProfile, ProbeCache, ProbeResult, SuiteTier};
 use serde_json::{Value, json};
 
@@ -72,7 +91,7 @@ fn mcp_probe_model_returns_host_policy_from_cache() {
     cache.put(sample());
     cache.save(&cache_path).expect("save");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+    let mut child = canact_cmd()
         .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -177,7 +196,7 @@ fn mcp_cached_weak_tools_is_not_error() {
     cache.put(profile);
     cache.save(&cache_path).expect("save");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+    let mut child = canact_cmd()
         .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -237,7 +256,7 @@ fn mcp_cached_weak_tools_is_not_error() {
 
 #[test]
 fn mcp_ndjson_initialize_gets_jsonrpc_reply() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+    let mut child = canact_cmd()
         .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -296,7 +315,7 @@ fn mcp_policy_fallback_reports_all_row_suite() {
     cache.put_with_suite(profile, SuiteTier::All, false, None);
     cache.save(&cache_path).expect("save");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+    let mut child = canact_cmd()
         .arg("mcp")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
@@ -358,7 +377,7 @@ fn mcp_policy_only_row_omits_constraint_placement() {
     cache.put_with_suite(sample(), SuiteTier::Policy, false, None);
     cache.save(&cache_path).expect("save");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+    let mut child = canact_cmd()
         .arg("mcp")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
@@ -423,7 +442,7 @@ fn mcp_full_does_not_return_cheap_cache() {
     cache.put_with_knobs(sample(), true, false, None);
     cache.save(&cache_path).expect("save");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+    let mut child = canact_cmd()
         .arg("mcp")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
@@ -486,7 +505,7 @@ fn mcp_openai_force_without_key_is_missing_key_error() {
     let cache_path = dir.path().join("probes.json");
     ProbeCache::default().save(&cache_path).expect("save");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_canact"))
+    let mut child = canact_cmd()
         .arg("mcp")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")

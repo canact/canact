@@ -165,9 +165,23 @@ fn advertised_200k_is_not_written_as_ladder_floor() {
     );
 }
 
+fn isolated_home() -> &'static std::path::Path {
+    static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("isolated HOME");
+        let path = dir.path().to_path_buf();
+        std::mem::forget(dir);
+        path
+    })
+}
+
 fn canact() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_canact"));
     cmd.env("NO_COLOR", "1");
+    cmd.env_remove("GROK_API_KEY");
+    cmd.env("HOME", isolated_home());
+    #[cfg(windows)]
+    cmd.env("USERPROFILE", isolated_home());
     cmd
 }
 
