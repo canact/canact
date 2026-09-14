@@ -38,8 +38,8 @@ impl ProbeError {
     /// Hosts that implement `ProbeClient` around their own HTTP client
     /// should call this before mapping the rest of the status table. A
     /// `Some` result is a suite abort, the same as Auth. Do not
-    /// reimplement the needle table; this is the same classifier the
-    /// shipped OpenAI-compat adapter uses.
+    /// reimplement the needle table. This matches the shipped
+    /// OpenAI-compat adapter's NotFound arm (wiremux `ClientError::NotFound`).
     ///
     /// Returns `Some` for:
     /// - HTTP 404 (Ollama missing model)
@@ -188,6 +188,21 @@ mod tests {
     fn from_http_401_is_none() {
         let body = r#"{"error":{"message":"Incorrect API key provided"}}"#;
         assert!(ProbeError::from_http(401, body).is_none());
+    }
+
+    #[test]
+    fn from_http_needles_are_case_insensitive() {
+        let body = r#"{"error":{"message":"The model `foo` Does Not Exist"}}"#;
+        assert!(matches!(
+            ProbeError::from_http(400, body),
+            Some(ProbeError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn from_http_429_with_needles_stays_none() {
+        let body = r#"{"error":{"message":"the model does not exist"}}"#;
+        assert!(ProbeError::from_http(429, body).is_none());
     }
 
     #[test]
