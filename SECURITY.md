@@ -14,12 +14,12 @@ in `CHANGELOG.md` when a fix ships.
 
 canact is a probe client. It talks to LLM HTTP APIs the operator
 already chose. It does not implement custom cryptography. TLS is
-rustls via reqwest. Secrets stay in the environment or in a local
+rustls via wiremux (reqwest). Secrets stay in the environment or in a local
 login store; they are not written to `probes.json`.
 
 | Claim | How we check it |
 |---|---|
-| No custom crypto | rustls + reqwest; no project cipher code |
+| No custom crypto | rustls + wiremux; no project cipher code |
 | Auth failures abort | `ProbeError::Auth` and missing-model abort the suite |
 | Cache is not a secret store | `probes.json` is host-policy JSON, 30-day TTL |
 | Supply chain | cargo-deny, Dependabot, CodeQL, Scorecard, FOSSA |

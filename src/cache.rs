@@ -989,10 +989,9 @@ fn strip_normalized_provider_prefix<'a>(model_id: &'a str, provider: &str) -> Op
         if let Some(rest) = lower_model
             .strip_prefix(&with_slash)
             .and_then(|_| model_id.get(with_slash.len()..))
+            && !rest.is_empty()
         {
-            if !rest.is_empty() {
-                return Some(rest);
-            }
+            return Some(rest);
         }
     }
     None

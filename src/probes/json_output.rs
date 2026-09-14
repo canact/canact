@@ -184,12 +184,12 @@ fn consider_standalone_json(
                 continue;
             }
         }
-        if text[i..].starts_with('{') {
-            if let Some((val, end)) = next_json_object(text, i) {
-                collect_nested_object_scores(&val, best);
-                i = end;
-                continue;
-            }
+        if text[i..].starts_with('{')
+            && let Some((val, end)) = next_json_object(text, i)
+        {
+            collect_nested_object_scores(&val, best);
+            i = end;
+            continue;
         }
         i += text[i..].chars().next().map_or(1, char::len_utf8);
     }
@@ -227,10 +227,10 @@ fn next_quoted_span(text: &str, start: usize) -> Option<(String, usize)> {
 }
 
 fn string_contains_complete_hello(s: &str) -> bool {
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
-        if value_contains_complete_hello(&val) {
-            return true;
-        }
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(s)
+        && value_contains_complete_hello(&val)
+    {
+        return true;
     }
     inner_has_complete_hello(s)
 }
@@ -369,14 +369,14 @@ fn delimited_span_end(text: &str, start: usize, open: char, close: char) -> Opti
 fn inner_has_complete_hello(text: &str) -> bool {
     let mut i = 0;
     while i < text.len() {
-        if text[i..].starts_with('{') {
-            if let Some((val, end)) = next_json_object(text, i) {
-                if value_contains_complete_hello(&val) {
-                    return true;
-                }
-                i = end;
-                continue;
+        if text[i..].starts_with('{')
+            && let Some((val, end)) = next_json_object(text, i)
+        {
+            if value_contains_complete_hello(&val) {
+                return true;
             }
+            i = end;
+            continue;
         }
         i += text[i..].chars().next().map_or(1, char::len_utf8);
     }
@@ -392,10 +392,12 @@ fn json_length_u64(v: &serde_json::Value) -> Option<u64> {
         if let Ok(n) = t.parse::<u64>() {
             return Some(n);
         }
-        if let Ok(n) = t.parse::<f64>() {
-            if n.is_finite() && n >= 0.0 && n.fract() == 0.0 {
-                return Some(n as u64);
-            }
+        if let Ok(n) = t.parse::<f64>()
+            && n.is_finite()
+            && n >= 0.0
+            && n.fract() == 0.0
+        {
+            return Some(n as u64);
         }
         return None;
     }

@@ -685,13 +685,13 @@ impl CapabilityProfile {
             if let Some(max_output) = self.max_output_tokens {
                 obj.insert("maxOutputTokens".to_owned(), serde_json::json!(max_output));
             }
-            if meta.suite.run_diagnostics() {
-                if let Some(placement) = self.constraint_placement() {
-                    obj.insert(
-                        "constraintPlacement".to_owned(),
-                        serde_json::json!(placement),
-                    );
-                }
+            if meta.suite.run_diagnostics()
+                && let Some(placement) = self.constraint_placement()
+            {
+                obj.insert(
+                    "constraintPlacement".to_owned(),
+                    serde_json::json!(placement),
+                );
             }
         }
         value

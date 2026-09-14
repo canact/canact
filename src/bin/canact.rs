@@ -189,36 +189,36 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         }
     };
 
-    if !args.force {
-        if let Some(model) = args.model.as_deref().filter(|s| !s.is_empty()) {
-            if vision_catalog_flag(&args).is_none() && args.advertised_context.is_none() {
-                if let Some((profile, _skip_expensive, advertised)) = cache
-                    .find_profile_unspecified_catalog_suite(model, &provider, suite)
-                    .map(|(p, c, a)| (p.clone(), c, a))
-                {
-                    return emit_profile(
-                        &profile,
-                        args.json,
-                        args.verbose,
-                        HostPolicyMeta::for_suite(true, true, suite, advertised),
-                    );
-                }
-            }
-            if let Some((profile, hit_suite, advertised)) = cached_probe(
-                &cache,
-                model,
-                &provider,
-                suite,
-                vision,
-                args.advertised_context,
-            ) {
-                return emit_profile(
-                    &profile,
-                    args.json,
-                    args.verbose,
-                    HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
-                );
-            }
+    if !args.force
+        && let Some(model) = args.model.as_deref().filter(|s| !s.is_empty())
+    {
+        if vision_catalog_flag(&args).is_none()
+            && args.advertised_context.is_none()
+            && let Some((profile, _skip_expensive, advertised)) = cache
+                .find_profile_unspecified_catalog_suite(model, &provider, suite)
+                .map(|(p, c, a)| (p.clone(), c, a))
+        {
+            return emit_profile(
+                &profile,
+                args.json,
+                args.verbose,
+                HostPolicyMeta::for_suite(true, true, suite, advertised),
+            );
+        }
+        if let Some((profile, hit_suite, advertised)) = cached_probe(
+            &cache,
+            model,
+            &provider,
+            suite,
+            vision,
+            args.advertised_context,
+        ) {
+            return emit_profile(
+                &profile,
+                args.json,
+                args.verbose,
+                HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
+            );
         }
     }
 
@@ -239,17 +239,16 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     .await;
     let advertised = hints.advertised_context_tokens;
     let vision = hints.supports_vision == Some(true);
-    if !args.force {
-        if let Some((profile, hit_suite, advertised)) =
+    if !args.force
+        && let Some((profile, hit_suite, advertised)) =
             cached_probe(&cache, &model, &provider, suite, vision, advertised)
-        {
-            return emit_profile(
-                &profile,
-                args.json,
-                args.verbose,
-                HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
-            );
-        }
+    {
+        return emit_profile(
+            &profile,
+            args.json,
+            args.verbose,
+            HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
+        );
     }
     let catalog = CatalogPriors {
         advertised_context_tokens: advertised,
@@ -463,10 +462,10 @@ async fn resolve_model(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<String, u8> {
-    if let Some(model) = args.model.as_deref() {
-        if !model.is_empty() {
-            return Ok(model.to_owned());
-        }
+    if let Some(model) = args.model.as_deref()
+        && !model.is_empty()
+    {
+        return Ok(model.to_owned());
     }
     match list_model_ids(base_url, api_key).await {
         Ok(ids) if ids.len() == 1 => Ok(ids[0].clone()),
@@ -549,10 +548,10 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
     if raw == "~" {
         return home_dir().unwrap_or(path);
     }
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(rest);
     }
     path
 }

@@ -76,7 +76,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         || lower.contains("bline")
         || lower.contains("\"bl\"")
         || lower.contains("'bl'")
-        || letter_tokens.iter().any(|word| *word == "bl")
+        || letter_tokens.contains(&"bl")
         || letter_tokens.as_slice() == ["b", "l"];
 
     // User-facing details only. Ground-truth text in the probe image stays
@@ -370,10 +370,10 @@ fn cannot_plus_read_verb(lower: &str) -> bool {
 
 fn skip_one_adverb<'a>(s: &'a str, adverbs: &[&str]) -> &'a str {
     for adv in adverbs {
-        if let Some(rest) = s.strip_prefix(adv) {
-            if rest.starts_with(|c: char| c.is_whitespace()) || rest.is_empty() {
-                return rest.trim_start();
-            }
+        if let Some(rest) = s.strip_prefix(adv)
+            && (rest.starts_with(|c: char| c.is_whitespace()) || rest.is_empty())
+        {
+            return rest.trim_start();
         }
     }
     s

@@ -85,10 +85,10 @@ fn parse_named_maximum(err: &str) -> Option<u32> {
     ] {
         if let Some(idx) = lower.find(needle) {
             let rest = &err[idx + needle.len()..];
-            if let Some((n, _)) = take_u32(rest.trim_start()) {
-                if n > 0 {
-                    return Some(n);
-                }
+            if let Some((n, _)) = take_u32(rest.trim_start())
+                && n > 0
+            {
+                return Some(n);
             }
         }
     }

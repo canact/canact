@@ -29,6 +29,6 @@ Do not depend on `bline-llm`, `bline-types`, `bline-probe`, or other
 Do not open pull requests or issues on `blineai/bline`. Bline may
 consume canact; canact never drives Bline.
 
-MSRV 1.85. Edition 2024.
+MSRV 1.95. Edition 2024.
 
 See `CONSTITUTION.md`.

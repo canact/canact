@@ -495,10 +495,10 @@ fn split_path_and_search(header: &str) -> (&str, &str) {
         return ("", header);
     };
     if looks_like_path(first) {
-        if let Some((maybe_dash, after_dash)) = rest.split_once('\n') {
-            if is_dash_separator(maybe_dash) {
-                return (first.trim(), after_dash);
-            }
+        if let Some((maybe_dash, after_dash)) = rest.split_once('\n')
+            && is_dash_separator(maybe_dash)
+        {
+            return (first.trim(), after_dash);
         }
         if is_dash_separator(rest) {
             return (first.trim(), "");

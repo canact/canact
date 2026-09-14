@@ -31,7 +31,7 @@ Library (runtime only, no CLI):
 canact = { version = "0.2", default-features = false, features = ["runtime"] }
 ```
 
-MSRV is Rust 1.85.
+MSRV is Rust 1.95.
 
 ## First probe
 
