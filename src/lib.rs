@@ -34,16 +34,21 @@ mod client;
 mod probes;
 #[cfg(feature = "runtime")]
 mod runner;
+#[cfg(feature = "runtime")]
+mod text;
 
 #[cfg(feature = "runtime")]
 pub use client::{
     CatalogPriors, MockLlm, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage,
     ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall, ProbeUsage,
+    finish_from_reason,
 };
 #[cfg(feature = "runtime")]
 pub use runner::{
     FREE_CONCURRENCY, PAID_CONCURRENCY, ProbeRun, ProbeRunner, is_unreachable_host, resolve_probe,
 };
+#[cfg(feature = "runtime")]
+pub use text::strip_think_blocks;
 
 #[cfg(feature = "runtime")]
 pub use probes::{OVERSIZE_MAX_TOKENS, parse_max_output_cap};

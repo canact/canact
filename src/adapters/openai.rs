@@ -20,6 +20,7 @@ use crate::client::{
 };
 use crate::endpoint::is_anthropic_cloud_host;
 use crate::error::ProbeError;
+use crate::{finish_from_reason, strip_think_blocks};
 
 /// OpenAI-compatible chat client backed by [`WireClient`].
 #[derive(Clone)]
@@ -540,28 +541,6 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
     }
 }
 
-fn strip_think_blocks(input: &str) -> String {
-    const OPEN: &str = "<think>";
-    const CLOSE: &str = "</think>";
-    let lower = input.to_ascii_lowercase();
-    let mut out = String::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        let Some(open_at) = lower.get(i..).and_then(|rest| rest.find(OPEN)) else {
-            out.push_str(&input[i..]);
-            break;
-        };
-        let open_at = i + open_at;
-        out.push_str(&input[i..open_at]);
-        let after_open = open_at + OPEN.len();
-        match lower.get(after_open..).and_then(|rest| rest.find(CLOSE)) {
-            Some(rel) => i = after_open + rel + CLOSE.len(),
-            None => break,
-        }
-    }
-    out
-}
-
 fn push_call(out: &mut Vec<ProbeToolCall>, (id, name, args): (String, String, String)) {
     if name.trim().is_empty() {
         return;
@@ -593,15 +572,6 @@ fn stream_chunk(event: IrStreamEvent) -> Option<ProbeStreamChunk> {
             finish: finish_from_reason(&reason),
         }),
         _ => None,
-    }
-}
-
-fn finish_from_reason(reason: &str) -> ProbeFinish {
-    match reason {
-        "stop" | "end_turn" | "eos" => ProbeFinish::Stop,
-        "tool_calls" | "tool_use" | "function_call" => ProbeFinish::ToolCalls,
-        "length" | "max_tokens" => ProbeFinish::Length,
-        _ => ProbeFinish::Other,
     }
 }
 

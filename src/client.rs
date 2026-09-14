@@ -54,6 +54,30 @@ pub enum ProbeFinish {
     Other,
 }
 
+/// Map a provider `finish_reason` / `stop_reason` string to
+/// [`ProbeFinish`].
+///
+/// Hosts that implement [`ProbeClient`] around their own HTTP client
+/// should run this on `StreamChunk::FinishReason` (or the non-stream
+/// `finish_reason` field). Do not reimplement the table. A Length
+/// cut must stay Transient instead of a cached Weak card.
+///
+/// | Reason | [`ProbeFinish`] |
+/// | --- | --- |
+/// | `stop`, `end_turn`, `eos` | [`ProbeFinish::Stop`] |
+/// | `tool_calls`, `tool_use`, `function_call` | [`ProbeFinish::ToolCalls`] |
+/// | `length`, `max_tokens` | [`ProbeFinish::Length`] |
+/// | anything else | [`ProbeFinish::Other`] |
+#[must_use]
+pub fn finish_from_reason(reason: &str) -> ProbeFinish {
+    match reason {
+        "stop" | "end_turn" | "eos" => ProbeFinish::Stop,
+        "tool_calls" | "tool_use" | "function_call" => ProbeFinish::ToolCalls,
+        "length" | "max_tokens" => ProbeFinish::Length,
+        _ => ProbeFinish::Other,
+    }
+}
+
 /// Streamed token or tool-call fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeStreamChunk {
@@ -274,5 +298,37 @@ impl ProbeClient for MockLlm {
 
     fn catalog(&self) -> CatalogPriors {
         self.catalog.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProbeFinish, finish_from_reason};
+
+    #[test]
+    fn finish_from_reason_stop_family() {
+        assert_eq!(finish_from_reason("stop"), ProbeFinish::Stop);
+        assert_eq!(finish_from_reason("end_turn"), ProbeFinish::Stop);
+        assert_eq!(finish_from_reason("eos"), ProbeFinish::Stop);
+    }
+
+    #[test]
+    fn finish_from_reason_tool_family() {
+        assert_eq!(finish_from_reason("tool_calls"), ProbeFinish::ToolCalls);
+        assert_eq!(finish_from_reason("tool_use"), ProbeFinish::ToolCalls);
+        assert_eq!(finish_from_reason("function_call"), ProbeFinish::ToolCalls);
+    }
+
+    #[test]
+    fn finish_from_reason_length_family() {
+        assert_eq!(finish_from_reason("length"), ProbeFinish::Length);
+        assert_eq!(finish_from_reason("max_tokens"), ProbeFinish::Length);
+    }
+
+    #[test]
+    fn finish_from_reason_other_is_exact() {
+        assert_eq!(finish_from_reason("other"), ProbeFinish::Other);
+        assert_eq!(finish_from_reason("STOP"), ProbeFinish::Other);
+        assert_eq!(finish_from_reason(""), ProbeFinish::Other);
     }
 }
