@@ -164,10 +164,14 @@ fn main() -> ExitCode {
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let provider_hint = args.provider.clone().unwrap_or_default();
-    let first = resolve_api_key(args.api_key.clone(), &provider_hint);
+    let first = resolve_api_key(
+        args.api_key.clone(),
+        &provider_hint,
+        args.base_url.is_some(),
+    );
     let (route, base_url, provider) =
         finalize_key_route(&provider_hint, args.base_url.clone(), first, |provider| {
-            resolve_api_key(args.api_key.clone(), provider)
+            resolve_api_key(args.api_key.clone(), provider, false)
         });
     let api_key = route.key.clone();
     let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
@@ -444,7 +448,11 @@ fn emit_envelope(
     }
 }
 
-fn resolve_api_key(cli: Option<String>, provider: &str) -> canact::KeyRoute {
+fn resolve_api_key(
+    cli: Option<String>,
+    provider: &str,
+    explicit_base_url: bool,
+) -> canact::KeyRoute {
     let openai = std::env::var("OPENAI_API_KEY")
         .ok()
         .filter(|s| !s.is_empty());
@@ -465,7 +473,7 @@ fn resolve_api_key(cli: Option<String>, provider: &str) -> canact::KeyRoute {
                 .filter(|s| !s.is_empty())
         })
         .or_else(|| {
-            if should_load_claude_code_login(provider, other_cloud_keys) {
+            if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) {
                 claude_code_access_token()
             } else {
                 None
