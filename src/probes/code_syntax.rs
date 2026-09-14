@@ -185,25 +185,25 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
         // Type-hint colons sit inside the parameter list. The def colon
         // is the first `:` after balanced parens (and optional `-> type`),
         // including when params wrap across lines.
-        if let Some(colon_abs) = signature_colon_offset(after) {
-            if looks_like_parameter_list(&after[..colon_abs]) {
-                let rest = &after[colon_abs + 1..];
-                if rest.lines().next().is_some_and(looks_like_same_line_body) {
+        if let Some(colon_abs) = signature_colon_offset(after)
+            && looks_like_parameter_list(&after[..colon_abs])
+        {
+            let rest = &after[colon_abs + 1..];
+            if rest.lines().next().is_some_and(looks_like_same_line_body) {
+                return true;
+            }
+            for line in rest.lines().skip(1) {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if !(line.starts_with(' ') || line.starts_with('\t')) {
+                    return false;
+                }
+                if looks_like_same_line_body(line) {
                     return true;
                 }
-                for line in rest.lines().skip(1) {
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    if !(line.starts_with(' ') || line.starts_with('\t')) {
-                        return false;
-                    }
-                    if looks_like_same_line_body(line) {
-                        return true;
-                    }
-                    // English return phrases, lecture lines, comments, and
-                    // docstrings are not a body. Keep looking for a statement.
-                }
+                // English return phrases, lecture lines, comments, and
+                // docstrings are not a body. Keep looking for a statement.
             }
         }
         search = idx + needle.len();
@@ -404,23 +404,23 @@ fn merge_sorted_body_has_return(text: &str) -> bool {
     while let Some(rel) = text.get(search..).and_then(|s| s.find(needle)) {
         let idx = search + rel;
         let after = &text[idx + needle.len()..];
-        if let Some(colon_abs) = signature_colon_offset(after) {
-            if looks_like_parameter_list(&after[..colon_abs]) {
-                let rest = &after[colon_abs + 1..];
-                if rest.lines().next().is_some_and(line_has_return_token) {
-                    return true;
+        if let Some(colon_abs) = signature_colon_offset(after)
+            && looks_like_parameter_list(&after[..colon_abs])
+        {
+            let rest = &after[colon_abs + 1..];
+            if rest.lines().next().is_some_and(line_has_return_token) {
+                return true;
+            }
+            for line in rest.lines().skip(1) {
+                if line.trim().is_empty() {
+                    continue;
                 }
-                for line in rest.lines().skip(1) {
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    // Next top-level def or any column-0 line ends the body.
-                    if !(line.starts_with(' ') || line.starts_with('\t')) {
-                        break;
-                    }
-                    if line_has_return_token(line) {
-                        return true;
-                    }
+                // Next top-level def or any column-0 line ends the body.
+                if !(line.starts_with(' ') || line.starts_with('\t')) {
+                    break;
+                }
+                if line_has_return_token(line) {
+                    return true;
                 }
             }
         }

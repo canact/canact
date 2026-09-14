@@ -1,36 +1,31 @@
-//! Slim OpenAI-compatible HTTP + SSE adapter.
+//! Probe adapter over `wiremux` `WireClient`.
 //!
-//! Do not copy `bline-llm`. Never log `Authorization`.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.2.1.
+//! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
+//! [`ProbeError`]. Never log `Authorization`.
 
-use std::collections::HashMap;
-use std::time::Duration;
+#[cfg(test)]
+use std::cell::{Cell, RefCell};
 
 use futures::Stream;
-use futures::channel::mpsc::UnboundedSender;
-use reqwest::header::{HeaderMap, RETRY_AFTER};
-use serde_json::{Map, Value};
+use futures::StreamExt;
+use serde_json::Value;
+use wiremux::ir::{IrItem, IrPart, IrRequest, IrSampling, IrStreamEvent, IrTool};
+use wiremux::{ClientError, ListedModel as WireListed, WireClient};
+use wiremux_auth::{AnyTokenProvider, LoadOptions, StaticToken, parse_profile_str};
 
 use crate::client::{
-    CatalogPriors, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage,
-    ProbeRequest, ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeTool, ProbeToolCall, ProbeUsage,
+    CatalogPriors, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeRequest,
+    ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeToolCall, ProbeUsage,
 };
-use crate::endpoint::{is_anthropic_cloud_host, is_ollama_compat_base};
+use crate::endpoint::is_anthropic_cloud_host;
 use crate::error::ProbeError;
 
-const ANTHROPIC_VERSION: &str = "2023-06-01";
-const ANTHROPIC_OAUTH_BETA: &str = "oauth-2025-04-20";
-
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
-
-/// OpenAI-compatible chat completions client (Ollama / vLLM / LM Studio / cloud).
+/// OpenAI-compatible chat client backed by [`WireClient`].
 #[derive(Clone)]
 pub struct OpenAiCompatClient {
-    http: reqwest::Client,
+    wire: WireClient,
     base_url: String,
-    api_key: Option<String>,
     model_id: String,
     provider: String,
     catalog: CatalogPriors,
@@ -42,13 +37,12 @@ impl std::fmt::Debug for OpenAiCompatClient {
             .field("base_url", &self.base_url)
             .field("model_id", &self.model_id)
             .field("provider", &self.provider)
-            .field("has_api_key", &self.api_key.is_some())
             .finish()
     }
 }
 
 impl OpenAiCompatClient {
-    /// Build a client for `{base}/chat/completions` and `{base}/models`.
+    /// Bind a wiremux client to `{base}` (OpenAI-compat `/v1` or a mock).
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
@@ -56,79 +50,17 @@ impl OpenAiCompatClient {
         provider: impl Into<String>,
         catalog: CatalogPriors,
     ) -> Result<Self, ProbeError> {
+        let base_url = trim_slash(base_url.into());
+        let model_id = model_id.into();
+        let provider = provider.into();
+        let wire = wire_client_for(&base_url, api_key.as_deref(), &provider)?;
         Ok(Self {
-            http: default_http_client()?,
-            base_url: trim_slash(base_url.into()),
-            api_key,
-            model_id: model_id.into(),
-            provider: provider.into(),
+            wire,
+            base_url,
+            model_id,
+            provider,
             catalog,
         })
-    }
-
-    fn endpoint(&self, suffix: &str) -> String {
-        join_url(&self.base_url, suffix)
-    }
-
-    fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        apply_cloud_auth(builder, self.api_key.as_deref(), &self.base_url)
-    }
-
-    async fn stream_into(
-        &self,
-        req: ProbeRequest,
-        tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
-    ) -> Result<(), ProbeError> {
-        let url = self.endpoint("chat/completions");
-        let body = chat_body(&req, true);
-        let resp = self
-            .apply_auth(
-                self.http
-                    .post(url)
-                    .header(reqwest::header::ACCEPT, "text/event-stream")
-                    .json(&body),
-            )
-            .send()
-            .await
-            .map_err(map_transport)?;
-        let resp = ensure_success(resp).await?;
-
-        use futures::StreamExt;
-        let mut bytes = resp.bytes_stream();
-        let mut buf: Vec<u8> = Vec::new();
-        let mut received = 0usize;
-        let mut open_tools: HashMap<u64, OpenTool> = HashMap::new();
-        let mut think = ThinkFilter::default();
-        while let Some(item) = bytes.next().await {
-            let chunk = item.map_err(map_transport)?;
-            accumulate_stream_bytes(&mut received, chunk.len())?;
-            buf.extend_from_slice(&chunk);
-            for line in drain_complete_sse_lines(&mut buf) {
-                if let Err(err) = emit_sse_line(&line, &mut open_tools, tx, &mut think) {
-                    let _ = tx.unbounded_send(Err(err));
-                    return Ok(());
-                }
-            }
-        }
-        if !buf.is_empty() {
-            let line = take_sse_tail(&buf);
-            if sse_tail_is_truncated(&line) {
-                let _ = tx.unbounded_send(Err(ProbeError::Transient(
-                    "truncated stream: incomplete SSE tail".into(),
-                )));
-                return Ok(());
-            }
-            if let Err(err) = emit_sse_line(&line, &mut open_tools, tx, &mut think) {
-                let _ = tx.unbounded_send(Err(err));
-                return Ok(());
-            }
-        }
-        let leftover = think.flush();
-        if !leftover.is_empty() {
-            let _ = tx.unbounded_send(Ok(ProbeStreamChunk::TextDelta { text: leftover }));
-        }
-        end_open_tools(&mut open_tools, tx);
-        Ok(())
     }
 }
 
@@ -139,20 +71,12 @@ impl ProbeClient for OpenAiCompatClient {
     ) -> impl std::future::Future<Output = Result<ProbeResponse, ProbeError>> + Send {
         let this = self.clone();
         async move {
-            let url = this.endpoint("chat/completions");
-            let body = chat_body(&req, false);
-            let resp = this
-                .apply_auth(this.http.post(url).json(&body))
-                .send()
+            let (events, _loss) = this
+                .wire
+                .send(ir_request(&req))
                 .await
-                .map_err(map_transport)?;
-            let resp = ensure_success(resp).await?;
-            let raw = read_success_body(resp).await?;
-            let value: Value = serde_json::from_slice(&raw)?;
-            if let Some(err) = value.get("error") {
-                return Err(classify_provider_error(err));
-            }
-            parse_chat_response(&value)
+                .map_err(map_client_error)?;
+            Ok(fold_events(events))
         }
     }
 
@@ -160,14 +84,14 @@ impl ProbeClient for OpenAiCompatClient {
         &self,
         req: ProbeRequest,
     ) -> impl Stream<Item = Result<ProbeStreamChunk, ProbeError>> + Send {
-        let (tx, rx) = futures::channel::mpsc::unbounded();
-        let this = self.clone();
-        tokio::spawn(async move {
-            if let Err(err) = this.stream_into(req, &tx).await {
-                let _ = tx.unbounded_send(Err(err));
-            }
-        });
-        rx
+        self.wire
+            .stream(ir_request(&req))
+            .filter_map(|item| async move {
+                match item {
+                    Ok(event) => stream_chunk(event).map(Ok),
+                    Err(err) => Some(Err(map_client_error(err))),
+                }
+            })
     }
 
     fn model_id(&self) -> &str {
@@ -204,9 +128,6 @@ pub struct HostCatalogHints {
 }
 
 /// Catalog window from a `/models` object.
-///
-/// OpenAI-compat, OpenRouter, and xAI send `context_length`.
-/// Anthropic sends `max_input_tokens`. Zero is ignored.
 pub fn advertised_context_from_model_object(model: &Value) -> Option<u32> {
     json_positive_u32(model.get("context_length"))
         .or_else(|| json_positive_u32(model.get("max_input_tokens")))
@@ -214,59 +135,47 @@ pub fn advertised_context_from_model_object(model: &Value) -> Option<u32> {
 
 /// `Some(true)` when `/models` lists image input. Never `Some(false)`.
 pub fn vision_from_model_object(model: &Value) -> Option<bool> {
-    if let Some(arr) = model
+    let modalities = model
         .pointer("/architecture/input_modalities")
-        .and_then(Value::as_array)
-    {
-        if arr.iter().any(|item| item.as_str() == Some("image")) {
-            return Some(true);
-        }
-    }
-    if model
-        .pointer("/capabilities/image_input/supported")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return Some(true);
-    }
-    if let Some(arr) = model.get("capabilities").and_then(Value::as_array) {
-        if arr.iter().any(|item| item.as_str() == Some("vision")) {
-            return Some(true);
-        }
-    }
-    None
+        .and_then(Value::as_array)?;
+    modalities
+        .iter()
+        .any(|m| {
+            matches!(
+                m.as_str().map(str::to_ascii_lowercase).as_deref(),
+                Some("image" | "vision")
+            )
+        })
+        .then_some(true)
 }
 
-/// Catalog window from Ollama `POST /api/show` `model_info`.
+/// Catalog window from Ollama `/api/show`.
 pub fn advertised_context_from_ollama_show(show: &Value) -> Option<u32> {
-    let info = show.get("model_info")?.as_object()?;
-    let mut best: Option<u32> = None;
-    for (key, value) in info {
-        if key == "context_length" || key.ends_with(".context_length") {
-            if let Some(n) = json_positive_u32(Some(value)) {
-                best = Some(best.map_or(n, |cur| cur.max(n)));
-            }
-        }
-    }
-    best
+    json_positive_u32(show.get("context_length")).or_else(|| {
+        let info = show.get("model_info")?.as_object()?;
+        info.iter().find_map(|(key, val)| {
+            key.ends_with("context_length")
+                .then(|| json_positive_u32(Some(val)))
+                .flatten()
+        })
+    })
 }
 
-/// `Some(true)` when Ollama lists a `vision` capability.
+/// Vision prior from Ollama `/api/show`.
 pub fn vision_from_ollama_show(show: &Value) -> Option<bool> {
-    let caps = show.get("capabilities")?.as_array()?;
-    if caps.iter().any(|item| item.as_str() == Some("vision")) {
-        Some(true)
-    } else {
-        None
-    }
-}
-
-/// Caller `--vision` / `--no-vision` wins. Catalog only promotes `true`.
-pub fn merge_vision_catalog(flag: Option<bool>, catalog: Option<bool>) -> Option<bool> {
-    if flag.is_some() {
-        return flag;
-    }
-    catalog.filter(|yes| *yes)
+    show.pointer("/details/families")
+        .and_then(Value::as_array)
+        .and_then(|families| {
+            families
+                .iter()
+                .any(|f| {
+                    matches!(
+                        f.as_str().map(str::to_ascii_lowercase).as_deref(),
+                        Some(name) if name.contains("vision") || name.contains("clip")
+                    )
+                })
+                .then_some(true)
+        })
 }
 
 /// Match a listed row to the probe model id.
@@ -282,20 +191,9 @@ pub async fn list_models(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<ListedModel>, ProbeError> {
-    let http = default_http_client()?;
-    let url = join_url(&trim_slash(base_url.to_owned()), "models");
-    let builder = apply_cloud_auth(http.get(url), api_key, base_url);
-    let resp = builder.send().await.map_err(map_transport)?;
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(Vec::new());
-    }
-    let resp = ensure_success(resp).await?;
-    let raw = read_success_body(resp).await?;
-    let value: Value = serde_json::from_slice(&raw)?;
-    if let Some(err) = value.get("error") {
-        return Err(classify_provider_error(err));
-    }
-    Ok(parse_listed_models(&value))
+    let client = wire_client_for(base_url, api_key, "openai-compat")?;
+    let models = client.list_models().await.map_err(map_client_error)?;
+    Ok(models.into_iter().map(from_wire_listed).collect())
 }
 
 /// `GET {base}/models` ids only.
@@ -328,102 +226,40 @@ pub async fn lookup_host_catalog(
     api_key: Option<&str>,
     model_id: &str,
 ) -> Result<HostCatalogHints, ProbeError> {
-    lookup_host_catalog_inner(base_url, api_key, model_id, is_ollama_compat_base(base_url)).await
-}
-
-async fn lookup_host_catalog_inner(
-    base_url: &str,
-    api_key: Option<&str>,
-    model_id: &str,
-    fetch_show: bool,
-) -> Result<HostCatalogHints, ProbeError> {
     let models = list_models(base_url, api_key).await?;
     let listed = models.iter().find(|model| model.id == model_id);
-    let mut advertised = listed.and_then(|model| model.advertised_context_tokens);
-    let mut vision = listed.and_then(|model| model.supports_vision);
-    if (advertised.is_none() || vision.is_none()) && fetch_show {
-        if let Ok(show) = fetch_ollama_show(base_url, model_id).await {
-            if advertised.is_none() {
-                advertised = advertised_context_from_ollama_show(&show);
-            }
-            if vision.is_none() {
-                vision = vision_from_ollama_show(&show);
-            }
-        }
-    }
     Ok(HostCatalogHints {
-        advertised_context_tokens: advertised,
-        supports_vision: vision,
+        advertised_context_tokens: listed.and_then(|model| model.advertised_context_tokens),
+        supports_vision: listed.and_then(|model| model.supports_vision),
     })
 }
 
-/// Caller flag wins. Catalog `Err` or a missing row stays `None`.
+/// Merge a CLI `--advertised-context` flag over a catalog lookup.
 pub fn merge_advertised_context(
-    flag: Option<u32>,
+    advertised_flag: Option<u32>,
     catalog: Result<Option<u32>, ProbeError>,
 ) -> Option<u32> {
-    if flag.is_some() {
-        return flag;
-    }
-    catalog.ok().flatten()
+    advertised_flag.or_else(|| catalog.ok().flatten())
 }
 
-/// Fill advertised context from `/models` when the caller omitted it.
+/// CLI vision flag wins over a catalog prior.
+pub fn merge_vision_catalog(vision_flag: Option<bool>, catalog: Option<bool>) -> Option<bool> {
+    vision_flag.or(catalog)
+}
+
+/// Resolve advertised context: flag, else catalog, else none.
 pub async fn resolve_advertised_context(
-    flag: Option<u32>,
+    advertised_flag: Option<u32>,
     base_url: &str,
     api_key: Option<&str>,
     model_id: &str,
 ) -> Option<u32> {
-    if flag.is_some() {
-        return flag;
-    }
-    merge_advertised_context(
-        flag,
-        lookup_advertised_context(base_url, api_key, model_id).await,
-    )
+    resolve_host_catalog(advertised_flag, None, base_url, api_key, model_id)
+        .await
+        .advertised_context_tokens
 }
 
-#[cfg(test)]
-thread_local! {
-    static CATALOG_LOOKUPS: std::cell::RefCell<Vec<String>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-    static CATALOG_SKIP_HTTP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-pub(crate) fn take_catalog_lookups() -> Vec<String> {
-    CATALOG_LOOKUPS.with(|lookups| lookups.replace(Vec::new()))
-}
-
-#[cfg(test)]
-pub(crate) fn set_catalog_skip_http(skip: bool) {
-    CATALOG_SKIP_HTTP.with(|flag| flag.set(skip));
-}
-
-#[cfg(test)]
-pub(crate) struct CatalogSkipHttp;
-
-#[cfg(test)]
-impl CatalogSkipHttp {
-    pub(crate) fn enable() -> Self {
-        set_catalog_skip_http(true);
-        let _ = take_catalog_lookups();
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for CatalogSkipHttp {
-    fn drop(&mut self) {
-        set_catalog_skip_http(false);
-        let _ = take_catalog_lookups();
-    }
-}
-
-/// Fill advertised context and vision from the host catalog when flags
-/// are unset. Catalog errors stay `None`; `--advertised-context` and
-/// `--vision` / `--no-vision` win.
+/// Resolve catalog hints. Flags win. Catalog errors stay `None`.
 pub async fn resolve_host_catalog(
     advertised_flag: Option<u32>,
     vision_flag: Option<bool>,
@@ -459,264 +295,310 @@ pub async fn resolve_host_catalog(
     }
 }
 
-fn parse_listed_models(value: &Value) -> Vec<ListedModel> {
-    value
-        .get("data")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|model| {
-                    let id = model.get("id").and_then(Value::as_str)?.to_owned();
-                    if id.is_empty() {
-                        return None;
-                    }
-                    Some(ListedModel {
-                        id,
-                        advertised_context_tokens: advertised_context_from_model_object(model),
-                        supports_vision: vision_from_model_object(model),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+#[cfg(test)]
+thread_local! {
+    static CATALOG_SKIP_HTTP: Cell<bool> = const { Cell::new(false) };
+    static CATALOG_LOOKUPS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-async fn fetch_ollama_show(openai_base: &str, model_id: &str) -> Result<Value, ProbeError> {
-    let root = trim_slash(openai_base.to_owned());
-    let root = root.strip_suffix("/v1").unwrap_or(&root);
-    let url = join_url(&trim_slash(root.to_owned()), "api/show");
-    let http = default_http_client()?;
-    let resp = http
-        .post(url)
-        .json(&serde_json::json!({ "name": model_id }))
-        .send()
-        .await
-        .map_err(map_transport)?;
-    let resp = ensure_success(resp).await?;
-    let raw = read_success_body(resp).await?;
-    Ok(serde_json::from_slice(&raw)?)
+/// Test hook: skip catalog HTTP and record attempted bases.
+#[cfg(test)]
+pub(crate) struct CatalogSkipHttp;
+
+#[cfg(test)]
+impl CatalogSkipHttp {
+    pub(crate) fn enable() -> Self {
+        CATALOG_SKIP_HTTP.with(|flag| flag.set(true));
+        CATALOG_LOOKUPS.with(|lookups| lookups.borrow_mut().clear());
+        Self
+    }
 }
 
-fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
-    let n = match value? {
-        Value::Number(num) => num.as_u64().or_else(|| {
-            num.as_f64()
-                .filter(|f| f.is_finite() && *f > 0.0)
-                .map(|f| f as u64)
-        })?,
-        Value::String(s) => s.parse().ok()?,
-        _ => return None,
+#[cfg(test)]
+impl Drop for CatalogSkipHttp {
+    fn drop(&mut self) {
+        CATALOG_SKIP_HTTP.with(|flag| flag.set(false));
+    }
+}
+
+/// Bases `resolve_host_catalog` would have called (tests).
+#[cfg(test)]
+pub(crate) fn take_catalog_lookups() -> Vec<String> {
+    CATALOG_LOOKUPS.with(|lookups| lookups.replace(Vec::new()))
+}
+
+fn wire_client_for(
+    base_url: &str,
+    api_key: Option<&str>,
+    provider: &str,
+) -> Result<WireClient, ProbeError> {
+    if is_anthropic_cloud_host(base_url) {
+        return anthropic_client(api_key);
+    }
+    let (origin, chat_path) = split_compat_base(base_url);
+    let scheme = if api_key.is_some_and(|k| !k.trim().is_empty()) {
+        "bearer"
+    } else {
+        "none"
     };
-    u32::try_from(n).ok().filter(|n| *n > 0)
+    let toml = format!(
+        "schema_version = 1\nid = \"canact-compat\"\nwire = \"chat-completions\"\nbase_url = \"{}\"\nchat_path = \"{chat_path}\"\nauth_scheme = \"{scheme}\"\n",
+        escape_toml_basic(&origin),
+    );
+    let profile = parse_profile_str(&toml).map_err(|err| ProbeError::Internal(err.to_string()))?;
+    let token = StaticToken::new(api_key.unwrap_or(""));
+    let _ = provider;
+    WireClient::from_resolved(profile, AnyTokenProvider::Static(token)).map_err(map_client_error)
 }
 
-fn default_http_client() -> Result<reqwest::Client, ProbeError> {
-    reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .build()
-        .map_err(|e| ProbeError::Internal(e.to_string()))
+fn anthropic_client(api_key: Option<&str>) -> Result<WireClient, ProbeError> {
+    let opts = LoadOptions {
+        include_user_config: true,
+        include_shipped: true,
+        ..LoadOptions::default()
+    };
+    let oat = api_key.is_some_and(|k| k.starts_with("sk-ant-oat"));
+    let id = if oat { "anthropic-oauth" } else { "anthropic" };
+    let profile =
+        wiremux::load_profile(id, &opts).map_err(|err| ProbeError::Internal(err.to_string()))?;
+    let provider = match api_key {
+        Some(key) if !key.trim().is_empty() => AnyTokenProvider::Static(StaticToken::new(key)),
+        _ => wiremux_auth::provider_for_profile_opts(id, &opts)
+            .map_err(|err| ProbeError::Auth(err.to_string()))?,
+    };
+    WireClient::from_resolved(profile, provider).map_err(map_client_error)
+}
+
+fn split_compat_base(base_url: &str) -> (String, &'static str) {
+    let trimmed = trim_slash(base_url.to_owned());
+    if let Some(root) = trimmed.strip_suffix("/v1") {
+        (root.to_owned(), "/v1/chat/completions")
+    } else {
+        (trimmed, "/chat/completions")
+    }
+}
+
+fn escape_toml_basic(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn trim_slash(url: String) -> String {
     url.trim_end_matches('/').to_owned()
 }
 
-fn join_url(base: &str, suffix: &str) -> String {
-    format!(
-        "{}/{}",
-        base.trim_end_matches('/'),
-        suffix.trim_start_matches('/')
-    )
-}
-
-fn map_transport(err: reqwest::Error) -> ProbeError {
-    let msg = redact_secrets(&err.to_string());
-    if err.is_connect() {
-        ProbeError::Transient(format!("failed to connect: {msg}"))
-    } else {
-        ProbeError::Transient(msg)
+fn from_wire_listed(model: WireListed) -> ListedModel {
+    ListedModel {
+        id: model.id,
+        advertised_context_tokens: model.context_tokens,
+        supports_vision: model.vision,
     }
 }
 
-async fn ensure_success(resp: reqwest::Response) -> Result<reqwest::Response, ProbeError> {
-    let status = resp.status();
-    if status.is_success() {
-        return Ok(resp);
-    }
-    let retry_after = parse_retry_after(resp.headers());
-    let code = status.as_u16();
-    let body = read_capped_text(resp, MAX_ERROR_BODY_BYTES).await;
-    Err(map_status(code, retry_after, &body))
-}
-
-fn push_response_chunk(buf: &mut Vec<u8>, chunk: &[u8], max: usize) -> Result<(), ProbeError> {
-    if buf.len().saturating_add(chunk.len()) > max {
-        return Err(ProbeError::Transient("response too large".into()));
-    }
-    buf.extend_from_slice(chunk);
-    Ok(())
-}
-
-async fn read_success_body(resp: reqwest::Response) -> Result<Vec<u8>, ProbeError> {
-    use futures::StreamExt;
-    if resp
-        .content_length()
-        .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err(ProbeError::Transient("response too large".into()));
-    }
-    let mut buf = Vec::new();
-    let mut bytes = resp.bytes_stream();
-    while let Some(item) = bytes.next().await {
-        let chunk = item.map_err(map_transport)?;
-        push_response_chunk(&mut buf, &chunk, MAX_RESPONSE_BYTES)?;
-    }
-    Ok(buf)
-}
-
-async fn read_capped_text(resp: reqwest::Response, max: usize) -> String {
-    use futures::StreamExt;
-    let mut buf = Vec::new();
-    let mut bytes = resp.bytes_stream();
-    while let Some(item) = bytes.next().await {
-        let Ok(chunk) = item else {
-            break;
-        };
-        let room = max.saturating_sub(buf.len());
-        if room == 0 {
-            break;
-        }
-        if chunk.len() > room {
-            buf.extend_from_slice(&chunk[..room]);
-            break;
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    String::from_utf8_lossy(&buf).into_owned()
-}
-
-fn apply_cloud_auth(
-    mut builder: reqwest::RequestBuilder,
-    api_key: Option<&str>,
-    base_url: &str,
-) -> reqwest::RequestBuilder {
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            builder = builder.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}"));
+fn ir_request(req: &ProbeRequest) -> IrRequest {
+    let mut items = Vec::new();
+    for msg in &req.messages {
+        match msg.role {
+            ProbeRole::System => items.push(IrItem::System {
+                text: content_text(&msg.content),
+            }),
+            ProbeRole::User => items.push(IrItem::User {
+                parts: content_parts(&msg.content),
+            }),
+            ProbeRole::Assistant => {
+                if let Some(calls) = &msg.tool_calls {
+                    for call in calls {
+                        items.push(IrItem::FunctionCall {
+                            call_id: call.id.clone(),
+                            name: call.name.clone(),
+                            arguments: serde_json::to_string(&call.arguments)
+                                .unwrap_or_else(|_| "{}".into()),
+                            thought_signature: None,
+                        });
+                    }
+                }
+                let parts = content_parts(&msg.content);
+                if !parts.is_empty() {
+                    items.push(IrItem::Assistant { parts });
+                }
+            }
+            ProbeRole::Tool => items.push(IrItem::FunctionOutput {
+                call_id: msg.tool_call_id.clone().unwrap_or_default(),
+                output: content_text(&msg.content),
+            }),
         }
     }
-    if is_anthropic_cloud_host(base_url) {
-        builder = builder
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("anthropic-beta", ANTHROPIC_OAUTH_BETA);
+    IrRequest {
+        model: req.model.clone(),
+        items,
+        tools: req
+            .tools
+            .iter()
+            .map(|tool| IrTool::Function {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.parameters.clone(),
+            })
+            .collect(),
+        sampling: IrSampling {
+            temperature: req.temperature,
+            max_tokens: req.max_tokens,
+            ..IrSampling::default()
+        },
     }
-    builder
 }
 
-fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
-    headers
-        .get(RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse().ok())
+fn content_text(content: &ProbeContent) -> String {
+    match content {
+        ProbeContent::Text(text) => text.clone(),
+        ProbeContent::Parts(parts) => parts
+            .iter()
+            .filter_map(|part| match part {
+                ProbeContentPart::Text { text } => Some(text.as_str()),
+                ProbeContentPart::ImageBase64 { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+    }
 }
 
-fn map_status(code: u16, retry_after: Option<u64>, body: &str) -> ProbeError {
-    match code {
-        401 => ProbeError::Auth(body_or_status(code, body)),
-        400 | 403 if body_looks_like_auth(body) => ProbeError::Auth(body_or_status(code, body)),
-        404 => ProbeError::NotFound(body_or_status(code, body)),
-        429 => ProbeError::RateLimit { retry_after },
-        408 | 500..=599 => ProbeError::Transient(body_or_status(code, body)),
-        _ if body_looks_like_missing_model(body) => {
-            ProbeError::NotFound(body_or_status(code, body))
+fn content_parts(content: &ProbeContent) -> Vec<IrPart> {
+    match content {
+        ProbeContent::Text(text) if text.is_empty() => Vec::new(),
+        ProbeContent::Text(text) => vec![IrPart::Text(text.clone())],
+        ProbeContent::Parts(parts) => parts
+            .iter()
+            .map(|part| match part {
+                ProbeContentPart::Text { text } => IrPart::Text(text.clone()),
+                ProbeContentPart::ImageBase64 { media_type, data } => IrPart::ImageBase64 {
+                    media_type: media_type.clone(),
+                    data: data.clone(),
+                },
+            })
+            .collect(),
+    }
+}
+
+fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
+    let mut text = String::new();
+    let mut tool_calls = Vec::new();
+    let mut current: Option<(String, String, String)> = None;
+    let mut finish = ProbeFinish::Stop;
+    let mut usage = None;
+    for event in events {
+        match event {
+            IrStreamEvent::TextDelta { text: delta } => text.push_str(&delta),
+            IrStreamEvent::ToolCallStart { id, name, .. } => {
+                if let Some(call) = current.take() {
+                    push_call(&mut tool_calls, call);
+                }
+                current = Some((id, name, String::new()));
+            }
+            IrStreamEvent::ToolCallArgDelta { delta } => {
+                if let Some((_, _, args)) = &mut current {
+                    args.push_str(&delta);
+                }
+            }
+            IrStreamEvent::ToolCallEnd => {
+                if let Some(call) = current.take() {
+                    push_call(&mut tool_calls, call);
+                }
+            }
+            IrStreamEvent::FinishReason { reason } => {
+                finish = finish_from_reason(&reason);
+            }
+            IrStreamEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+                reasoning_tokens,
+                ..
+            } => {
+                usage = Some(ProbeUsage {
+                    prompt_tokens: Some(prompt_tokens),
+                    completion_tokens: Some(completion_tokens),
+                    reasoning_tokens: Some(reasoning_tokens),
+                });
+            }
+            IrStreamEvent::ReasoningDelta { .. }
+            | IrStreamEvent::ReasoningSignature { .. }
+            | IrStreamEvent::Protocol { .. }
+            | IrStreamEvent::Unknown { .. }
+            | IrStreamEvent::Done => {}
         }
-        403 => ProbeError::Llm(body_or_status(code, body)),
-        _ => ProbeError::Llm(body_or_status(code, body)),
+    }
+    if let Some(call) = current {
+        push_call(&mut tool_calls, call);
+    }
+    if !tool_calls.is_empty() && matches!(finish, ProbeFinish::Stop) {
+        finish = ProbeFinish::ToolCalls;
+    }
+    ProbeResponse {
+        text,
+        tool_calls,
+        finish,
+        usage,
     }
 }
 
-fn body_looks_like_auth(body: &str) -> bool {
-    let b = body.to_ascii_lowercase();
-    b.contains("api key")
-        || b.contains("api_key")
-        || b.contains("unauthorized")
-        || b.contains("unauthenticated")
-        || b.contains("no credentials")
-        || b.contains("no-credentials")
-        || b.contains("invalid key")
-        || b.contains("incorrect api")
+fn push_call(out: &mut Vec<ProbeToolCall>, (id, name, args): (String, String, String)) {
+    if name.trim().is_empty() {
+        return;
+    }
+    let arguments = serde_json::from_str(&args)
+        .ok()
+        .and_then(|value: Value| value.as_object().cloned())
+        .unwrap_or_default();
+    out.push(ProbeToolCall {
+        id,
+        name,
+        arguments,
+    });
 }
 
-fn body_or_status(code: u16, body: &str) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        format!("HTTP {code}")
-    } else {
-        redact_secrets(trimmed)
-    }
-}
-
-fn error_message(err: &Value) -> String {
-    let raw = err
-        .get("message")
-        .and_then(|m| m.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| err.to_string());
-    redact_secrets(&raw)
-}
-
-/// OpenRouter (and some proxies) return HTTP 200 with `error` instead of 5xx.
-fn classify_provider_error(err: &Value) -> ProbeError {
-    let msg = error_message(err);
-    if body_looks_like_missing_model(&msg) || error_type_is_not_found(err) {
-        return ProbeError::NotFound(msg);
-    }
-    if let Some(code) = provider_error_status(err) {
-        return map_status(code, None, &msg);
-    }
-    if body_looks_like_upstream_overload(&msg) {
-        return ProbeError::Transient(msg);
-    }
-    ProbeError::Llm(msg)
-}
-
-fn error_type_is_not_found(err: &Value) -> bool {
-    match err.get("type").and_then(Value::as_str) {
-        Some(t) => {
-            let t = t.to_ascii_lowercase();
-            t == "not_found_error" || t == "not_found" || t.contains("model_not_found")
+fn stream_chunk(event: IrStreamEvent) -> Option<ProbeStreamChunk> {
+    match event {
+        IrStreamEvent::TextDelta { text } if !text.is_empty() => {
+            Some(ProbeStreamChunk::TextDelta { text })
         }
-        None => err
-            .get("code")
-            .and_then(Value::as_str)
-            .is_some_and(|c| c.eq_ignore_ascii_case("model_not_found")),
-    }
-}
-
-fn body_looks_like_missing_model(body: &str) -> bool {
-    let b = body.to_ascii_lowercase();
-    (b.contains("model") && b.contains("not found"))
-        || (b.contains("model") && b.contains("does not exist"))
-        || b.contains("unknown model")
-        || b.contains("model_not_found")
-}
-
-fn provider_error_status(err: &Value) -> Option<u16> {
-    match err.get("code") {
-        Some(Value::Number(n)) => n.as_u64().and_then(|v| u16::try_from(v).ok()),
-        Some(Value::String(s)) => s.trim().parse().ok(),
+        IrStreamEvent::ToolCallStart { id, name, .. } => {
+            Some(ProbeStreamChunk::ToolCallStart { id, name })
+        }
+        IrStreamEvent::ToolCallArgDelta { delta } => {
+            Some(ProbeStreamChunk::ToolCallArgDelta { delta })
+        }
+        IrStreamEvent::ToolCallEnd => Some(ProbeStreamChunk::ToolCallEnd),
+        IrStreamEvent::FinishReason { reason } => Some(ProbeStreamChunk::Finished {
+            finish: finish_from_reason(&reason),
+        }),
         _ => None,
     }
 }
 
-fn body_looks_like_upstream_overload(body: &str) -> bool {
-    let b = body.to_ascii_lowercase();
-    b.contains("temporarily overloaded")
-        || b.contains("service temporarily")
-        || b.contains("service unavailable")
-        || b.contains("bad gateway")
-        || b.contains("timed out")
+fn finish_from_reason(reason: &str) -> ProbeFinish {
+    match reason {
+        "stop" | "end_turn" | "eos" => ProbeFinish::Stop,
+        "tool_calls" | "tool_use" | "function_call" => ProbeFinish::ToolCalls,
+        "length" | "max_tokens" => ProbeFinish::Length,
+        _ => ProbeFinish::Other,
+    }
+}
+
+fn map_client_error(err: ClientError) -> ProbeError {
+    match err {
+        ClientError::Auth { message, .. } => ProbeError::Auth(redact_secrets(&message)),
+        ClientError::NotFound { message, .. } => ProbeError::NotFound(redact_secrets(&message)),
+        ClientError::RateLimit { retry_after, .. } => ProbeError::RateLimit { retry_after },
+        ClientError::Transient { message, .. } => {
+            let message = redact_secrets(&message);
+            if is_connect_message(&message) && !message.starts_with("failed to connect:") {
+                ProbeError::Transient(format!("failed to connect: {message}"))
+            } else {
+                ProbeError::Transient(message)
+            }
+        }
+        ClientError::Vendor { message, .. } => ProbeError::Llm(redact_secrets(&message)),
+        ClientError::Map(err) => ProbeError::Llm(redact_secrets(&err.to_string())),
+        ClientError::Transport(message) => ProbeError::Transient(redact_secrets(&message)),
+    }
 }
 
 /// Strip Bearer tokens, `sk-` / `gsk_` / `ghp_` / `xai-` keys, and values after Authorization / api-key / api_key.
@@ -729,7 +611,6 @@ fn redact_secrets(input: &str) -> String {
             out.push_str(&input[i..i + n]);
             i += n;
             i = copy_separators(input, i, &mut out);
-            // Leave "Bearer" for the dedicated handler so its token is stripped.
             if starts_at(&lower, i, "bearer") && is_ascii_word_at(input, i, 6) {
                 continue;
             }
@@ -776,7 +657,6 @@ fn redact_secrets(input: &str) -> String {
     out
 }
 
-/// Longest match first so `x-api-key` is not treated as `api-key`.
 fn secret_header_len(lower: &str, input: &str, i: usize) -> Option<usize> {
     if starts_at(lower, i, "x-api-key") && is_ascii_word_at(input, i, 9) {
         Some(9)
@@ -787,7 +667,6 @@ fn secret_header_len(lower: &str, input: &str, i: usize) -> Option<usize> {
     {
         Some(7)
     } else if starts_at(lower, i, "apikey") && is_ascii_word_at(input, i, 6) {
-        // camelCase apiKey lowercases to apikey, not api_key / api-key.
         Some(6)
     } else {
         None
@@ -863,672 +742,42 @@ fn skip_secret_key(input: &str, mut i: usize) -> usize {
     i
 }
 
-fn chat_body(req: &ProbeRequest, stream: bool) -> Value {
-    let mut body = Map::new();
-    body.insert("model".into(), Value::String(req.model.clone()));
-    body.insert(
-        "messages".into(),
-        Value::Array(req.messages.iter().map(message_json).collect()),
-    );
-    if !req.tools.is_empty() {
-        body.insert(
-            "tools".into(),
-            Value::Array(req.tools.iter().map(tool_json).collect()),
-        );
-    }
-    if let Some(t) = req.temperature {
-        if !reasoning_chat_model(&req.model) {
-            body.insert("temperature".into(), Value::from(t));
-        }
-    }
-    if let Some(m) = req.max_tokens {
-        let key = if reasoning_chat_model(&req.model) {
-            "max_completion_tokens"
-        } else {
-            "max_tokens"
-        };
-        body.insert(key.into(), Value::from(m));
-    }
-    if stream {
-        body.insert("stream".into(), Value::Bool(true));
-    }
-    Value::Object(body)
+fn is_connect_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("connection refused")
+        || lower.contains("connect error")
+        || lower.contains("error trying to connect")
+        || lower.contains("error sending request")
+        || lower.contains("tcp connect error")
+        || lower.contains("dns error")
 }
 
-/// o-series and GPT-5 chat-completions reject `max_tokens` and often
-/// reject `temperature`. Use `max_completion_tokens` and omit temperature.
-fn reasoning_chat_model(model: &str) -> bool {
-    let m = model.to_ascii_lowercase();
-    let id = m.rsplit('/').next().unwrap_or(&m);
-    reasoning_id_prefix(id, "o1")
-        || reasoning_id_prefix(id, "o3")
-        || reasoning_id_prefix(id, "o4")
-        || id.starts_with("gpt-5")
-}
-
-fn reasoning_id_prefix(id: &str, prefix: &str) -> bool {
-    id == prefix || id.starts_with(&format!("{prefix}-"))
-}
-
-fn message_json(msg: &ProbeMessage) -> Value {
-    let mut obj = Map::new();
-    obj.insert("role".into(), Value::String(role_str(msg.role).to_owned()));
-    let empty_text = matches!(&msg.content, ProbeContent::Text(t) if t.is_empty());
-    if empty_text && msg.tool_calls.is_some() {
-        obj.insert("content".into(), Value::Null);
-    } else {
-        obj.insert("content".into(), content_json(&msg.content));
-    }
-    if let Some(calls) = &msg.tool_calls {
-        obj.insert(
-            "tool_calls".into(),
-            Value::Array(calls.iter().map(tool_call_json).collect()),
-        );
-    }
-    if let Some(id) = &msg.tool_call_id {
-        obj.insert("tool_call_id".into(), Value::String(id.clone()));
-    }
-    Value::Object(obj)
-}
-
-fn role_str(role: ProbeRole) -> &'static str {
-    match role {
-        ProbeRole::System => "system",
-        ProbeRole::User => "user",
-        ProbeRole::Assistant => "assistant",
-        ProbeRole::Tool => "tool",
-    }
-}
-
-fn content_json(content: &ProbeContent) -> Value {
-    match content {
-        ProbeContent::Text(text) => Value::String(text.clone()),
-        ProbeContent::Parts(parts) => Value::Array(parts.iter().map(part_json).collect()),
-    }
-}
-
-fn part_json(part: &ProbeContentPart) -> Value {
-    match part {
-        ProbeContentPart::Text { text } => {
-            serde_json::json!({ "type": "text", "text": text })
-        }
-        ProbeContentPart::ImageBase64 { media_type, data } => {
-            let url = format!("data:{media_type};base64,{data}");
-            serde_json::json!({
-                "type": "image_url",
-                "image_url": { "url": url }
-            })
-        }
-    }
-}
-
-fn tool_json(tool: &ProbeTool) -> Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
-        }
-    })
-}
-
-fn tool_call_json(call: &ProbeToolCall) -> Value {
-    let args = Value::Object(call.arguments.clone()).to_string();
-    serde_json::json!({
-        "id": call.id,
-        "type": "function",
-        "function": {
-            "name": call.name,
-            "arguments": args,
-        }
-    })
-}
-
-fn parse_chat_response(value: &Value) -> Result<ProbeResponse, ProbeError> {
-    let choice = value
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .ok_or_else(|| ProbeError::Llm("chat completion missing choices".into()))?;
-    let message = choice.get("message").unwrap_or(choice);
-    let text = extract_text(message.get("content"));
-    let mut tool_calls = message
-        .get("tool_calls")
-        .map(parse_tool_calls)
-        .unwrap_or_default();
-    if tool_calls.is_empty() {
-        if let Some(call) = parse_legacy_function(message) {
-            tool_calls.push(call);
-        }
-    }
-    let finish = match choice.get("finish_reason").and_then(|v| v.as_str()) {
-        Some(reason) => finish_from_reason(reason),
-        None if !tool_calls.is_empty() => ProbeFinish::ToolCalls,
-        None => ProbeFinish::Stop,
+fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
+    let n = match value? {
+        Value::Number(num) => num.as_u64().or_else(|| {
+            num.as_f64()
+                .filter(|f| f.is_finite() && *f > 0.0)
+                .map(|f| f as u64)
+        })?,
+        Value::String(s) => s.parse().ok()?,
+        _ => return None,
     };
-    Ok(ProbeResponse {
-        text,
-        tool_calls,
-        finish,
-        usage: parse_usage(value.get("usage")),
-    })
-}
-
-fn parse_usage(value: Option<&Value>) -> Option<ProbeUsage> {
-    let usage = value?;
-    if !usage.is_object() {
-        return None;
-    }
-    let completion_tokens = first_u32(usage, &["completion_tokens", "output_tokens"]);
-    let prompt_tokens = first_u32(usage, &["prompt_tokens", "input_tokens"]);
-    let reasoning_tokens = usage
-        .get("completion_tokens_details")
-        .and_then(|d| first_u32(d, &["reasoning_tokens"]))
-        .or_else(|| first_u32(usage, &["reasoning_tokens"]));
-    if completion_tokens.is_none() && prompt_tokens.is_none() && reasoning_tokens.is_none() {
-        return None;
-    }
-    Some(ProbeUsage {
-        prompt_tokens,
-        completion_tokens,
-        reasoning_tokens,
-    })
-}
-
-fn first_u32(value: &Value, keys: &[&str]) -> Option<u32> {
-    keys.iter().find_map(|key| {
-        value.get(*key).and_then(|v| {
-            v.as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .or_else(|| {
-                    v.as_f64()
-                        .and_then(|n| u32::try_from(n.round() as i64).ok())
-                })
-                .or_else(|| {
-                    v.as_str()
-                        .and_then(|s| s.trim().parse::<f64>().ok())
-                        .and_then(|n| u32::try_from(n.round() as i64).ok())
-                })
-        })
-    })
-}
-
-fn extract_text(content: Option<&Value>) -> String {
-    let raw = match content {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter(|p| !is_hidden_reasoning_part(p))
-            .filter_map(visible_part_text)
-            .collect::<Vec<_>>()
-            .join(""),
-        _ => String::new(),
-    };
-    strip_think_blocks(&raw)
-}
-
-fn is_hidden_reasoning_part(part: &Value) -> bool {
-    part.get("type").and_then(|t| t.as_str()).is_some_and(|t| {
-        t.eq_ignore_ascii_case("thinking")
-            || t.eq_ignore_ascii_case("reasoning")
-            || t.eq_ignore_ascii_case("reasoning_content")
-    })
-}
-
-fn visible_part_text(part: &Value) -> Option<&str> {
-    part.get("text")
-        .or_else(|| part.get("output_text"))
-        .and_then(|t| t.as_str())
-}
-
-fn strip_think_blocks(input: &str) -> String {
-    const OPEN: &str = "<think>";
-    const CLOSE: &str = "</think>";
-    let lower = input.to_ascii_lowercase();
-    let mut out = String::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        let Some(open_at) = lower.get(i..).and_then(|rest| rest.find(OPEN)) else {
-            out.push_str(&input[i..]);
-            break;
-        };
-        let open_at = i + open_at;
-        out.push_str(&input[i..open_at]);
-        let after_open = open_at + OPEN.len();
-        match lower.get(after_open..).and_then(|rest| rest.find(CLOSE)) {
-            Some(rel) => i = after_open + rel + CLOSE.len(),
-            None => break,
-        }
-    }
-    out
-}
-
-fn parse_legacy_function(message: &Value) -> Option<ProbeToolCall> {
-    let func = message
-        .get("function")
-        .filter(|f| f.is_object())
-        .or_else(|| message.get("function_call").filter(|f| f.is_object()))?;
-    let name = func
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
-    if !crate::probes::has_visible_arg_text(&name) {
-        return None;
-    }
-    Some(ProbeToolCall {
-        id: String::new(),
-        name,
-        arguments: parse_arguments(func.get("arguments")),
-    })
-}
-
-fn parse_tool_calls(value: &Value) -> Vec<ProbeToolCall> {
-    let Some(arr) = value.as_array() else {
-        return Vec::new();
-    };
-    arr.iter()
-        .filter_map(|tc| {
-            let id = json_id(tc.get("id")).unwrap_or_default();
-            let func = tc.get("function")?;
-            let name = func
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned();
-            if !crate::probes::has_visible_arg_text(&name) {
-                return None;
-            }
-            Some(ProbeToolCall {
-                id,
-                name,
-                arguments: parse_arguments(func.get("arguments")),
-            })
-        })
-        .collect()
-}
-
-fn parse_arguments(value: Option<&Value>) -> Map<String, Value> {
-    match value {
-        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
-            .ok()
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default(),
-        Some(Value::Object(m)) => m.clone(),
-        _ => Map::new(),
-    }
-}
-
-/// In-flight streamed tool call, keyed by `tool_calls` index.
-struct OpenTool {
-    id: String,
-    name: String,
-    started: bool,
-    rejected: bool,
-    pending_args: Vec<String>,
-}
-
-/// Split complete newline-terminated SSE lines out of `buf`.
-/// Incomplete UTF-8 at the end stays in `buf` for the next HTTP chunk.
-fn drain_complete_sse_lines(buf: &mut Vec<u8>) -> Vec<String> {
-    let mut lines = Vec::new();
-    while let Some(idx) = buf.iter().position(|&b| b == b'\n') {
-        let mut line = String::from_utf8_lossy(&buf[..idx]).into_owned();
-        buf.drain(..=idx);
-        if line.ends_with('\r') {
-            line.pop();
-        }
-        lines.push(line);
-    }
-    lines
-}
-
-fn take_sse_tail(buf: &[u8]) -> String {
-    String::from_utf8_lossy(buf)
-        .trim_end_matches('\r')
-        .to_owned()
-}
-
-fn sse_tail_is_truncated(line: &str) -> bool {
-    let data = if let Some(rest) = line.strip_prefix("data:") {
-        rest.trim()
-    } else if line.trim_start().starts_with('{') {
-        line.trim()
-    } else {
-        return false;
-    };
-    !data.is_empty() && data != "[DONE]" && serde_json::from_str::<Value>(data).is_err()
-}
-
-fn accumulate_stream_bytes(received: &mut usize, chunk_len: usize) -> Result<(), ProbeError> {
-    let next = received.saturating_add(chunk_len);
-    if next > MAX_RESPONSE_BYTES {
-        return Err(ProbeError::Transient("response too large".into()));
-    }
-    *received = next;
-    Ok(())
-}
-
-fn emit_sse_line(
-    line: &str,
-    open_tools: &mut HashMap<u64, OpenTool>,
-    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
-    think: &mut ThinkFilter,
-) -> Result<(), ProbeError> {
-    let data = if let Some(rest) = line.strip_prefix("data:") {
-        rest.trim()
-    } else if line.trim_start().starts_with('{') {
-        line.trim()
-    } else {
-        return Ok(());
-    };
-    if data.is_empty() || data == "[DONE]" {
-        return Ok(());
-    }
-    let Ok(value) = serde_json::from_str::<Value>(data) else {
-        if data.starts_with('{') || data.starts_with('[') {
-            return Err(ProbeError::Transient("malformed stream JSON".into()));
-        }
-        return Ok(());
-    };
-    if let Some(err) = value.get("error") {
-        return Err(classify_provider_error(err));
-    }
-    emit_delta(&value, open_tools, tx, think);
-    Ok(())
-}
-
-fn emit_delta(
-    value: &Value,
-    open_tools: &mut HashMap<u64, OpenTool>,
-    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
-    think: &mut ThinkFilter,
-) {
-    let Some(choice) = value.get("choices").and_then(|c| c.get(0)) else {
-        return;
-    };
-    let delta = choice
-        .get("delta")
-        .or_else(|| choice.get("message"))
-        .unwrap_or(&Value::Null);
-
-    if let Some(text) = content_text(delta.get("content")) {
-        let visible = think.feed(&text);
-        if !visible.is_empty() {
-            let _ = tx.unbounded_send(Ok(ProbeStreamChunk::TextDelta { text: visible }));
-        }
-    }
-
-    let tool_calls = delta.get("tool_calls").and_then(|t| t.as_array());
-    if tool_calls.is_none_or(Vec::is_empty) {
-        if let Some(func) = delta
-            .get("function")
-            .filter(|f| f.is_object())
-            .or_else(|| delta.get("function_call").filter(|f| f.is_object()))
-        {
-            emit_function(func, None, 0, open_tools, tx, false);
-        }
-    }
-
-    if let Some(tcs) = tool_calls {
-        for tc in tcs {
-            let id = json_id(tc.get("id"));
-            let index = json_u64(tc.get("index")).unwrap_or(0);
-            let func = tc.get("function").unwrap_or(&Value::Null);
-            emit_function(func, id.as_deref(), index, open_tools, tx, false);
-        }
-    }
-
-    if let Some(reason) = choice
-        .get("finish_reason")
-        .and_then(|v| v.as_str())
-        .or_else(|| delta.get("finish_reason").and_then(|v| v.as_str()))
-    {
-        end_open_tools(open_tools, tx);
-        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::Finished {
-            finish: finish_from_reason(reason),
-        }));
-    }
-}
-
-fn json_u64(v: Option<&Value>) -> Option<u64> {
-    let v = v?;
-    v.as_u64()
-        .or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
-        .or_else(|| v.as_str()?.trim().parse().ok())
-}
-
-fn json_id(v: Option<&Value>) -> Option<String> {
-    let v = v?;
-    if let Some(s) = v.as_str() {
-        let t = s.trim();
-        if t.is_empty() {
-            return None;
-        }
-        return Some(t.to_owned());
-    }
-    if let Some(n) = v.as_u64() {
-        return Some(n.to_string());
-    }
-    if let Some(n) = v.as_i64() {
-        return Some(n.to_string());
-    }
-    None
-}
-
-fn content_text(content: Option<&Value>) -> Option<String> {
-    let content = content?;
-    if let Some(s) = content.as_str() {
-        if s.is_empty() {
-            return None;
-        }
-        return Some(s.to_owned());
-    }
-    let arr = content.as_array()?;
-    let mut out = String::new();
-    for part in arr {
-        if is_hidden_reasoning_part(part) {
-            continue;
-        }
-        if let Some(s) = part.as_str() {
-            out.push_str(s);
-            continue;
-        }
-        if let Some(s) = visible_part_text(part) {
-            out.push_str(s);
-        }
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-/// Carry `<think>` across SSE tokens, including when the tag itself is split.
-#[derive(Default)]
-struct ThinkFilter {
-    in_think: bool,
-    hold: String,
-}
-
-impl ThinkFilter {
-    fn feed(&mut self, input: &str) -> String {
-        const OPEN: &str = "<think>";
-        const CLOSE: &str = "</think>";
-        let mut buf = std::mem::take(&mut self.hold);
-        buf.push_str(input);
-        let lower = buf.to_ascii_lowercase();
-        let mut out = String::new();
-        let mut i = 0;
-        loop {
-            if self.in_think {
-                if let Some(rel) = lower.get(i..).and_then(|rest| rest.find(CLOSE)) {
-                    i += rel + CLOSE.len();
-                    self.in_think = false;
-                    continue;
-                }
-                let hold_len = suffix_is_tag_prefix(&lower[i..], CLOSE);
-                self.hold = buf[buf.len() - hold_len..].to_owned();
-                break;
-            }
-            if let Some(rel) = lower.get(i..).and_then(|rest| rest.find(OPEN)) {
-                out.push_str(&buf[i..i + rel]);
-                i += rel + OPEN.len();
-                self.in_think = true;
-                continue;
-            }
-            let hold_len = suffix_is_tag_prefix(&lower[i..], OPEN);
-            out.push_str(&buf[i..buf.len() - hold_len]);
-            self.hold = buf[buf.len() - hold_len..].to_owned();
-            break;
-        }
-        out
-    }
-
-    fn flush(&mut self) -> String {
-        if self.in_think {
-            self.hold.clear();
-            String::new()
-        } else {
-            std::mem::take(&mut self.hold)
-        }
-    }
-}
-
-fn suffix_is_tag_prefix(s: &str, tag: &str) -> usize {
-    let max = s.len().min(tag.len());
-    for len in (1..=max).rev() {
-        let at = s.len() - len;
-        if s.is_char_boundary(at) && tag.starts_with(&s[at..]) {
-            return len;
-        }
-    }
-    0
-}
-
-fn finish_from_reason(reason: &str) -> ProbeFinish {
-    match reason {
-        "stop" => ProbeFinish::Stop,
-        "tool_calls" | "function_call" => ProbeFinish::ToolCalls,
-        "length" => ProbeFinish::Length,
-        _ => ProbeFinish::Other,
-    }
-}
-
-fn emit_function(
-    func: &Value,
-    id: Option<&str>,
-    index: u64,
-    open_tools: &mut HashMap<u64, OpenTool>,
-    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
-    assembled: bool,
-) {
-    let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    {
-        let tool = open_tools.entry(index).or_insert_with(|| OpenTool {
-            id: id.unwrap_or("").to_owned(),
-            name: String::new(),
-            started: false,
-            rejected: false,
-            pending_args: Vec::new(),
-        });
-        if let Some(id) = id {
-            if !id.is_empty() {
-                tool.id = id.to_owned();
-            }
-        }
-        if crate::probes::has_visible_arg_text(name) {
-            tool.name = name.to_owned();
-        } else if !name.is_empty() {
-            tool.rejected = true;
-        }
-        if let Some(delta) = arg_delta(func.get("arguments")) {
-            if tool.started {
-                let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallArgDelta { delta }));
-            } else {
-                tool.pending_args.push(delta);
-            }
-        }
-        start_named_tool(tool, tx);
-    }
-    if assembled {
-        if let Some(tool) = open_tools.remove(&index) {
-            finish_tool(tool, tx);
-        }
-    }
-}
-
-fn arg_delta(args: Option<&Value>) -> Option<String> {
-    match args {
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        Some(obj) if obj.is_object() => Some(obj.to_string()),
-        _ => None,
-    }
-}
-
-fn start_named_tool(
-    tool: &mut OpenTool,
-    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
-) {
-    if tool.started || !crate::probes::has_visible_arg_text(&tool.name) {
-        return;
-    }
-    let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
-        id: tool.id.clone(),
-        name: tool.name.clone(),
-    }));
-    tool.started = true;
-    flush_pending_args(tool, tx);
-}
-
-fn flush_pending_args(
-    tool: &mut OpenTool,
-    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
-) {
-    for delta in tool.pending_args.drain(..) {
-        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallArgDelta { delta }));
-    }
-}
-
-fn finish_tool(mut tool: OpenTool, tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>) {
-    if tool.rejected {
-        return;
-    }
-    if !tool.started {
-        let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallStart {
-            id: tool.id.clone(),
-            name: tool.name.clone(),
-        }));
-        tool.started = true;
-        flush_pending_args(&mut tool, tx);
-    }
-    let _ = tx.unbounded_send(Ok(ProbeStreamChunk::ToolCallEnd));
-}
-
-fn end_open_tools(
-    open_tools: &mut HashMap<u64, OpenTool>,
-    tx: &UnboundedSender<Result<ProbeStreamChunk, ProbeError>>,
-) {
-    let mut indexes: Vec<u64> = open_tools.keys().copied().collect();
-    indexes.sort_unstable();
-    for index in indexes {
-        if let Some(tool) = open_tools.remove(&index) {
-            finish_tool(tool, tx);
-        }
-    }
+    u32::try_from(n).ok().filter(|n| *n > 0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{ProbeFinish, ProbeRequest, ProbeStreamChunk, ProbeTool};
-    use crate::resolve_probe;
-    use futures::StreamExt;
+    use crate::client::ProbeMessage;
+    use crate::client::ProbeTool;
+    use crate::runner::resolve_probe;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
-    const SECRET: &str = "sk-test-secret-key";
-    type HttpReply = (u16, &'static str, Vec<(String, String)>, Vec<u8>);
+    const SECRET: &str = "sk-test-secret";
 
     fn empty_req() -> ProbeRequest {
         ProbeRequest {
@@ -1540,116 +789,45 @@ mod tests {
         }
     }
 
-    fn tool_req() -> ProbeRequest {
-        ProbeRequest {
-            messages: Vec::new(),
-            tools: vec![ProbeTool {
-                name: "read_file".into(),
-                description: "read".into(),
-                parameters: serde_json::json!({"type": "object"}),
-            }],
-            model: "m".into(),
-            temperature: None,
-            max_tokens: None,
-        }
-    }
-
-    fn spawn_http(
-        status: u16,
-        reason: &'static str,
-        headers: Vec<(String, String)>,
-        body: Vec<u8>,
-    ) -> String {
+    fn spawn_http(status: u16, reason: &'static str, body: Vec<u8>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 let _ = read_http(&mut stream);
-                let mut head = format!(
-                    "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
+                let head = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
-                for (k, v) in &headers {
-                    head.push_str(&format!("{k}: {v}\r\n"));
-                }
-                head.push_str("\r\n");
                 let _ = stream.write_all(head.as_bytes());
                 let _ = stream.write_all(&body);
-                let _ = stream.flush();
             }
         });
-        format!("http://{addr}")
+        format!("http://{addr}/v1")
     }
 
-    fn spawn_http_seq_record(replies: Vec<HttpReply>) -> (String, Arc<Mutex<Vec<String>>>) {
+    fn spawn_http_seq(replies: Vec<(u16, Vec<u8>)>) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_thread = Arc::clone(&seen);
         thread::spawn(move || {
-            for (status, reason, headers, body) in replies {
+            for (status, body) in replies {
                 if let Ok((mut stream, _)) = listener.accept() {
                     let req = read_http(&mut stream);
                     if let Ok(mut log) = seen_thread.lock() {
-                        let line = req.lines().next().unwrap_or("").to_owned();
-                        log.push(line);
+                        log.push(req.lines().next().unwrap_or("").to_owned());
                     }
-                    let mut head = format!(
-                        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    let head = format!(
+                        "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
-                    for (k, v) in &headers {
-                        head.push_str(&format!("{k}: {v}\r\n"));
-                    }
-                    head.push_str("\r\n");
                     let _ = stream.write_all(head.as_bytes());
                     let _ = stream.write_all(&body);
-                    let _ = stream.flush();
                 }
             }
         });
-        (format!("http://{addr}"), seen)
-    }
-
-    fn json_headers() -> Vec<(String, String)> {
-        vec![("Content-Type".into(), "application/json".into())]
-    }
-
-    fn spawn_http_chunked_split(
-        status: u16,
-        reason: &'static str,
-        headers: Vec<(String, String)>,
-        body: Vec<u8>,
-        split_at: usize,
-    ) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let _ = read_http(&mut stream);
-                let split_at = split_at.min(body.len());
-                let first = &body[..split_at];
-                let second = &body[split_at..];
-                let mut head = format!(
-                    "HTTP/1.1 {status} {reason}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n"
-                );
-                for (k, v) in &headers {
-                    head.push_str(&format!("{k}: {v}\r\n"));
-                }
-                head.push_str("\r\n");
-                let _ = stream.write_all(head.as_bytes());
-                let _ = write!(stream, "{:X}\r\n", first.len());
-                let _ = stream.write_all(first);
-                let _ = stream.write_all(b"\r\n");
-                let _ = stream.flush();
-                thread::sleep(Duration::from_millis(150));
-                let _ = write!(stream, "{:X}\r\n", second.len());
-                let _ = stream.write_all(second);
-                let _ = stream.write_all(b"\r\n0\r\n\r\n");
-                let _ = stream.flush();
-            }
-        });
-        format!("http://{addr}")
+        (format!("http://{addr}/v1"), seen)
     }
 
     fn read_http(stream: &mut std::net::TcpStream) -> String {
@@ -1662,25 +840,7 @@ mod tests {
                 Ok(n) => buf.extend_from_slice(&tmp[..n]),
                 Err(_) => break,
             }
-            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                let header_end = pos + 4;
-                let headers = String::from_utf8_lossy(&buf[..header_end]);
-                let mut content_len = 0usize;
-                for line in headers.lines() {
-                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        content_len = v.trim().parse().unwrap_or(0);
-                    }
-                }
-                while buf.len() < header_end + content_len {
-                    match stream.read(&mut tmp) {
-                        Ok(0) => break,
-                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                        Err(_) => break,
-                    }
-                }
-                break;
-            }
-            if buf.len() > 1_000_000 {
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
                 break;
             }
         }
@@ -1698,34 +858,38 @@ mod tests {
         .expect("client")
     }
 
+    fn chat_ok(text: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "choices": [{
+                "message": { "role": "assistant", "content": text },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 3, "completion_tokens": 2 }
+        }))
+        .expect("json")
+    }
+
     #[tokio::test]
     async fn chat_closed_port_is_connect_abort() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         drop(listener);
-        let err = client(&format!("http://{addr}"))
+        let err = client(&format!("http://{addr}/v1"))
             .chat(empty_req())
             .await
             .expect_err("closed port");
         match &err {
             ProbeError::Transient(msg) => {
                 assert!(
-                    msg.starts_with("failed to connect:"),
-                    "connect refuse must keep the abort prefix: {msg}"
+                    msg.starts_with("failed to connect:")
+                        || msg.to_ascii_lowercase().contains("connection refused"),
+                    "connect refuse must stay Transient: {msg}"
                 );
             }
             other => panic!("expected Transient connect, got {other:?}"),
         }
         match resolve_probe(Err(err), "tool_calling") {
-            Err(ProbeError::Transient(msg)) => {
-                assert!(
-                    msg.starts_with("failed to connect:"),
-                    "suite must abort on live connect refuse: {msg}"
-                );
-            }
-            Ok((result, cacheable)) => {
-                panic!("connect refuse must abort, not Medium cacheable={cacheable}: {result:?}")
-            }
+            Err(ProbeError::Transient(_)) => {}
             other => panic!("expected Transient abort, got {other:?}"),
         }
     }
@@ -1735,101 +899,13 @@ mod tests {
         let base = spawn_http(
             401,
             "Unauthorized",
-            vec![("Content-Type".into(), "application/json".into())],
             br#"{"error":{"message":"bad key"}}"#.to_vec(),
         );
         let err = client(&base).chat(empty_req()).await.expect_err("401");
-        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
-        let text = err.to_string();
-        assert!(!text.contains(SECRET), "{text}");
-    }
-
-    #[tokio::test]
-    async fn chat_400_incorrect_api_key_is_auth() {
-        let base = spawn_http(
-            400,
-            "Bad Request",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("400");
-        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn chat_404_missing_model_is_not_found() {
-        let base = spawn_http(
-            404,
-            "Not Found",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"model 'does-not-exist' not found","type":"not_found_error","param":null,"code":null}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("404");
-        assert!(matches!(err, ProbeError::NotFound(_)), "{err:?}");
-        let text = err.to_string();
-        assert!(text.contains("does-not-exist"), "{text}");
-        assert!(!text.contains("LLM error"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn stream_chat_401_is_auth() {
-        let base = spawn_http(
-            401,
-            "Unauthorized",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"bad key"}}"#.to_vec(),
-        );
-        let first = client(&base)
-            .stream_chat(empty_req())
-            .next()
-            .await
-            .expect("item")
-            .expect_err("401");
-        assert!(matches!(first, ProbeError::Auth(_)), "{first:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_chat_404_is_not_found() {
-        // Generic 404 body: a model-not-found payload would still classify
-        // as NotFound from the SSE JSON, even without ensure_success.
-        let base = spawn_http(
-            404,
-            "Not Found",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"route missing"}}"#.to_vec(),
-        );
-        let first = client(&base)
-            .stream_chat(empty_req())
-            .next()
-            .await
-            .expect("item")
-            .expect_err("404");
-        assert!(matches!(first, ProbeError::NotFound(_)), "{first:?}");
-    }
-
-    #[test]
-    fn classify_200_wrapped_model_not_found() {
-        let err = serde_json::json!({
-            "message": "The model `foo` does not exist",
-            "type": "invalid_request_error",
-            "code": "model_not_found"
-        });
-        assert!(matches!(
-            classify_provider_error(&err),
-            ProbeError::NotFound(_)
-        ));
-    }
-
-    #[test]
-    fn classify_200_numeric_400_model_not_found() {
-        let err = serde_json::json!({
-            "message": "The model foo does not exist",
-            "code": 400
-        });
-        assert!(matches!(
-            classify_provider_error(&err),
-            ProbeError::NotFound(_)
-        ));
+        match err {
+            ProbeError::Auth(msg) => assert!(msg.to_ascii_lowercase().contains("bad key"), "{msg}"),
+            other => panic!("expected Auth, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1837,1105 +913,63 @@ mod tests {
         let base = spawn_http(
             400,
             "Bad Request",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"The model foo does not exist"}}"#.to_vec(),
+            br#"{"error":{"message":"The model `foo` does not exist"}}"#.to_vec(),
         );
-        let err = client(&base).chat(empty_req()).await.expect_err("400");
-        assert!(matches!(err, ProbeError::NotFound(_)), "{err:?}");
+        match client(&base).chat(empty_req()).await.expect_err("400") {
+            ProbeError::NotFound(msg) => {
+                assert!(msg.contains("does not exist"), "{msg}");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 
     #[tokio::test]
-    async fn chat_400_validation_is_llm() {
-        let base = spawn_http(
-            400,
-            "Bad Request",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"max_tokens must be positive"}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("400");
-        assert!(matches!(err, ProbeError::Llm(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn chat_200_openrouter_overload_is_transient() {
+    async fn chat_200_error_overload_is_transient() {
         let base = spawn_http(
             200,
             "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"Upstream error from Nvidia: Service temporarily overloaded"}}"#
+            br#"{"error":{"message":"Upstream error: Service temporarily overloaded","code":502}}"#
                 .to_vec(),
         );
-        let err = client(&base).chat(empty_req()).await.expect_err("200");
-        assert!(
-            matches!(err, ProbeError::Transient(ref msg) if msg.contains("overloaded")),
-            "{err:?}"
-        );
+        match client(&base).chat(empty_req()).await.expect_err("overload") {
+            ProbeError::Transient(_) => {}
+            other => panic!("expected Transient, got {other:?}"),
+        }
     }
 
     #[tokio::test]
-    async fn chat_200_error_code_502_is_transient() {
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"Provider returned error","code":502}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("200");
-        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn chat_200_validation_error_stays_llm() {
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"max_tokens must be positive"}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("200");
-        assert!(matches!(err, ProbeError::Llm(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn chat_403_model_forbidden_is_llm() {
-        let base = spawn_http(
-            403,
-            "Forbidden",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"model not allowed in this region"}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("403");
-        assert!(matches!(err, ProbeError::Llm(_)), "{err:?}");
-    }
-
-    #[test]
-    fn redact_secrets_strips_bearer_sk_and_authorization() {
-        let raw = "Authorization: Bearer SECRET leaked sk-live-secret";
-        let redacted = redact_secrets(raw);
-        assert!(!redacted.contains("SECRET"), "{redacted}");
-        assert!(!redacted.contains("sk-live-secret"), "{redacted}");
-        assert!(!redacted.contains("live-secret"), "{redacted}");
-        assert!(redacted.contains("Authorization"), "{redacted}");
-        assert!(redacted.contains("Bearer [REDACTED]"), "{redacted}");
-        let groq = redact_secrets("Invalid API key: gsk_live_secret");
-        assert!(!groq.contains("gsk_live_secret"), "{groq}");
-        assert!(groq.contains("gsk_[REDACTED]"), "{groq}");
-        assert!(redacted.contains("sk-[REDACTED]"), "{redacted}");
-        let xai = redact_secrets("Invalid API key: xai-fake-test-key-not-real");
-        assert!(!xai.contains("xai-fake-test-key-not-real"), "{xai}");
-        assert!(!xai.contains("fake-test-key-not-real"), "{xai}");
-        assert!(xai.contains("xai-[REDACTED]"), "{xai}");
-    }
-
-    #[test]
-    fn redact_secrets_strips_raw_authorization_and_api_keys() {
-        let raw = r#"Authorization: raw-not-sk x-api-key: SECRETKEY "api-key":"SECRETKEY""#;
-        let redacted = redact_secrets(raw);
-        assert!(!redacted.contains("raw-not-sk"), "{redacted}");
-        assert!(!redacted.contains("SECRETKEY"), "{redacted}");
-        assert!(redacted.contains("Authorization: [REDACTED]"), "{redacted}");
-        assert!(redacted.contains("x-api-key: [REDACTED]"), "{redacted}");
-        assert!(redacted.contains(r#""api-key":"[REDACTED]""#), "{redacted}");
-    }
-
-    #[test]
-    fn redact_secrets_strips_api_key_underscore() {
-        let raw = r#"api_key=SECRET "api_key":"SECRET""#;
-        let redacted = redact_secrets(raw);
-        assert!(!redacted.contains("SECRET"), "{redacted}");
-        assert!(redacted.contains("api_key=[REDACTED]"), "{redacted}");
-        assert!(redacted.contains(r#""api_key":"[REDACTED]""#), "{redacted}");
-
-        let escaped = r#"{\"api_key\":\"SECRET\"}"#;
-        let redacted = redact_secrets(escaped);
-        assert!(!redacted.contains("SECRET"), "{redacted}");
-        assert!(redacted.contains("[REDACTED]"), "{redacted}");
-    }
-
-    #[test]
-    fn redact_secrets_strips_camel_case_api_key() {
-        let raw = r#"{"apiKey":"SECRET"}"#;
-        let redacted = redact_secrets(raw);
-        assert!(!redacted.contains("SECRET"), "{redacted}");
-        assert!(
-            redacted.contains(r#"{"apiKey":"[REDACTED]"}"#),
-            "{redacted}"
-        );
-    }
-
-    #[test]
-    fn parse_chat_response_fills_usage() {
-        let value = serde_json::json!({
-            "choices": [{
-                "message": { "content": "4" },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 11,
-                "completion_tokens": 80,
-                "completion_tokens_details": { "reasoning_tokens": 40 }
-            }
-        });
-        let resp = parse_chat_response(&value).expect("parse");
+    async fn chat_parses_text_and_usage() {
+        let base = spawn_http(200, "OK", chat_ok("hello"));
+        let resp = client(&base).chat(empty_req()).await.expect("ok");
+        assert_eq!(resp.text, "hello");
+        assert_eq!(resp.finish, ProbeFinish::Stop);
         let usage = resp.usage.expect("usage");
-        assert_eq!(usage.prompt_tokens, Some(11));
-        assert_eq!(usage.completion_tokens, Some(80));
-        assert_eq!(usage.reasoning_tokens, Some(40));
-        assert_eq!(resp.text, "4");
+        assert_eq!(usage.prompt_tokens, Some(3));
+        assert_eq!(usage.completion_tokens, Some(2));
     }
 
-    #[test]
-    fn parse_chat_response_strips_think_tags() {
-        let value = serde_json::json!({
+    #[tokio::test]
+    async fn chat_ignores_reasoning_delta() {
+        let body = serde_json::to_vec(&serde_json::json!({
             "choices": [{
                 "message": {
-                    "content": "<think>WH-4481 secret</think>{\"word\":\"hello\"}"
+                    "role": "assistant",
+                    "content": "visible",
+                    "reasoning_content": "hidden chain"
                 },
                 "finish_reason": "stop"
             }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert!(!resp.text.contains("WH-4481"), "{:?}", resp.text);
-        assert!(resp.text.contains("hello"), "{:?}", resp.text);
-    }
-
-    #[test]
-    fn parse_chat_response_drops_thinking_parts() {
-        let value = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "content": [
-                        {"type": "thinking", "text": "count these words now"},
-                        {"type": "text", "text": "ok"}
-                    ]
-                },
-                "finish_reason": "stop"
-            }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert_eq!(resp.text, "ok");
-    }
-
-    #[test]
-    fn parse_chat_response_ignores_reasoning_content_field() {
-        let reasoning = "long cot that restates the secret fact WH-4481. ".repeat(40);
-        let value = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "reasoning_content": reasoning,
-                    "content": "final"
-                },
-                "finish_reason": "stop"
-            }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert_eq!(resp.text, "final");
-    }
-
-    #[test]
-    fn parse_chat_response_strips_unclosed_think() {
-        let value = serde_json::json!({
-            "choices": [{
-                "message": { "content": "<think>partial" },
-                "finish_reason": "stop"
-            }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert!(!resp.text.contains("partial"), "{:?}", resp.text);
-        assert_eq!(resp.text, "");
-    }
-
-    #[test]
-    fn parse_chat_response_usage_absent_is_none() {
-        let value = serde_json::json!({
-            "choices": [{
-                "message": { "content": "4" },
-                "finish_reason": "stop"
-            }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert!(resp.usage.is_none());
-    }
-
-    #[test]
-    fn parse_chat_response_legacy_function_is_tool_call() {
-        let value = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "content": null,
-                    "function": {
-                        "name": "read_file",
-                        "arguments": "{\"path\":\"/tmp/a\"}"
-                    }
-                },
-                "finish_reason": "function_call"
-            }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert_eq!(resp.finish, ProbeFinish::ToolCalls);
-        assert_eq!(resp.tool_calls.len(), 1);
-        assert_eq!(resp.tool_calls[0].name, "read_file");
-        assert_eq!(
-            resp.tool_calls[0]
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str()),
-            Some("/tmp/a")
-        );
-    }
-
-    #[test]
-    fn parse_chat_response_function_call_field_is_tool_call() {
-        let value = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "function_call": {
-                        "name": "list_dir",
-                        "arguments": "{\"path\":\"/tmp\"}"
-                    }
-                },
-                "finish_reason": "function_call"
-            }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert_eq!(resp.tool_calls[0].name, "list_dir");
-        assert_eq!(resp.finish, ProbeFinish::ToolCalls);
-    }
-
-    #[test]
-    fn parse_chat_response_numeric_tool_id_is_kept() {
-        let value = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "tool_calls": [{
-                        "id": 42,
-                        "type": "function",
-                        "function": {"name": "read_file", "arguments": "{\"path\":\"/tmp/a\"}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
-        });
-        let resp = parse_chat_response(&value).expect("parse");
-        assert_eq!(
-            resp.tool_calls[0].id, "42",
-            "numeric chat tool id must stringify: {resp:?}"
-        );
-    }
-
-    #[test]
-    fn push_response_chunk_rejects_over_cap() {
-        let mut buf = vec![0u8; 10];
-        let err = push_response_chunk(&mut buf, &[1, 2, 3, 4, 5, 6], 15).unwrap_err();
-        assert!(
-            matches!(err, ProbeError::Transient(ref msg) if msg.contains("too large")),
-            "{err:?}"
-        );
-        assert_eq!(buf.len(), 10);
-    }
-
-    #[test]
-    fn parse_chat_response_empty_tool_name_is_not_a_call() {
-        for name in ["", "   ", "\u{200b}"] {
-            let value = serde_json::json!({
-                "choices": [{
-                    "message": {
-                        "tool_calls": [{
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {"name": name, "arguments": "{}"}
-                        }]
-                    },
-                    "finish_reason": "tool_calls"
-                }]
-            });
-            let resp = parse_chat_response(&value).expect("parse");
-            assert!(
-                resp.tool_calls.is_empty(),
-                "empty name must not become a tool call: {name:?}"
-            );
-        }
-    }
-
-    fn chat_req(model: &str) -> ProbeRequest {
-        ProbeRequest {
-            messages: Vec::new(),
-            tools: Vec::new(),
-            model: model.into(),
-            temperature: Some(0.2),
-            max_tokens: Some(64),
-        }
-    }
-
-    #[test]
-    fn chat_body_o3_mini_uses_max_completion_tokens() {
-        let body = chat_body(&chat_req("o3-mini"), false);
-        assert_eq!(body["max_completion_tokens"], 64);
-        assert!(body.get("max_tokens").is_none());
-        assert!(body.get("temperature").is_none());
-    }
-
-    #[test]
-    fn chat_body_provider_prefixed_o3_uses_max_completion_tokens() {
-        let body = chat_body(&chat_req("openai/o3-mini"), false);
-        assert_eq!(body["max_completion_tokens"], 64);
-        assert!(body.get("temperature").is_none());
-    }
-
-    #[test]
-    fn chat_body_gpt5_uses_max_completion_tokens() {
-        let body = chat_body(&chat_req("gpt-5-mini"), false);
-        assert_eq!(body["max_completion_tokens"], 64);
-        assert!(body.get("temperature").is_none());
-    }
-
-    #[test]
-    fn chat_body_gpt4o_keeps_max_tokens_and_temperature() {
-        let body = chat_body(&chat_req("gpt-4o"), false);
-        assert_eq!(body["max_tokens"], 64);
-        assert_eq!(body["temperature"], serde_json::json!(0.2f32));
-        assert!(body.get("max_completion_tokens").is_none());
-    }
-
-    #[test]
-    fn reasoning_chat_model_does_not_match_o10() {
-        assert!(!reasoning_chat_model("o10"));
-        assert!(reasoning_chat_model("o1"));
-        assert!(reasoning_chat_model("o1-mini"));
-    }
-
-    #[tokio::test]
-    async fn chat_401_redacts_raw_authorization_from_body() {
-        let base = spawn_http(
-            401,
-            "Unauthorized",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"Authorization: raw-not-sk"}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("401");
-        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
-        let text = err.to_string();
-        assert!(!text.contains("raw-not-sk"), "{text}");
-        assert!(text.contains("authentication error:"), "{text}");
-        assert!(text.contains("Authorization"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn chat_401_redacts_bearer_and_sk_from_body() {
-        let base = spawn_http(
-            401,
-            "Unauthorized",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"Bearer SECRET sk-live-secret"}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("401");
-        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
-        let text = err.to_string();
-        assert!(!text.contains("SECRET"), "{text}");
-        assert!(!text.contains("sk-live-secret"), "{text}");
-        assert!(!text.contains("live-secret"), "{text}");
-        assert!(text.matches("authentication error:").count() == 1, "{text}");
-    }
-
-    #[tokio::test]
-    async fn chat_401_redacts_xai_key_from_body() {
-        let base = spawn_http(
-            401,
-            "Unauthorized",
-            vec![("Content-Type".into(), "application/json".into())],
-            br#"{"error":{"message":"Invalid API key: xai-fake-test-key-not-real"}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("401");
-        assert!(matches!(err, ProbeError::Auth(_)), "{err:?}");
-        let text = err.to_string();
-        assert!(!text.contains("xai-fake-test-key-not-real"), "{text}");
-        assert!(!text.contains("fake-test-key-not-real"), "{text}");
-        assert!(text.contains("xai-[REDACTED]"), "{text}");
-        assert!(text.matches("authentication error:").count() == 1, "{text}");
-    }
-
-    #[tokio::test]
-    async fn chat_429_is_rate_limit() {
-        let base = spawn_http(
-            429,
-            "Too Many Requests",
-            vec![
-                ("Content-Type".into(), "application/json".into()),
-                ("Retry-After".into(), "7".into()),
-            ],
-            br#"{"error":{"message":"slow down"}}"#.to_vec(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("429");
-        match err {
-            ProbeError::RateLimit { retry_after } => assert_eq!(retry_after, Some(7)),
-            other => panic!("expected RateLimit, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn stream_openai_delta_tool_calls() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallStart { id, name }
-                    if id == "call_1" && name == "read_file"
-            )),
-            "{chunks:?}"
-        );
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallArgDelta { delta } if delta.contains("/tmp/test.txt")
-            )),
-            "{chunks:?}"
-        );
-        assert!(
-            chunks
-                .iter()
-                .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
-            "{chunks:?}"
-        );
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::Finished {
-                    finish: ProbeFinish::ToolCalls
-                }
-            )),
-            "{chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_length_emits_finished_length() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"I will call read_file\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::Finished {
-                    finish: ProbeFinish::Length
-                }
-            )),
-            "SSE length must surface as Finished(Length): {chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_length_flushes_partial_tool_then_finished() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
-            )),
-            "{chunks:?}"
-        );
-        assert!(
-            chunks
-                .iter()
-                .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
-            "length must flush the open tool before Finished: {chunks:?}"
-        );
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::Finished {
-                    finish: ProbeFinish::Length
-                }
-            )),
-            "{chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_late_name_emits_one_named_start() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"arguments\":\"{\\\"path\\\"\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"read_file\",\"arguments\":\":\\\"/tmp/test.txt\\\"}\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let starts: Vec<_> = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::ToolCallStart { id, name } => Some((id.as_str(), name.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(starts, vec![("c1", "read_file")], "{chunks:?}");
-        let start_at = chunks
-            .iter()
-            .position(|c| matches!(c, ProbeStreamChunk::ToolCallStart { .. }))
-            .expect("start");
-        let first_arg = chunks
-            .iter()
-            .position(|c| matches!(c, ProbeStreamChunk::ToolCallArgDelta { .. }))
-            .expect("args");
-        assert!(start_at < first_arg, "{chunks:?}");
-        let args: String = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::ToolCallArgDelta { delta } => Some(delta.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(args, r#"{"path":"/tmp/test.txt"}"#);
-        let ends = chunks
-            .iter()
-            .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
-            .count();
-        assert_eq!(ends, 1, "{chunks:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_unnamed_args_start_once_at_end() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let starts: Vec<_> = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::ToolCallStart { id, name } => Some((id.as_str(), name.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(starts, vec![("c1", "")], "{chunks:?}");
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallArgDelta { delta } if delta.contains("/tmp/test.txt")
-            )),
-            "{chunks:?}"
-        );
-        let ends = chunks
-            .iter()
-            .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
-            .count();
-        assert_eq!(ends, 1, "{chunks:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_assembled_function_call_field() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"function_call\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"}}}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
-            )),
-            "{chunks:?}"
-        );
-        assert!(
-            chunks
-                .iter()
-                .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
-            "{chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_ignores_legacy_function_call_when_tool_calls_present() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"function_call\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"},\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            !chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallArgDelta { delta } if delta.contains("/tmp/test.txt")
-            )),
-            "leftover function_call path must not emit when tool_calls is present: {chunks:?}"
-        );
-        let starts = chunks
-            .iter()
-            .filter(|c| {
-                matches!(
-                    c,
-                    ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
-                )
-            })
-            .count();
-        assert_eq!(starts, 1, "{chunks:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_assembled_function_object() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"}}}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallStart { name, .. } if name == "read_file"
-            )),
-            "{chunks:?}"
-        );
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallArgDelta { delta } if delta.contains("/tmp/test.txt")
-            )),
-            "{chunks:?}"
-        );
-        assert!(
-            chunks
-                .iter()
-                .any(|c| matches!(c, ProbeStreamChunk::ToolCallEnd)),
-            "{chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_parallel_indexes_emit_two_starts() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c0\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"p\\\":\\\"a\\\"}\"}},{\"index\":1,\"id\":\"c1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"p\\\":\\\"b\\\"}\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let starts: Vec<_> = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::ToolCallStart { id, name } => Some((id.as_str(), name.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(starts, vec![("c0", "read_file"), ("c1", "write_file")]);
-        let args: Vec<_> = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::ToolCallArgDelta { delta } => Some(delta.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(args, vec![r#"{"p":"a"}"#, r#"{"p":"b"}"#]);
-        let ends = chunks
-            .iter()
-            .filter(|c| matches!(c, ProbeStreamChunk::ToolCallEnd))
-            .count();
-        assert_eq!(ends, 2, "{chunks:?}");
-    }
-
-    #[test]
-    fn emit_sse_line_malformed_json_object_is_transient() {
-        let (tx, _rx) = futures::channel::mpsc::unbounded();
-        let mut open = HashMap::new();
-        let mut think = ThinkFilter::default();
-        let err = emit_sse_line("data: {", &mut open, &tx, &mut think).expect_err("object");
-        assert!(
-            matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
-            "{err:?}"
-        );
-        emit_sse_line("data: ping", &mut open, &tx, &mut think).expect("keepalive");
-        let err = emit_sse_line("data: [", &mut open, &tx, &mut think).expect_err("array");
-        assert!(
-            matches!(err, ProbeError::Transient(ref msg) if msg.contains("malformed")),
-            "{err:?}"
-        );
-    }
-
-    #[test]
-    fn accumulate_stream_bytes_counts_after_sse_drain() {
-        let line = b"data: {\"ok\":true}\n";
-        let mut buf = line.to_vec();
-        let mut received = 0usize;
-        accumulate_stream_bytes(&mut received, line.len()).expect("under cap");
-        let _ = drain_complete_sse_lines(&mut buf);
-        assert!(buf.is_empty(), "complete SSE line must drain");
-        assert_eq!(received, line.len(), "budget must not reset on drain");
-        let err = accumulate_stream_bytes(&mut received, MAX_RESPONSE_BYTES).unwrap_err();
-        assert!(
-            matches!(err, ProbeError::Transient(ref msg) if msg.contains("too large")),
-            "{err:?}"
-        );
-        assert_eq!(received, line.len());
-    }
-
-    #[test]
-    fn drain_complete_sse_lines_holds_split_utf8_until_newline() {
-        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"café!\"}}]}\n";
-        let split_at = payload.find('é').expect("é") + 1;
-        let bytes = payload.as_bytes();
-        let mut buf = bytes[..split_at].to_vec();
-        assert!(drain_complete_sse_lines(&mut buf).is_empty());
-        buf.extend_from_slice(&bytes[split_at..]);
-        let lines = drain_complete_sse_lines(&mut buf);
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].contains("café!"), "{lines:?}");
-        assert!(buf.is_empty());
-    }
-
-    #[tokio::test]
-    async fn stream_utf8_split_across_http_chunks_preserves_text() {
-        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"café!\"}}]}\n\n";
-        let split_at = payload.find('é').expect("é") + 1;
-        let base = spawn_http_chunked_split(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            payload.as_bytes().to_vec(),
-            split_at,
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let text: String = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            text, "café!",
-            "UTF-8 split across HTTP chunks corrupted the text: {chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_string_index_keeps_parallel_tools() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":\"0\",\"id\":\"c0\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"p\\\":\\\"a\\\"}\"}},{\"index\":\"1\",\"id\":\"c1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"p\\\":\\\"b\\\"}\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let starts: Vec<_> = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::ToolCallStart { id, name } => Some((id.as_str(), name.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            starts,
-            vec![("c0", "read_file"), ("c1", "write_file")],
-            "string tool_calls index must not collapse both tools onto 0: {chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_numeric_tool_id_is_kept() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":42,\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::ToolCallStart { id, name }
-                    if id == "42" && name == "read_file"
-            )),
-            "numeric tool id must surface as a string: {chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_thinking_parts_are_not_emitted() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"text\":\"WH-4481 secret\"},{\"type\":\"text\",\"text\":\"ok\"}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let text: String = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            !text.contains("WH-4481"),
-            "stream must drop thinking parts: {chunks:?}"
-        );
-        assert_eq!(text, "ok", "{chunks:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_reasoning_parts_and_think_tags_are_not_emitted() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"reasoning\",\"text\":\"count these words now\"},{\"type\":\"text\",\"text\":\"<think>hidden</think>visible\"}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let text: String = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            !text.contains("count these words"),
-            "stream must drop reasoning parts: {chunks:?}"
-        );
-        assert!(
-            !text.contains("hidden"),
-            "stream must strip <think> in content: {chunks:?}"
-        );
-        assert_eq!(text, "visible", "{chunks:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_think_split_across_sse_lines_is_not_emitted() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"hello <thi\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"nk>WH-4481 secret</thi\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"nk> world\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let text: String = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            !text.contains("WH-4481"),
-            "split <think> across SSE lines must not leak: {chunks:?}"
-        );
-        assert!(
-            !text.to_ascii_lowercase().contains("<think"),
-            "split think tags must not leak: {chunks:?}"
-        );
-        assert_eq!(text, "hello  world", "{chunks:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_zwsp_or_whitespace_name_does_not_start_a_tool() {
-        for name in ["   ", "\u{200b}"] {
-            let sse = format!(
-                "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"c1\",\"function\":{{\"name\":{name},\"arguments\":\"{{\\\"path\\\":\\\"/tmp/test.txt\\\"}}\"}}}}]}}}}]}}\n\n\
-                 data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\n\
-                 data: [DONE]\n\n",
-                name = serde_json::to_string(name).expect("name")
-            );
-            let base = spawn_http(
-                200,
-                "OK",
-                vec![("Content-Type".into(), "text/event-stream".into())],
-                sse.as_bytes().to_vec(),
-            );
-            let chunks: Vec<_> = client(&base).stream_chat(tool_req()).collect().await;
-            let chunks: Vec<ProbeStreamChunk> =
-                chunks.into_iter().map(|c| c.expect("chunk")).collect();
-            let names: Vec<&str> = chunks
-                .iter()
-                .filter_map(|c| match c {
-                    ProbeStreamChunk::ToolCallStart { name, .. } => Some(name.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert!(
-                names.is_empty(),
-                "ZWSP/whitespace name must not emit ToolCallStart: name={name:?} {chunks:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn stream_array_content_emits_text() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        let text: String = chunks
-            .iter()
-            .filter_map(|c| match c {
-                ProbeStreamChunk::TextDelta { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(text, "hello", "{chunks:?}");
-    }
-
-    #[tokio::test]
-    async fn stream_finish_reason_on_delta_emits_finished() {
-        let sse = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"x\",\"finish_reason\":\"length\"}}]}\n\n",
-            "data: [DONE]\n\n",
-        );
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "text/event-stream".into())],
-            sse.as_bytes().to_vec(),
-        );
-        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
-        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
-        assert!(
-            chunks.iter().any(|c| matches!(
-                c,
-                ProbeStreamChunk::Finished {
-                    finish: ProbeFinish::Length
-                }
-            )),
-            "finish_reason on delta must emit Finished: {chunks:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn error_body_is_capped() {
-        let huge = "x".repeat(200 * 1024);
-        let base = spawn_http(
-            500,
-            "Internal Server Error",
-            vec![("Content-Type".into(), "text/plain".into())],
-            huge.into_bytes(),
-        );
-        let err = client(&base).chat(empty_req()).await.expect_err("500");
-        let text = err.to_string();
-        assert!(
-            text.len() < 80 * 1024,
-            "error body must be capped, got {} bytes",
-            text.len()
-        );
+        }))
+        .expect("json");
+        let base = spawn_http(200, "OK", body);
+        let resp = client(&base).chat(empty_req()).await.expect("ok");
+        assert_eq!(resp.text, "visible");
+        assert!(!resp.text.contains("hidden"));
     }
 
     #[tokio::test]
     async fn list_models_404_is_empty() {
-        let base = spawn_http(404, "Not Found", Vec::new(), b"missing".to_vec());
+        let base = spawn_http(404, "Not Found", b"missing".to_vec());
         let ids = list_model_ids(&base, Some(SECRET)).await.expect("404");
         assert!(ids.is_empty());
     }
@@ -2945,344 +979,124 @@ mod tests {
         let base = spawn_http(
             401,
             "Unauthorized",
-            vec![("Content-Type".into(), "application/json".into())],
             br#"{"error":{"message":"bad key"}}"#.to_vec(),
         );
         match list_models(&base, Some(SECRET)).await {
-            Err(ProbeError::Auth(_)) => {}
             Ok(models) => panic!("401 must stay Auth, not empty catalog: {models:?}"),
+            Err(ProbeError::Auth(_)) => {}
             other => panic!("expected Auth, got {other:?}"),
         }
     }
 
-    #[test]
-    fn advertised_context_reads_openrouter_context_length() {
-        let model = serde_json::json!({
-            "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
-            "context_length": 1_000_000
-        });
-        assert_eq!(
-            advertised_context_from_model_object(&model),
-            Some(1_000_000)
-        );
-    }
-
-    #[test]
-    fn advertised_context_reads_anthropic_max_input_tokens() {
-        let model = serde_json::json!({
-            "id": "claude-haiku-4-5-20251001",
-            "max_input_tokens": 200_000,
-            "max_tokens": 64_000
-        });
-        assert_eq!(advertised_context_from_model_object(&model), Some(200_000));
-    }
-
-    #[test]
-    fn advertised_context_prefers_context_length_over_max_input() {
-        let model = serde_json::json!({
-            "id": "x",
-            "context_length": 128_000,
-            "max_input_tokens": 200_000
-        });
-        assert_eq!(advertised_context_from_model_object(&model), Some(128_000));
-    }
-
-    #[test]
-    fn merge_advertised_flag_wins_over_catalog() {
-        assert_eq!(
-            merge_advertised_context(Some(8192), Ok(Some(1_000_000))),
-            Some(8192)
-        );
-    }
-
-    #[test]
-    fn merge_advertised_uses_catalog_when_flag_unset() {
-        assert_eq!(
-            merge_advertised_context(None, Ok(Some(200_000))),
-            Some(200_000)
-        );
-    }
-
-    #[test]
-    fn merge_advertised_catalog_error_stays_none() {
-        assert_eq!(
-            merge_advertised_context(None, Err(ProbeError::Transient("overload".into()))),
-            None
-        );
-        assert_eq!(
-            merge_advertised_context(Some(4096), Err(ProbeError::Transient("x".into()))),
-            Some(4096)
-        );
-    }
-
-    #[test]
-    fn advertised_context_ignores_zero_and_missing() {
-        assert_eq!(
-            advertised_context_from_model_object(&serde_json::json!({"id": "x"})),
-            None
-        );
-        assert_eq!(
-            advertised_context_from_model_object(&serde_json::json!({
-                "id": "x",
-                "context_length": 0
-            })),
-            None
-        );
-    }
-
     #[tokio::test]
     async fn list_models_keeps_context_length() {
-        let body = br#"{"data":[{"id":"grok-4.20-0309-non-reasoning","context_length":1000000}]}"#;
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            body.to_vec(),
-        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "data": [{
+                "id": "grok-4",
+                "context_length": 1_000_000
+            }]
+        }))
+        .expect("json");
+        let base = spawn_http(200, "OK", body);
         let models = list_models(&base, Some(SECRET)).await.expect("200");
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "grok-4.20-0309-non-reasoning");
-        assert_eq!(models[0].advertised_context_tokens, Some(1_000_000));
-        assert_eq!(models[0].supports_vision, None);
         assert_eq!(
-            advertised_context_for_model(&models, "grok-4.20-0309-non-reasoning"),
+            advertised_context_for_model(&models, "grok-4"),
             Some(1_000_000)
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_advertised_fills_from_models_when_flag_unset() {
-        let body = br#"{"data":[{"id":"nemo","context_length":1000000}]}"#;
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            body.to_vec(),
-        );
-        assert_eq!(
-            resolve_advertised_context(None, &base, Some(SECRET), "nemo").await,
-            Some(1_000_000)
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_advertised_flag_wins_when_catalog_fails() {
-        let base = spawn_http(500, "ERR", Vec::new(), b"nope".to_vec());
-        assert_eq!(
-            resolve_advertised_context(Some(8192), &base, Some(SECRET), "nemo").await,
-            Some(8192)
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_advertised_catalog_error_is_none() {
-        let base = spawn_http(500, "ERR", Vec::new(), b"nope".to_vec());
-        assert_eq!(
-            resolve_advertised_context(None, &base, Some(SECRET), "nemo").await,
-            None
-        );
-    }
-
-    #[test]
-    fn vision_from_openrouter_input_modalities() {
-        let model = serde_json::json!({
-            "id": "x",
-            "architecture": { "input_modalities": ["text", "image"] }
-        });
-        assert_eq!(vision_from_model_object(&model), Some(true));
-    }
-
-    #[test]
-    fn vision_from_anthropic_image_input() {
-        let model = serde_json::json!({
-            "id": "claude-haiku-4-5-20251001",
-            "capabilities": { "image_input": { "supported": true } }
-        });
-        assert_eq!(vision_from_model_object(&model), Some(true));
-    }
-
-    #[test]
-    fn vision_from_capabilities_array() {
-        let model = serde_json::json!({
-            "id": "x",
-            "capabilities": ["completion", "vision"]
-        });
-        assert_eq!(vision_from_model_object(&model), Some(true));
-    }
-
-    #[test]
-    fn vision_from_model_object_never_false() {
-        let model = serde_json::json!({
-            "id": "x",
-            "capabilities": { "image_input": { "supported": false } },
-            "architecture": { "input_modalities": ["text"] }
-        });
-        assert_eq!(vision_from_model_object(&model), None);
-    }
-
-    #[test]
-    fn advertised_from_ollama_show_context_length() {
-        let show = serde_json::json!({
-            "model_info": {
-                "general.parameter_count": 3_212_749_888u64,
-                "llama.context_length": 131_072
-            }
-        });
-        assert_eq!(advertised_context_from_ollama_show(&show), Some(131_072));
-    }
-
-    #[test]
-    fn advertised_from_ollama_show_takes_max() {
-        let show = serde_json::json!({
-            "model_info": {
-                "llama.context_length": 8192,
-                "context_length": 131_072
-            }
-        });
-        assert_eq!(advertised_context_from_ollama_show(&show), Some(131_072));
-    }
-
-    #[test]
-    fn vision_from_ollama_show_only_promotes_true() {
-        let yes = serde_json::json!({ "capabilities": ["completion", "vision"] });
-        assert_eq!(vision_from_ollama_show(&yes), Some(true));
-        let no = serde_json::json!({ "capabilities": ["completion", "tools"] });
-        assert_eq!(vision_from_ollama_show(&no), None);
-    }
-
-    #[test]
-    fn merge_vision_flag_wins() {
-        assert_eq!(merge_vision_catalog(Some(false), Some(true)), Some(false));
-        assert_eq!(merge_vision_catalog(Some(true), None), Some(true));
-    }
-
-    #[test]
-    fn merge_vision_catalog_only_promotes_true() {
-        assert_eq!(merge_vision_catalog(None, Some(true)), Some(true));
-        assert_eq!(merge_vision_catalog(None, Some(false)), None);
-        assert_eq!(merge_vision_catalog(None, None), None);
-    }
-
-    #[tokio::test]
-    async fn list_models_keeps_vision_from_image_input() {
-        let body = br#"{"data":[{"id":"claude-haiku-4-5-20251001","max_input_tokens":200000,"capabilities":{"image_input":{"supported":true}}}]}"#;
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            body.to_vec(),
-        );
-        let models = list_models(&base, Some(SECRET)).await.expect("200");
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "claude-haiku-4-5-20251001");
-        assert_eq!(models[0].advertised_context_tokens, Some(200_000));
-        assert_eq!(models[0].supports_vision, Some(true));
-    }
-
-    #[tokio::test]
-    async fn resolve_host_catalog_fills_vision_when_flag_unset() {
-        let body = br#"{"data":[{"id":"haiku","max_input_tokens":200000,"capabilities":{"image_input":{"supported":true}}}]}"#;
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            body.to_vec(),
-        );
-        let hints = resolve_host_catalog(None, None, &base, Some(SECRET), "haiku").await;
-        assert_eq!(hints.advertised_context_tokens, Some(200_000));
-        assert_eq!(hints.supports_vision, Some(true));
-    }
-
-    #[tokio::test]
-    async fn resolve_host_catalog_no_vision_flag_wins() {
-        let body = br#"{"data":[{"id":"haiku","max_input_tokens":200000,"capabilities":{"image_input":{"supported":true}}}]}"#;
-        let base = spawn_http(
-            200,
-            "OK",
-            vec![("Content-Type".into(), "application/json".into())],
-            body.to_vec(),
-        );
-        let hints = resolve_host_catalog(None, Some(false), &base, Some(SECRET), "haiku").await;
-        assert_eq!(hints.advertised_context_tokens, Some(200_000));
-        assert_eq!(hints.supports_vision, Some(false));
-    }
-
-    #[tokio::test]
-    async fn resolve_host_catalog_skips_http_when_both_flags_set() {
-        let (base, seen) = spawn_http_seq_record(vec![(500, "ERR", Vec::new(), b"nope".to_vec())]);
-        let hints = resolve_host_catalog(Some(8192), Some(false), &base, Some(SECRET), "x").await;
-        assert_eq!(hints.advertised_context_tokens, Some(8192));
-        assert_eq!(hints.supports_vision, Some(false));
-        let seen = seen.lock().expect("seen");
-        assert!(
-            seen.is_empty(),
-            "both flags set must skip catalog HTTP, got {seen:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn lookup_host_catalog_fills_from_ollama_show_when_models_omit_window() {
-        let models = br#"{"data":[{"id":"llama3.2:3b","object":"model"}]}"#;
-        let show = br#"{"model_info":{"llama.context_length":131072},"capabilities":["completion","tools"]}"#;
-        let (base, seen) = spawn_http_seq_record(vec![
-            (200, "OK", json_headers(), models.to_vec()),
-            (200, "OK", json_headers(), show.to_vec()),
-        ]);
-        let hints = lookup_host_catalog_inner(&base, None, "llama3.2:3b", true)
-            .await
-            .expect("show");
-        assert_eq!(hints.advertised_context_tokens, Some(131_072));
-        assert_eq!(hints.supports_vision, None);
-        let seen = seen.lock().expect("seen").clone();
-        assert!(
-            seen.iter()
-                .any(|line| line.starts_with("POST ") && line.contains("/api/show")),
-            "expected POST /api/show, got {seen:?}"
         );
     }
 
     #[tokio::test]
     async fn lookup_host_catalog_skips_show_off_11434() {
-        let models = br#"{"data":[{"id":"llama3.2:3b","object":"model"}]}"#;
-        let (base, seen) =
-            spawn_http_seq_record(vec![(200, "OK", json_headers(), models.to_vec())]);
+        let body = serde_json::to_vec(&serde_json::json!({
+            "data": [{ "id": "llama3.2:3b" }]
+        }))
+        .expect("json");
+        let (base, seen) = spawn_http_seq(vec![(200, body)]);
         let hints = lookup_host_catalog(&base, None, "llama3.2:3b")
             .await
             .expect("models");
         assert_eq!(hints.advertised_context_tokens, None);
-        assert_eq!(hints.supports_vision, None);
         let seen = seen.lock().expect("seen").clone();
+        assert_eq!(
+            seen.len(),
+            1,
+            "must not POST /api/show off :11434, got {seen:?}"
+        );
         assert!(
-            seen.iter().all(|line| !line.contains("/api/show")),
-            "non-11434 must not POST /api/show, got {seen:?}"
+            seen[0].contains("GET") && seen[0].contains("/models"),
+            "first request must be GET /models, got {}",
+            seen[0]
         );
     }
 
     #[test]
-    fn apply_cloud_auth_sets_anthropic_version_and_oauth_beta() {
-        let http = reqwest::Client::new();
-        let req = apply_cloud_auth(
-            http.get("http://127.0.0.1/"),
-            Some("k"),
-            crate::ANTHROPIC_BASE_URL,
-        )
-        .build()
-        .unwrap();
-        assert_eq!(req.headers()["anthropic-version"], ANTHROPIC_VERSION);
-        assert_eq!(req.headers()["anthropic-beta"], ANTHROPIC_OAUTH_BETA);
+    fn advertised_context_from_anthropic_max_input() {
+        let model = serde_json::json!({"id": "claude", "max_input_tokens": 200_000});
+        assert_eq!(advertised_context_from_model_object(&model), Some(200_000));
     }
 
     #[test]
-    fn apply_cloud_auth_skips_anthropic_headers_for_xai() {
-        let http = reqwest::Client::new();
-        let req = apply_cloud_auth(
-            http.get("http://127.0.0.1/"),
-            Some("k"),
-            crate::XAI_BASE_URL,
-        )
-        .build()
-        .unwrap();
-        assert!(req.headers().get("anthropic-version").is_none());
-        assert!(req.headers().get("anthropic-beta").is_none());
+    fn merge_advertised_catalog_error_stays_none() {
+        assert_eq!(
+            merge_advertised_context(None, Err(ProbeError::Auth("x".into()))),
+            None
+        );
+        assert_eq!(
+            merge_advertised_context(Some(8), Err(ProbeError::Auth("x".into()))),
+            Some(8)
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_emits_text_and_finish() {
+        let body = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n".to_vec();
+        let base = spawn_http(200, "OK", body);
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let chunks: Vec<ProbeStreamChunk> = chunks.into_iter().map(|c| c.expect("chunk")).collect();
+        assert!(
+            chunks
+                .iter()
+                .any(|c| matches!(c, ProbeStreamChunk::TextDelta { text } if text == "hi")),
+            "missing text: {chunks:?}"
+        );
+        assert!(
+            chunks.iter().any(|c| matches!(
+                c,
+                ProbeStreamChunk::Finished {
+                    finish: ProbeFinish::Stop
+                }
+            )),
+            "missing finish: {chunks:?}"
+        );
+    }
+
+    #[test]
+    fn ir_request_maps_image_part() {
+        let req = ProbeRequest {
+            messages: vec![ProbeMessage {
+                role: ProbeRole::User,
+                content: ProbeContent::Parts(vec![ProbeContentPart::ImageBase64 {
+                    media_type: "image/png".into(),
+                    data: "abc".into(),
+                }]),
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            tools: vec![ProbeTool {
+                name: "read_file".into(),
+                description: "read".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }],
+            model: "m".into(),
+            temperature: Some(0.2),
+            max_tokens: Some(64),
+        };
+        let ir = ir_request(&req);
+        assert_eq!(ir.model, "m");
+        assert_eq!(ir.sampling.max_tokens, Some(64));
+        assert!(matches!(
+            ir.items.first(),
+            Some(IrItem::User { parts }) if matches!(parts.first(), Some(IrPart::ImageBase64 { .. }))
+        ));
     }
 }

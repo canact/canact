@@ -344,22 +344,21 @@ fn parse_xml_tool_block(text: &str) -> Option<(String, serde_json::Value)> {
         if let (Some(name), Some(args_str)) = (
             extract_xml_element_simple(block, "name"),
             extract_xml_element_simple(block, "arguments"),
-        ) {
-            if let Some(args) = parse_xml_arguments(args_str) {
-                let parsed = (name.trim().to_string(), args);
-                if first.is_none() {
-                    first = Some(parsed.clone());
-                }
-                let real_read = parsed.0 == "read_file"
-                    && parsed
-                        .1
-                        .as_object()
-                        .is_some_and(|o| nonempty_string_arg_any(o, &["path", "file_path"]))
-                    && !is_xml_format_card_echo(&parsed.0, &parsed.1);
-                if real_read {
-                    best_real = Some(parsed);
-                    break;
-                }
+        ) && let Some(args) = parse_xml_arguments(args_str)
+        {
+            let parsed = (name.trim().to_string(), args);
+            if first.is_none() {
+                first = Some(parsed.clone());
+            }
+            let real_read = parsed.0 == "read_file"
+                && parsed
+                    .1
+                    .as_object()
+                    .is_some_and(|o| nonempty_string_arg_any(o, &["path", "file_path"]))
+                && !is_xml_format_card_echo(&parsed.0, &parsed.1);
+            if real_read {
+                best_real = Some(parsed);
+                break;
             }
         }
         search = start + end + "</tool_call>".len();

@@ -223,26 +223,26 @@ async fn probe_model_with_route(
                 true, true, suite, advertised,
             )));
         }
-        if advertised.is_none() && vision_flag.is_none() {
-            if let Some((profile, _cheap_row, stored_advertised)) =
+        if advertised.is_none()
+            && vision_flag.is_none()
+            && let Some((profile, _cheap_row, stored_advertised)) =
                 cache.find_profile_unspecified_catalog_suite(&model, &provider, suite)
-            {
-                return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                    true,
-                    true,
-                    suite,
-                    stored_advertised,
-                )));
-            }
+        {
+            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                true,
+                true,
+                suite,
+                stored_advertised,
+            )));
         }
-        if matches!(suite, SuiteTier::Policy) && !vision {
-            if let Some((profile, hit_suite)) =
+        if matches!(suite, SuiteTier::Policy)
+            && !vision
+            && let Some((profile, hit_suite)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
-            {
-                return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                    true, true, hit_suite, advertised,
-                )));
-            }
+        {
+            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                true, true, hit_suite, advertised,
+            )));
         }
     }
     if refuse_cloud_without_key(api_key.as_deref(), &base_url) {
@@ -264,14 +264,14 @@ async fn probe_model_with_route(
                 true, true, suite, advertised,
             )));
         }
-        if matches!(suite, SuiteTier::Policy) && !vision {
-            if let Some((profile, hit_suite)) =
+        if matches!(suite, SuiteTier::Policy)
+            && !vision
+            && let Some((profile, hit_suite)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
-            {
-                return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                    true, true, hit_suite, advertised,
-                )));
-            }
+        {
+            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+                true, true, hit_suite, advertised,
+            )));
         }
     }
     let catalog = CatalogPriors {
@@ -360,10 +360,10 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
     if raw == "~" {
         return home_dir().unwrap_or(path);
     }
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(rest);
     }
     path
 }

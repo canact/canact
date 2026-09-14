@@ -2,7 +2,7 @@
 name = "canact"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 publish = true
 description = "Probe an LLM and return host policy: max tools, edit format, XML fallback, JSON repair"
@@ -25,7 +25,7 @@ futures = { version = "0.3", optional = true }
 default = []
 runtime = ["dep:tokio", "dep:futures", "dep:tracing"]
 cli = ["runtime", "dep:clap", "openai", "dep:dirs"]
-openai = ["dep:reqwest"]
+openai = ["dep:wiremux", "dep:wiremux-auth"]
 
 [dependencies.clap]
 version = "4"
@@ -36,11 +36,15 @@ features = ["derive"]
 version = "7"
 optional = true
 
-[dependencies.reqwest]
-version = "0.13"
+[dependencies.wiremux]
+version = "0.2.1"
 optional = true
 default-features = false
-features = ["json", "stream", "rustls"]
+features = ["client"]
+
+[dependencies.wiremux-auth]
+version = "0.2.1"
+optional = true
 
 [dev-dependencies]
 tempfile = "3"

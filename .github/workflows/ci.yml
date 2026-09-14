@@ -48,7 +48,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
-          toolchain: "1.85"
+          toolchain: "1.95"
           components: rustfmt, clippy
       - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2
         with:
@@ -110,7 +110,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
-          toolchain: "1.85"
+          toolchain: "1.95"
       - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2
         if: >-
           github.event_name != 'pull_request' ||

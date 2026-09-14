@@ -88,10 +88,10 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                             current_name = None;
                         }
                     }
-                    ProbeStreamChunk::ToolCallArgDelta { delta } => {
-                        if current_name.as_deref() == Some("read_file") {
-                            current_args.push_str(delta);
-                        }
+                    ProbeStreamChunk::ToolCallArgDelta { delta }
+                        if current_name.as_deref() == Some("read_file") =>
+                    {
+                        current_args.push_str(delta);
                     }
                     ProbeStreamChunk::ToolCallEnd => {
                         flush_read_file_args(

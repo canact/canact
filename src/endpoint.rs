@@ -134,15 +134,15 @@ pub fn resolve_api_key_from(
         openrouter.is_some() && openai.is_none() && openrouter_default_ok(provider);
     let from_xai = xai.is_some() && openai.is_none() && xai_default_ok(provider);
     let from_anthropic = anthropic.is_some() && openai.is_none() && anthropic_default_ok(provider);
-    if let Some(key) = cli {
-        if !key.is_empty() {
-            return KeyRoute {
-                key: Some(key),
-                from_openrouter,
-                from_xai: from_xai && !from_openrouter,
-                from_anthropic: from_anthropic && !from_openrouter && !from_xai,
-            };
-        }
+    if let Some(key) = cli
+        && !key.is_empty()
+    {
+        return KeyRoute {
+            key: Some(key),
+            from_openrouter,
+            from_xai: from_xai && !from_openrouter,
+            from_anthropic: from_anthropic && !from_openrouter && !from_xai,
+        };
     }
     if let Some(key) = openai {
         return KeyRoute {
@@ -283,10 +283,12 @@ fn url_host_port_hint(url: &str) -> String {
 }
 
 fn host_without_port(hostport: &str) -> &str {
-    if let Some((host, port)) = hostport.rsplit_once(':') {
-        if !host.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
-            return host;
-        }
+    if let Some((host, port)) = hostport.rsplit_once(':')
+        && !host.is_empty()
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+    {
+        return host;
     }
     hostport
 }

@@ -53,7 +53,7 @@ canact = { version = "0.2", default-features = false, features = ["runtime"] }
 ```
 
 Default features are empty so a host pin does not pull clap. MSRV is
-Rust 1.85.
+Rust 1.95.
 
 ## Getting started
 
