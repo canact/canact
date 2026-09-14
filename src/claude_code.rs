@@ -1,7 +1,9 @@
 //! Claude Code local OAuth access token via `wiremux-auth`.
 //!
 //! Refresh, keychain, and file parse live in the shipped `anthropic-oauth`
-//! profile. Env `ANTHROPIC_*` still wins at the caller.
+//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.3.0
+//! tries the process login name before the shipped `Claude Code` /
+//! `credentials` keychain accounts.
 
 /// Test hook kept so existing CLI/MCP tests compile. Isolation is owned by
 /// `wiremux-auth` `IsolatedHome` (feature `test-util`).
@@ -28,55 +30,32 @@ pub fn claude_code_access_token() -> Option<String> {
             .enable_all()
             .build()
             .ok()?;
-        rt.block_on(async {
-            let opts = wiremux_auth::LoadOptions::default();
-            let mut profile = wiremux_auth::load_profile("anthropic-oauth", &opts).ok()?;
-            prepend_login_user_keychain_account(&mut profile);
-            let provider = wiremux_auth::provider_from_profile(&profile).ok()?;
-            wiremux_auth::TokenProvider::get_token(&provider).await.ok()
-        })
+        rt.block_on(wiremux_auth::token_for_profile("anthropic-oauth"))
+            .ok()
     })
     .join()
     .ok()
     .flatten()
 }
 
-/// Claude Code stores the oat under the login `USER` account. The shipped
-/// preset only lists `Claude Code` and `credentials`.
-fn login_user_account() -> Option<String> {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .ok()
-        .filter(|s| !s.is_empty())
-}
-
-fn prepend_login_user_keychain_account(profile: &mut wiremux_auth::ResolvedProfile) {
-    let Some(oauth) = profile.oauth.as_mut() else {
-        return;
-    };
-    let Some(user) = login_user_account() else {
-        return;
-    };
-    if oauth.keychain_accounts.iter().any(|a| a == &user) {
-        return;
-    }
-    oauth.keychain_accounts.insert(0, user);
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn prepends_login_user_before_shipped_keychain_accounts() {
+    fn shipped_anthropic_oauth_profile_loads() {
         let opts = wiremux_auth::LoadOptions::default();
-        let mut profile =
-            wiremux_auth::load_profile("anthropic-oauth", &opts).expect("shipped profile");
-        let user = login_user_account().expect("USER or USERNAME");
-        prepend_login_user_keychain_account(&mut profile);
+        let profile =
+            wiremux_auth::load_profile("anthropic-oauth", &opts).expect("shipped anthropic-oauth");
+        assert_eq!(profile.id, "anthropic-oauth");
         let accounts = profile.oauth.expect("oauth").keychain_accounts;
-        assert_eq!(accounts.first().map(String::as_str), Some(user.as_str()));
         assert!(accounts.iter().any(|a| a == "Claude Code"));
         assert!(accounts.iter().any(|a| a == "credentials"));
+    }
+
+    #[test]
+    fn shipped_xai_oauth_profile_loads() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let profile = wiremux_auth::load_profile("xai-oauth", &opts).expect("shipped xai-oauth");
+        assert_eq!(profile.id, "xai-oauth");
+        assert_eq!(profile.http.base_url.as_deref(), Some("https://api.x.ai"));
     }
 }

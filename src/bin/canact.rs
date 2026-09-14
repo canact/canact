@@ -8,7 +8,7 @@ use canact::{
     PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
     claude_code_access_token, finalize_key_route, list_model_ids, looks_cheap,
     missing_cloud_key_message, missing_model_message, refuse_cloud_without_key,
-    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
+    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio, should_load_claude_code_login,
 };
 use clap::{Parser, Subcommand};
 
@@ -445,6 +445,17 @@ fn emit_envelope(
 }
 
 fn resolve_api_key(cli: Option<String>, provider: &str) -> canact::KeyRoute {
+    let openai = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let openrouter = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let xai = std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty());
+    let other_cloud_keys = openai.is_some()
+        || openrouter.is_some()
+        || xai.is_some()
+        || cli.as_ref().is_some_and(|s| !s.is_empty());
     let anthropic = std::env::var("ANTHROPIC_AUTH_TOKEN")
         .ok()
         .filter(|s| !s.is_empty())
@@ -453,19 +464,14 @@ fn resolve_api_key(cli: Option<String>, provider: &str) -> canact::KeyRoute {
                 .ok()
                 .filter(|s| !s.is_empty())
         })
-        .or_else(claude_code_access_token);
-    resolve_api_key_from(
-        cli,
-        std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("OPENROUTER_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()),
-        anthropic,
-        provider,
-    )
+        .or_else(|| {
+            if should_load_claude_code_login(provider, other_cloud_keys) {
+                claude_code_access_token()
+            } else {
+                None
+            }
+        });
+    resolve_api_key_from(cli, openai, openrouter, xai, anthropic, provider)
 }
 
 async fn resolve_model(
