@@ -43,14 +43,21 @@ pub fn claude_code_access_token() -> Option<String> {
 
 /// Claude Code stores the oat under the login `USER` account. The shipped
 /// preset only lists `Claude Code` and `credentials`.
+fn login_user_account() -> Option<String> {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
 fn prepend_login_user_keychain_account(profile: &mut wiremux_auth::ResolvedProfile) {
     let Some(oauth) = profile.oauth.as_mut() else {
         return;
     };
-    let Ok(user) = std::env::var("USER") else {
+    let Some(user) = login_user_account() else {
         return;
     };
-    if user.is_empty() || oauth.keychain_accounts.iter().any(|a| a == &user) {
+    if oauth.keychain_accounts.iter().any(|a| a == &user) {
         return;
     }
     oauth.keychain_accounts.insert(0, user);
@@ -65,7 +72,7 @@ mod tests {
         let opts = wiremux_auth::LoadOptions::default();
         let mut profile =
             wiremux_auth::load_profile("anthropic-oauth", &opts).expect("shipped profile");
-        let user = std::env::var("USER").expect("USER");
+        let user = login_user_account().expect("USER or USERNAME");
         prepend_login_user_keychain_account(&mut profile);
         let accounts = profile.oauth.expect("oauth").keychain_accounts;
         assert_eq!(accounts.first().map(String::as_str), Some(user.as_str()));
