@@ -70,6 +70,8 @@ impl CapabilityProfile {
             "Vision:",
             if self.supports_vision() {
                 "supported"
+            } else if self.vision.measured_level().is_none() {
+                "not probed"
             } else {
                 "not supported"
             }
@@ -81,6 +83,9 @@ impl CapabilityProfile {
             None => {
                 let _ = writeln!(out, "{:<28}unlimited", "Max tools:");
             }
+        }
+        if let Some(n) = advertised {
+            let _ = writeln!(out, "{:<28}{n}", "Advertised context tokens:");
         }
         if let Some(n) = self.recommended_context_tokens(advertised) {
             let _ = writeln!(out, "{:<28}{n}", "Recommended context tokens:");
