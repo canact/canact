@@ -7,8 +7,8 @@ use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient,
     PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
     claude_code_access_token, finalize_key_route, list_model_ids, looks_cheap,
-    missing_model_message, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
-    run_mcp_stdio,
+    missing_cloud_key_message, missing_model_message, refuse_cloud_without_key,
+    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio,
 };
 use clap::{Parser, Subcommand};
 
@@ -218,9 +218,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     }
 
     if refuse_cloud_without_key(api_key.as_deref(), &base_url) {
-        eprintln!(
-            "error: set --api-key, OPENAI_API_KEY, OPENROUTER_API_KEY, XAI_API_KEY, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY (or pass --base-url for a local host)"
-        );
+        eprintln!("{}", missing_cloud_key_message(&provider, &base_url));
         return Err(1);
     }
     let model = resolve_model(&args, &base_url, api_key.as_deref()).await?;
@@ -298,25 +296,35 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
     })?;
-    let profile = match args.advertised_context {
+    let (profile, cached_advertised) = match args.advertised_context {
         Some(n) => cache
             .find_profile_with_cost_and_advertised(&args.model, &args.provider, Some(n))
-            .map(|(p, _)| p)
-            .or_else(|| cache.find_profile(&args.model, &args.provider)),
-        None => cache.find_profile(&args.model, &args.provider),
+            .map(|(p, _)| (p, Some(n)))
+            .or_else(|| cache.find_profile_and_advertised(&args.model, &args.provider)),
+        None => cache.find_profile_and_advertised(&args.model, &args.provider),
     }
-    .cloned()
+    .map(|(p, advertised)| (p.clone(), advertised))
     .ok_or_else(|| {
-        eprintln!(
-            "error: no cached probe for {} / {} (run `canact probe` first)",
-            args.model, args.provider
-        );
+        if let Some(stale) = cache.stale_suite_version(&args.model, &args.provider) {
+            eprintln!(
+                "error: cached probe for {} / {} is suite {stale} (need {}); run `canact probe` again",
+                args.model,
+                args.provider,
+                canact::PROBE_SUITE_VERSION
+            );
+        } else {
+            eprintln!(
+                "error: no cached probe for {} / {} (run `canact probe` first)",
+                args.model, args.provider
+            );
+        }
         1u8
     })?;
+    let advertised = args.advertised_context.or(cached_advertised);
     let overlay = if args.aider {
-        HostOverlay::aider(&profile, args.advertised_context)
+        HostOverlay::aider(&profile, advertised)
     } else {
-        HostOverlay::cline(&profile, args.advertised_context)
+        HostOverlay::cline(&profile, advertised)
     };
     let files = overlay.files();
     let dir = expand_tilde(args.dir.clone().unwrap_or_else(|| PathBuf::from(".")));
@@ -356,10 +364,18 @@ fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
     })?;
     let matrix = PlumbingMatrix::from_cache(&cache, &args.provider);
     if matrix.rows.is_empty() {
-        eprintln!(
-            "error: no cached probes for {} (run `canact probe` first)",
-            args.provider
-        );
+        if let Some(stale) = cache.stale_suite_version_for_provider(&args.provider) {
+            eprintln!(
+                "error: cached {} probes are suite {stale} (need {}); run `canact probe` again",
+                args.provider,
+                canact::PROBE_SUITE_VERSION
+            );
+        } else {
+            eprintln!(
+                "error: no cached probes for {} (run `canact probe` first)",
+                args.provider
+            );
+        }
         return Err(1);
     }
     match serde_json::to_string_pretty(&matrix) {

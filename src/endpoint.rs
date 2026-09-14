@@ -224,6 +224,41 @@ pub fn refuse_cloud_without_key(api_key: Option<&str>, base_url: &str) -> bool {
     api_key.is_none() && cloud_endpoint_requires_key(base_url)
 }
 
+/// True when `{base}` is api.x.ai (or another xAI host).
+fn is_xai_cloud_host(base_url: &str) -> bool {
+    let host = url_host_hint(base_url);
+    let host = host.trim_end_matches('.');
+    host == "api.x.ai" || host == "x.ai" || host.ends_with(".x.ai")
+}
+
+/// Named-provider missing-key text. Do not list env vars the route will ignore.
+pub fn missing_cloud_key_message(provider: &str, base_url: &str) -> &'static str {
+    if is_xai_provider_label(provider) || is_xai_cloud_host(base_url) {
+        "error: set --api-key or XAI_API_KEY for xAI (OPENAI_API_KEY is not sent)"
+    } else if is_anthropic_provider_label(provider) || is_anthropic_cloud_host(base_url) {
+        "error: set --api-key, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY for Anthropic (OPENAI_API_KEY is not sent)"
+    } else if openrouter_default_ok(provider) && !provider.is_empty() {
+        "error: set --api-key, OPENROUTER_API_KEY, or OPENAI_API_KEY for OpenRouter"
+    } else if is_openai_provider_label(provider) || is_openai_cloud_host(base_url) {
+        "error: set --api-key or OPENAI_API_KEY"
+    } else {
+        "error: set --api-key, OPENAI_API_KEY, OPENROUTER_API_KEY, XAI_API_KEY, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY (or pass --base-url for a local host)"
+    }
+}
+
+fn is_openai_provider_label(provider: &str) -> bool {
+    matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "openai" | "api.openai.com"
+    )
+}
+
+fn is_openai_cloud_host(base_url: &str) -> bool {
+    let host = url_host_hint(base_url);
+    let host = host.trim_end_matches('.');
+    host == "api.openai.com" || host.ends_with(".openai.com")
+}
+
 /// After an explicit base URL is known, re-resolve the key when
 /// the user omitted `--provider` / MCP `provider`.
 pub fn finalize_key_route(
@@ -398,6 +433,24 @@ mod tests {
             Some("sk"),
             "https://api.openai.com/v1"
         ));
+    }
+
+    #[test]
+    fn missing_cloud_key_message_names_the_route() {
+        let xai = missing_cloud_key_message("xai", "https://api.x.ai/v1");
+        assert!(xai.contains("XAI_API_KEY"), "{xai}");
+        assert!(
+            !xai.contains("set --api-key, OPENAI_API_KEY"),
+            "xAI must not list OPENAI_API_KEY as the fix: {xai}"
+        );
+        let claude = missing_cloud_key_message("claude", "https://api.anthropic.com/v1");
+        assert!(claude.contains("ANTHROPIC_AUTH_TOKEN"), "{claude}");
+        assert!(
+            !claude.contains("set --api-key, OPENAI_API_KEY"),
+            "Claude must not list OPENAI_API_KEY as the fix: {claude}"
+        );
+        let openai = missing_cloud_key_message("openai", "https://api.openai.com/v1");
+        assert!(openai.contains("OPENAI_API_KEY"), "{openai}");
     }
 
     #[test]

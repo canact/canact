@@ -15,8 +15,8 @@ pub use endpoint::{
     ANTHROPIC_BASE_URL, KeyRoute, LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, XAI_BASE_URL,
     cloud_endpoint_requires_key, default_compat_base_url, finalize_key_route,
     is_anthropic_cloud_host, is_anthropic_provider_label, is_ollama_compat_base,
-    is_xai_provider_label, local_provider_base_url, looks_cheap, provider_from_base_url,
-    refuse_cloud_without_key, resolve_api_key_from,
+    is_xai_provider_label, local_provider_base_url, looks_cheap, missing_cloud_key_message,
+    provider_from_base_url, refuse_cloud_without_key, resolve_api_key_from,
 };
 pub use error::ProbeError;
 pub use matrix::{PlumbingCell, PlumbingMatrix, PlumbingRow};
