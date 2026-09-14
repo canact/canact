@@ -144,6 +144,24 @@ pub fn resolve_api_key_from(
             from_anthropic: from_anthropic && !from_openrouter && !from_xai,
         };
     }
+    if is_xai_provider_label(provider) {
+        let key = xai.filter(|s| !s.is_empty());
+        return KeyRoute {
+            from_xai: key.is_some(),
+            key,
+            from_openrouter: false,
+            from_anthropic: false,
+        };
+    }
+    if is_anthropic_provider_label(provider) {
+        let key = anthropic.filter(|s| !s.is_empty());
+        return KeyRoute {
+            from_anthropic: key.is_some(),
+            key,
+            from_openrouter: false,
+            from_xai: false,
+        };
+    }
     if let Some(key) = openai {
         return KeyRoute {
             key: Some(key),
@@ -719,5 +737,78 @@ mod tests {
         assert!(!route.from_xai);
         assert_eq!(base_url, XAI_BASE_URL);
         assert_eq!(provider, "claude");
+    }
+
+    #[test]
+    fn named_xai_provider_does_not_use_openai_key() {
+        let route = resolve_api_key_from(
+            None,
+            Some("sk-openai".to_owned()),
+            None,
+            Some("xai-env".to_owned()),
+            None,
+            "api.x.ai",
+        );
+        assert_eq!(route.key.as_deref(), Some("xai-env"));
+        assert!(route.from_xai);
+        assert!(!route.from_anthropic);
+    }
+
+    #[test]
+    fn finalize_key_route_explicit_xai_url_does_not_use_openai_key() {
+        let first = resolve_api_key_from(
+            None,
+            Some("sk-openai".to_owned()),
+            None,
+            Some("xai-env".to_owned()),
+            None,
+            "",
+        );
+        assert_eq!(
+            first.key.as_deref(),
+            Some("sk-openai"),
+            "precondition: empty provider still prefers OPENAI_API_KEY"
+        );
+        let (route, base_url, provider) =
+            finalize_key_route("", Some(XAI_BASE_URL.to_owned()), first, |p| {
+                resolve_api_key_from(
+                    None,
+                    Some("sk-openai".to_owned()),
+                    None,
+                    Some("xai-env".to_owned()),
+                    None,
+                    p,
+                )
+            });
+        assert_eq!(route.key.as_deref(), Some("xai-env"));
+        assert!(route.from_xai);
+        assert_eq!(base_url, XAI_BASE_URL);
+        assert_eq!(provider, "api.x.ai");
+    }
+
+    #[test]
+    fn finalize_key_route_explicit_anthropic_url_does_not_use_openai_key() {
+        let first = resolve_api_key_from(
+            None,
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            Some("sk-ant-env".to_owned()),
+            "",
+        );
+        let (route, _, provider) =
+            finalize_key_route("", Some(ANTHROPIC_BASE_URL.to_owned()), first, |p| {
+                resolve_api_key_from(
+                    None,
+                    Some("sk-openai".to_owned()),
+                    None,
+                    None,
+                    Some("sk-ant-env".to_owned()),
+                    p,
+                )
+            });
+        assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
+        assert!(route.from_anthropic);
+        assert_eq!(provider, "api.anthropic.com");
     }
 }
