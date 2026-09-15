@@ -1,9 +1,11 @@
 //! Claude Code local OAuth access token via `wiremux-auth`.
 //!
 //! Refresh, keychain, and file parse live in the shipped `anthropic-oauth`
-//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.3.0
+//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.4.0
 //! tries the process login name before the shipped `Claude Code` /
-//! `credentials` keychain accounts.
+//! `credentials` keychain accounts. Hosts that only need a stored
+//! Bearer use `token_for_profile_cached` so an expired oat does not
+//! POST `token_url`.
 
 /// Test hook kept so existing CLI/MCP tests compile. Isolation is owned by
 /// `wiremux-auth` `IsolatedHome` (feature `test-util`).
@@ -30,7 +32,7 @@ pub fn claude_code_access_token() -> Option<String> {
             .enable_all()
             .build()
             .ok()?;
-        rt.block_on(wiremux_auth::token_for_profile("anthropic-oauth"))
+        rt.block_on(wiremux_auth::token_for_profile_cached("anthropic-oauth"))
             .ok()
     })
     .join()
@@ -47,7 +49,7 @@ pub fn xai_oauth_access_token() -> Option<String> {
             .enable_all()
             .build()
             .ok()?;
-        rt.block_on(wiremux_auth::token_for_profile("xai-oauth"))
+        rt.block_on(wiremux_auth::token_for_profile_cached("xai-oauth"))
             .ok()
     })
     .join()
@@ -74,5 +76,41 @@ mod tests {
         let profile = wiremux_auth::load_profile("xai-oauth", &opts).expect("shipped xai-oauth");
         assert_eq!(profile.id, "xai-oauth");
         assert_eq!(profile.http.base_url.as_deref(), Some("https://api.x.ai"));
+        assert!(
+            !profile.http.headers.contains_key("x-grok-client-version"),
+            "api.x.ai must not send a Grok CLI version header"
+        );
+    }
+
+    #[test]
+    fn shipped_xai_grok_build_profile_loads() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let profile =
+            wiremux_auth::load_profile("xai-grok-build", &opts).expect("shipped xai-grok-build");
+        assert_eq!(profile.id, "xai-grok-build");
+        assert_eq!(
+            profile.http.base_url.as_deref(),
+            Some("https://cli-chat-proxy.grok.com")
+        );
+        assert_eq!(
+            profile
+                .http
+                .headers
+                .get("x-grok-client-version")
+                .map(String::as_str),
+            Some("0.1.202"),
+            "cli-chat-proxy returns HTTP 426 without a Grok CLI version"
+        );
+        assert_eq!(
+            profile
+                .http
+                .headers
+                .get("x-grok-client-identifier")
+                .map(String::as_str),
+            Some("wiremux")
+        );
+        let oauth = profile.oauth.expect("oauth");
+        let client = oauth.client_id.as_deref().map(str::trim).unwrap_or("");
+        assert!(client.is_empty(), "must not ship a product client id");
     }
 }

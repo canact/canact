@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.3.0.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.4.0.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -18,7 +18,7 @@ use crate::client::{
     CatalogPriors, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeRequest,
     ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeToolCall, ProbeUsage,
 };
-use crate::endpoint::is_anthropic_cloud_host;
+use crate::endpoint::{is_anthropic_cloud_host, is_grok_build_cloud_host};
 use crate::error::ProbeError;
 use crate::{finish_from_reason, strip_think_blocks};
 
@@ -336,6 +336,9 @@ fn wire_client_for(
     if is_anthropic_cloud_host(base_url) {
         return anthropic_client(api_key);
     }
+    if is_grok_build_cloud_host(base_url) {
+        return shipped_client("xai-grok-build", api_key);
+    }
     let (origin, chat_path) = split_compat_base(base_url);
     let scheme = if api_key.is_some_and(|k| !k.trim().is_empty()) {
         "bearer"
@@ -353,13 +356,17 @@ fn wire_client_for(
 }
 
 fn anthropic_client(api_key: Option<&str>) -> Result<WireClient, ProbeError> {
+    let oat = api_key.is_some_and(|k| k.starts_with("sk-ant-oat"));
+    let id = if oat { "anthropic-oauth" } else { "anthropic" };
+    shipped_client(id, api_key)
+}
+
+fn shipped_client(id: &str, api_key: Option<&str>) -> Result<WireClient, ProbeError> {
     let opts = LoadOptions {
         include_user_config: true,
         include_shipped: true,
         ..LoadOptions::default()
     };
-    let oat = api_key.is_some_and(|k| k.starts_with("sk-ant-oat"));
-    let id = if oat { "anthropic-oauth" } else { "anthropic" };
     let profile =
         wiremux::load_profile(id, &opts).map_err(|err| ProbeError::Internal(err.to_string()))?;
     let provider = match api_key {

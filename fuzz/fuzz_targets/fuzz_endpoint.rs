@@ -6,6 +6,9 @@ fuzz_target!(|data: &str| {
     let _ = canact::provider_from_base_url(data);
     let _ = canact::local_provider_base_url(data);
     let _ = canact::is_xai_provider_label(data);
+    let _ = canact::is_grok_build_provider_label(data);
+    let _ = canact::is_grok_build_cloud_host(data);
+    let _ = canact::uses_xai_credentials(data);
     let _ = canact::is_anthropic_provider_label(data);
     let _ = canact::is_anthropic_cloud_host(data);
     let _ = canact::is_ollama_compat_base(data);
