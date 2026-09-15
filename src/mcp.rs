@@ -9,9 +9,9 @@ use serde_json::{Value, json};
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
-    is_anthropic_provider_label, is_xai_provider_label, looks_cheap, refuse_cloud_without_key,
-    resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
-    should_load_xai_oauth, xai_oauth_access_token,
+    is_anthropic_provider_label, looks_cheap, refuse_cloud_without_key, resolve_api_key_from,
+    resolve_host_catalog, should_load_claude_code_login, should_load_xai_oauth,
+    uses_xai_credentials, xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -383,7 +383,7 @@ fn mcp_resolve_key_route(
 fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
     match api_key_env {
         Some(var) if !var.is_empty() => format!("{var} is unset or empty"),
-        _ if is_xai_provider_label(provider) => {
+        _ if uses_xai_credentials(provider) => {
             "set api_key_env or XAI_API_KEY for xAI (OPENAI_API_KEY is not sent)".to_owned()
         }
         _ if is_anthropic_provider_label(provider) => {

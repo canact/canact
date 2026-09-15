@@ -8,6 +8,8 @@ pub const LMSTUDIO_BASE_URL: &str = "http://127.0.0.1:1234/v1";
 pub const VLLM_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 /// xAI OpenAI-compatible listener (`--provider xai` / `grok`).
 pub const XAI_BASE_URL: &str = "https://api.x.ai/v1";
+/// Grok Build CLI proxy (`--provider grok-build` / `xai-grok-build`).
+pub const GROK_BUILD_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 /// Anthropic OpenAI-compatible listener (`--provider claude` / `anthropic`).
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 
@@ -30,7 +32,9 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
         return local;
     }
     let provider = provider.to_ascii_lowercase();
-    if is_xai_provider_label(&provider) {
+    if is_grok_build_provider_label(&provider) {
+        GROK_BUILD_BASE_URL.to_owned()
+    } else if is_xai_provider_label(&provider) {
         XAI_BASE_URL.to_owned()
     } else if is_anthropic_provider_label(&provider) {
         ANTHROPIC_BASE_URL.to_owned()
@@ -47,6 +51,23 @@ pub fn is_xai_provider_label(provider: &str) -> bool {
         provider.to_ascii_lowercase().as_str(),
         "xai" | "grok" | "api.x.ai" | "x.ai"
     )
+}
+
+/// `--provider grok-build` / `xai-grok-build` / `cli-chat-proxy.grok.com`.
+///
+/// Distinct from [`is_xai_provider_label`]: that family chats at
+/// `api.x.ai`. This family needs the shipped `xai-grok-build` header
+/// pack (`x-grok-client-version`) or the proxy returns HTTP 426.
+pub fn is_grok_build_provider_label(provider: &str) -> bool {
+    matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "grok-build" | "xai-grok-build" | "cli-chat-proxy.grok.com"
+    )
+}
+
+/// True when the route uses xAI env keys or `~/.grok/auth.json`.
+pub fn uses_xai_credentials(provider: &str) -> bool {
+    is_xai_provider_label(provider) || is_grok_build_provider_label(provider)
 }
 
 /// `--provider claude` / `anthropic` / `api.anthropic.com`.
@@ -111,14 +132,14 @@ fn openrouter_default_ok(provider: &str) -> bool {
 }
 
 fn xai_default_ok(provider: &str) -> bool {
-    provider.is_empty() || is_xai_provider_label(provider)
+    provider.is_empty() || uses_xai_credentials(provider)
 }
 
 fn anthropic_default_ok(provider: &str) -> bool {
     provider.is_empty() || is_anthropic_provider_label(provider)
 }
 
-/// Whether to call `token_for_profile("anthropic-oauth")`.
+/// Whether to call `token_for_profile_cached("anthropic-oauth")`.
 ///
 /// Skip on named non-Anthropic routes so an expired Claude Code keychain
 /// item cannot stall an Ollama or xAI probe while wiremux refreshes.
@@ -135,10 +156,11 @@ pub fn should_load_claude_code_login(
     is_anthropic_provider_label(provider) || (provider.is_empty() && !other_cloud_keys)
 }
 
-/// Whether to call `token_for_profile("xai-oauth")` (`~/.grok/auth.json`).
+/// Whether to call `token_for_profile_cached("xai-oauth")` (`~/.grok/auth.json`).
 ///
 /// Same skip rules as [`should_load_claude_code_login`]: named non-xAI
 /// routes and a first resolve with `--base-url` must not read Grok login.
+/// `--provider grok-build` uses the same pack (different host and headers).
 pub fn should_load_xai_oauth(
     provider: &str,
     other_cloud_keys: bool,
@@ -147,7 +169,7 @@ pub fn should_load_xai_oauth(
     if provider.is_empty() && explicit_base_url {
         return false;
     }
-    is_xai_provider_label(provider) || (provider.is_empty() && !other_cloud_keys)
+    uses_xai_credentials(provider) || (provider.is_empty() && !other_cloud_keys)
 }
 
 /// Pick a key and host flags from injected values. Parse `provider` first.
@@ -176,7 +198,7 @@ pub fn resolve_api_key_from(
             from_anthropic: from_anthropic && !from_openrouter && !from_xai,
         };
     }
-    if is_xai_provider_label(provider) {
+    if uses_xai_credentials(provider) {
         let key = xai.filter(|s| !s.is_empty());
         return KeyRoute {
             from_xai: key.is_some(),
@@ -249,6 +271,8 @@ pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
         || host.ends_with(".x.ai")
         || host == "api.anthropic.com"
         || host.ends_with(".anthropic.com")
+        || host == "cli-chat-proxy.grok.com"
+        || host.ends_with(".cli-chat-proxy.grok.com")
 }
 
 /// True when a cloud host must not be called without an API key.
@@ -263,9 +287,19 @@ fn is_xai_cloud_host(base_url: &str) -> bool {
     host == "api.x.ai" || host == "x.ai" || host.ends_with(".x.ai")
 }
 
+/// True when `{base}` is the Grok Build CLI proxy.
+pub fn is_grok_build_cloud_host(base_url: &str) -> bool {
+    let host = url_host_hint(base_url);
+    let host = host.trim_end_matches('.');
+    host == "cli-chat-proxy.grok.com" || host.ends_with(".cli-chat-proxy.grok.com")
+}
+
 /// Named-provider missing-key text. Do not list env vars the route will ignore.
 pub fn missing_cloud_key_message(provider: &str, base_url: &str) -> &'static str {
-    if is_xai_provider_label(provider) || is_xai_cloud_host(base_url) {
+    if uses_xai_credentials(provider)
+        || is_xai_cloud_host(base_url)
+        || is_grok_build_cloud_host(base_url)
+    {
         "error: set --api-key or XAI_API_KEY for xAI (OPENAI_API_KEY is not sent)"
     } else if is_anthropic_provider_label(provider) || is_anthropic_cloud_host(base_url) {
         "error: set --api-key, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY for Anthropic (OPENAI_API_KEY is not sent)"
@@ -459,6 +493,10 @@ mod tests {
         assert!(refuse_cloud_without_key(
             None,
             "https://api.anthropic.com/v1"
+        ));
+        assert!(refuse_cloud_without_key(
+            None,
+            "https://cli-chat-proxy.grok.com/v1"
         ));
         assert!(!refuse_cloud_without_key(None, "http://127.0.0.1:11434/v1"));
         assert!(!refuse_cloud_without_key(
@@ -730,6 +768,52 @@ mod tests {
         );
         assert!(!cloud_endpoint_requires_key("https://notx.ai.internal/v1"));
         assert_eq!(provider_from_base_url(XAI_BASE_URL), "api.x.ai");
+    }
+
+    #[test]
+    fn grok_build_provider_defaults_to_cli_proxy_and_requires_key() {
+        for provider in ["grok-build", "xai-grok-build", "cli-chat-proxy.grok.com"] {
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                GROK_BUILD_BASE_URL,
+                "provider {provider} must not default to api.x.ai"
+            );
+            assert_eq!(
+                default_compat_base_url(provider, true),
+                GROK_BUILD_BASE_URL,
+                "provider {provider} must stay on grok-build even when OpenRouter env is set"
+            );
+            assert!(
+                is_grok_build_provider_label(provider),
+                "{provider} is the Grok Build family"
+            );
+            assert!(
+                !is_xai_provider_label(provider),
+                "{provider} must not share the api.x.ai label"
+            );
+            assert!(uses_xai_credentials(provider));
+        }
+        assert_eq!(
+            default_compat_base_url("grok", false),
+            XAI_BASE_URL,
+            "`grok` stays on api.x.ai; grok-build is the CLI proxy"
+        );
+        assert!(cloud_endpoint_requires_key(GROK_BUILD_BASE_URL));
+        assert!(is_grok_build_cloud_host(GROK_BUILD_BASE_URL));
+        assert!(
+            cloud_endpoint_requires_key("https://cli-chat-proxy.grok.com./v1"),
+            "trailing-dot cli-chat-proxy.grok.com. must still require a key"
+        );
+        assert!(!is_grok_build_cloud_host(XAI_BASE_URL));
+        let msg = missing_cloud_key_message("grok-build", GROK_BUILD_BASE_URL);
+        assert!(msg.contains("XAI_API_KEY"), "{msg}");
+        assert!(
+            !msg.contains("set --api-key, OPENAI_API_KEY"),
+            "grok-build must not list OPENAI_API_KEY as the fix: {msg}"
+        );
+        assert!(should_load_xai_oauth("grok-build", false, false));
+        assert!(should_load_xai_oauth("xai-grok-build", true, false));
+        assert!(!should_load_claude_code_login("grok-build", false, false));
     }
 
     #[test]
