@@ -372,7 +372,7 @@ fn mcp_resolve_key_route(
         Some(var) if !var.is_empty() => KeyRoute {
             key: named_key,
             from_openrouter: var == "OPENROUTER_API_KEY",
-            from_xai: var == "XAI_API_KEY",
+            from_xai: var == "XAI_API_KEY" || var == "GROK_API_KEY",
             from_anthropic: var == "ANTHROPIC_AUTH_TOKEN" || var == "ANTHROPIC_API_KEY",
         },
         _ => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
@@ -697,6 +697,35 @@ mod tests {
             !err.contains("OPENAI_API_KEY") && !err.contains("XAI_API_KEY"),
             "named api_key_env error must not list fallback env vars: {err}"
         );
+    }
+
+    #[test]
+    fn mcp_named_grok_api_key_env_sets_from_xai() {
+        let route = mcp_resolve_key_route(
+            Some("GROK_API_KEY"),
+            Some("xai-from-grok-env".to_owned()),
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "",
+        );
+        assert_eq!(route.key.as_deref(), Some("xai-from-grok-env"));
+        assert!(route.from_xai);
+        assert_eq!(route.default_base_url(""), XAI_BASE_URL);
+
+        let xai = mcp_resolve_key_route(
+            Some("XAI_API_KEY"),
+            Some("xai-named".into()),
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "",
+        );
+        assert_eq!(xai.key.as_deref(), Some("xai-named"));
+        assert!(xai.from_xai);
+        assert_eq!(xai.default_base_url(""), XAI_BASE_URL);
     }
 
     fn route_url(
