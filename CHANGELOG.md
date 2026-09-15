@@ -3,6 +3,23 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.6.0](https://github.com/canact/canact/compare/v0.5.0...v0.6.0) (2026-09-15)
+
+
+### Features
+
+* consume wiremux 0.3.0 ([#226](https://github.com/canact/canact/issues/226)) ([0b2ee16](https://github.com/canact/canact/commit/0b2ee16ff8befee3cd42087ded38bd5650870f85))
+* consume wiremux 0.4.0 ([#228](https://github.com/canact/canact/issues/228)) ([79ce145](https://github.com/canact/canact/commit/79ce145d73f8c1f88cbfe0c80710ac18e3200d03))
+* use Grok login when XAI_API_KEY is unset ([#227](https://github.com/canact/canact/issues/227)) ([e401cbd](https://github.com/canact/canact/commit/e401cbdba2a7dd890088d379188777c2ba854c5b))
+
+
+### Bug Fixes
+
+* print advertised window and unprobed vision in human table ([#225](https://github.com/canact/canact/issues/225)) ([f568108](https://github.com/canact/canact/commit/f568108f51b041b035894f96fb7d470d612814e2))
+* read USER Claude keychain and ignore catalog vision false ([#224](https://github.com/canact/canact/issues/224)) ([adb30f2](https://github.com/canact/canact/commit/adb30f2a86d8a5dd27c584fcafa97e3ada52a409))
+* recover advertised window and name missing cloud keys ([#222](https://github.com/canact/canact/issues/222)) ([dd0f44c](https://github.com/canact/canact/commit/dd0f44c630e3e1e2694787ae7b91650bff748e72))
+* treat MCP GROK_API_KEY as the xAI family ([#229](https://github.com/canact/canact/issues/229)) ([afab08b](https://github.com/canact/canact/commit/afab08b359215118560fedd8d0a74eb780927c67))
+
 ## [0.5.0](https://github.com/canact/canact/compare/v0.4.0...v0.5.0) (2026-09-14)
 
 
