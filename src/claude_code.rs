@@ -1,7 +1,7 @@
 //! Claude Code local OAuth access token via `wiremux-auth`.
 //!
 //! Refresh, keychain, and file parse live in the shipped `anthropic-oauth`
-//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.5.0
+//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.6.0
 //! tries the process login name before the shipped `Claude Code` /
 //! `credentials` keychain accounts. Hosts that only need a stored
 //! Bearer use `token_for_profile_cached` so an expired oat does not
@@ -150,7 +150,15 @@ mod tests {
         let ids = wiremux_auth::shipped_profile_ids();
         assert!(
             ids.contains(&"xai-grok-build-messages"),
-            "0.5.0 must ship the Messages Grok Build catalog: {ids:?}"
+            "0.6.0 must ship the Messages Grok Build catalog: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"amazon-bedrock"),
+            "0.6.0 must ship the Bedrock catalog: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"groq"),
+            "0.6.0 must ship the Groq catalog: {ids:?}"
         );
         for id in ids {
             let profile = wiremux_auth::load_profile(id, &opts)

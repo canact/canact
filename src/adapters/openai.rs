@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.5.0.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.6.0.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -442,24 +442,21 @@ fn ir_request(req: &ProbeRequest) -> IrRequest {
             }),
         }
     }
-    IrRequest {
-        model: req.model.clone(),
-        items,
-        tools: req
-            .tools
-            .iter()
-            .map(|tool| IrTool::Function {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                parameters: tool.parameters.clone(),
-            })
-            .collect(),
-        sampling: IrSampling {
-            temperature: req.temperature,
-            max_tokens: req.max_tokens,
-            ..IrSampling::default()
-        },
-    }
+    let mut sampling = IrSampling::default();
+    sampling.temperature = req.temperature;
+    sampling.max_tokens = req.max_tokens;
+    IrRequest::new(req.model.clone(), items)
+        .with_tools(
+            req.tools
+                .iter()
+                .map(|tool| IrTool::Function {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    parameters: tool.parameters.clone(),
+                })
+                .collect(),
+        )
+        .with_sampling(sampling)
 }
 
 fn content_text(content: &ProbeContent) -> String {
@@ -508,7 +505,7 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
                 }
                 current = Some((id, name, String::new()));
             }
-            IrStreamEvent::ToolCallArgDelta { delta } => {
+            IrStreamEvent::ToolCallArgDelta { delta, .. } => {
                 if let Some((_, _, args)) = &mut current {
                     args.push_str(&delta);
                 }
@@ -538,6 +535,7 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
             | IrStreamEvent::Protocol { .. }
             | IrStreamEvent::Unknown { .. }
             | IrStreamEvent::Done => {}
+            _ => {}
         }
     }
     if let Some(call) = current {
@@ -578,7 +576,7 @@ fn stream_chunk(event: IrStreamEvent) -> Option<ProbeStreamChunk> {
         IrStreamEvent::ToolCallStart { id, name, .. } => {
             Some(ProbeStreamChunk::ToolCallStart { id, name })
         }
-        IrStreamEvent::ToolCallArgDelta { delta } => {
+        IrStreamEvent::ToolCallArgDelta { delta, .. } => {
             Some(ProbeStreamChunk::ToolCallArgDelta { delta })
         }
         IrStreamEvent::ToolCallEnd => Some(ProbeStreamChunk::ToolCallEnd),
@@ -605,6 +603,7 @@ fn map_client_error(err: ClientError) -> ProbeError {
         ClientError::Vendor { message, .. } => ProbeError::Llm(redact_secrets(&message)),
         ClientError::Map(err) => ProbeError::Llm(redact_secrets(&err.to_string())),
         ClientError::Transport(message) => ProbeError::Transient(redact_secrets(&message)),
+        other => ProbeError::Transient(redact_secrets(&other.to_string())),
     }
 }
 
@@ -1105,6 +1104,24 @@ mod tests {
         assert_eq!(
             advertised_context_for_model(&models, "grok-4"),
             Some(1_000_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn list_models_keeps_grok_build_context_window() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "data": [{
+                "id": "grok-4.6",
+                "context_window": 500_000
+            }]
+        }))
+        .expect("json");
+        let base = spawn_http(200, "OK", body);
+        let models = list_models(&base, Some(SECRET)).await.expect("200");
+        assert_eq!(
+            advertised_context_for_model(&models, "grok-4.6"),
+            Some(500_000),
+            "wiremux 0.6.0 list_models must read context_window"
         );
     }
 
