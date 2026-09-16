@@ -134,6 +134,7 @@ pub struct HostCatalogHints {
 pub fn advertised_context_from_model_object(model: &Value) -> Option<u32> {
     json_positive_u32(model.get("context_length"))
         .or_else(|| json_positive_u32(model.get("max_input_tokens")))
+        .or_else(|| json_positive_u32(model.get("context_window")))
 }
 
 /// `Some(true)` when `/models` lists image input. Never `Some(false)`.
@@ -1135,6 +1136,12 @@ mod tests {
     fn advertised_context_from_anthropic_max_input() {
         let model = serde_json::json!({"id": "claude", "max_input_tokens": 200_000});
         assert_eq!(advertised_context_from_model_object(&model), Some(200_000));
+    }
+
+    #[test]
+    fn advertised_context_from_grok_build_context_window() {
+        let model = serde_json::json!({"id": "grok-4.6", "context_window": 500_000});
+        assert_eq!(advertised_context_from_model_object(&model), Some(500_000));
     }
 
     #[test]
