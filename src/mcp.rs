@@ -9,9 +9,10 @@ use serde_json::{Value, json};
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
-    is_anthropic_provider_label, looks_cheap, refuse_cloud_without_key, resolve_api_key_from,
-    resolve_host_catalog, should_load_claude_code_login, should_load_xai_oauth,
-    uses_xai_credentials, xai_oauth_access_token,
+    is_anthropic_provider_label, is_bedrock_provider_label, is_groq_provider_label, looks_cheap,
+    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
+    xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -153,10 +154,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or("");
     let api_key_env = args.get("api_key_env").and_then(Value::as_str);
-    let named_key = match api_key_env {
-        Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
-        _ => None,
-    };
+    let named_key = mcp_named_or_route_key(api_key_env, provider_given);
     let openai = std::env::var("OPENAI_API_KEY")
         .ok()
         .filter(|s| !s.is_empty());
@@ -241,10 +239,7 @@ async fn probe_model_with_route(
         .map(str::to_owned);
     let (route, base_url, provider) =
         finalize_key_route(provider_given, explicit_base_url, first, |provider| {
-            let named_key = match api_key_env {
-                Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
-                _ => None,
-            };
+            let named_key = mcp_named_or_route_key(api_key_env, provider);
             let openai = std::env::var("OPENAI_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty());
@@ -375,7 +370,23 @@ fn mcp_resolve_key_route(
             from_xai: var == "XAI_API_KEY" || var == "GROK_API_KEY",
             from_anthropic: var == "ANTHROPIC_AUTH_TOKEN" || var == "ANTHROPIC_API_KEY",
         },
+        _ if is_groq_provider_label(provider) || is_bedrock_provider_label(provider) => {
+            resolve_api_key_from(named_key, None, None, None, None, provider)
+        }
         _ => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
+    }
+}
+
+fn mcp_named_or_route_key(api_key_env: Option<&str>, provider: &str) -> Option<String> {
+    match api_key_env {
+        Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
+        _ if is_groq_provider_label(provider) => {
+            std::env::var("GROQ_API_KEY").ok().filter(|s| !s.is_empty())
+        }
+        _ if is_bedrock_provider_label(provider) => std::env::var("AWS_BEARER_TOKEN_BEDROCK")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        _ => None,
     }
 }
 
@@ -388,6 +399,12 @@ fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
         }
         _ if is_anthropic_provider_label(provider) => {
             "set api_key_env, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY for Anthropic (OPENAI_API_KEY is not sent)".to_owned()
+        }
+        _ if is_groq_provider_label(provider) => {
+            "set api_key_env or GROQ_API_KEY for Groq (OPENAI_API_KEY is not sent)".to_owned()
+        }
+        _ if is_bedrock_provider_label(provider) => {
+            "set api_key_env or AWS_BEARER_TOKEN_BEDROCK for Amazon Bedrock (OPENAI_API_KEY is not sent)".to_owned()
         }
         _ => "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
             .to_owned(),
@@ -568,7 +585,7 @@ fn write_message(writer: &mut impl Write, value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ANTHROPIC_BASE_URL, XAI_BASE_URL};
+    use crate::{ANTHROPIC_BASE_URL, BEDROCK_BASE_URL, GROQ_BASE_URL, XAI_BASE_URL};
     use std::io::Cursor;
 
     #[test]
@@ -726,6 +743,62 @@ mod tests {
         assert_eq!(xai.key.as_deref(), Some("xai-named"));
         assert!(xai.from_xai);
         assert_eq!(xai.default_base_url(""), XAI_BASE_URL);
+    }
+
+    #[test]
+    fn mcp_named_groq_and_bedrock_ignore_openai_and_name_route_env() {
+        let groq = mcp_resolve_key_route(
+            None,
+            Some("gsk-test".to_owned()),
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "groq",
+        );
+        assert_eq!(groq.key.as_deref(), Some("gsk-test"));
+        assert!(!groq.from_xai);
+        assert_eq!(groq.default_base_url("groq"), GROQ_BASE_URL);
+        let groq_openai = mcp_resolve_key_route(
+            None,
+            None,
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "groq",
+        );
+        assert!(
+            groq_openai.key.is_none(),
+            "provider=groq must not send OPENAI_API_KEY"
+        );
+        let groq_err = mcp_missing_key_error(None, "groq");
+        assert!(groq_err.contains("GROQ_API_KEY"), "{groq_err}");
+        assert!(
+            !groq_err.contains("set api_key_env (or OPENAI_API_KEY"),
+            "Groq missing-key must not list OPENAI_API_KEY as the fix: {groq_err}"
+        );
+
+        let bedrock = mcp_resolve_key_route(
+            None,
+            Some("bedrock-token".to_owned()),
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "amazon-bedrock",
+        );
+        assert_eq!(bedrock.key.as_deref(), Some("bedrock-token"));
+        assert_eq!(bedrock.default_base_url("amazon-bedrock"), BEDROCK_BASE_URL);
+        let bedrock_err = mcp_missing_key_error(None, "bedrock");
+        assert!(
+            bedrock_err.contains("AWS_BEARER_TOKEN_BEDROCK"),
+            "{bedrock_err}"
+        );
+        assert!(
+            !bedrock_err.contains("set api_key_env (or OPENAI_API_KEY"),
+            "Bedrock missing-key must not list OPENAI_API_KEY as the fix: {bedrock_err}"
+        );
     }
 
     fn route_url(

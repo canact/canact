@@ -19,7 +19,8 @@ use crate::client::{
     ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeToolCall, ProbeUsage,
 };
 use crate::endpoint::{
-    is_anthropic_cloud_host, is_grok_build_cloud_host, is_grok_build_messages_provider_label,
+    is_anthropic_cloud_host, is_bedrock_cloud_host, is_bedrock_provider_label,
+    is_grok_build_cloud_host, is_grok_build_messages_provider_label, is_groq_provider_label,
 };
 use crate::error::ProbeError;
 use crate::{finish_from_reason, strip_think_blocks};
@@ -344,6 +345,12 @@ fn wire_client_for(
     }
     if is_grok_build_cloud_host(base_url) {
         return shipped_client("xai-grok-build", api_key);
+    }
+    if is_groq_provider_label(provider) {
+        return shipped_client("groq", api_key);
+    }
+    if is_bedrock_provider_label(provider) || is_bedrock_cloud_host(base_url) {
+        return shipped_client("amazon-bedrock", api_key);
     }
     let (origin, chat_path) = split_compat_base(base_url);
     let scheme = if api_key.is_some_and(|k| !k.trim().is_empty()) {
@@ -1099,6 +1106,45 @@ mod tests {
             Err(ProbeError::Auth(_)) => {}
             other => panic!("expected Auth, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn list_models_on_openai_v1_prefix_hits_openai_v1_models() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "data": [{ "id": "llama-3.1-8b-instant" }]
+        }))
+        .expect("json");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = Arc::clone(&seen);
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let req = read_http(&mut stream);
+                if let Ok(mut log) = seen_thread.lock() {
+                    log.push(req.lines().next().unwrap_or("").to_owned());
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        let base = format!("http://{addr}/openai/v1");
+        let ids = list_model_ids(&base, Some(SECRET)).await.expect("200");
+        assert_eq!(ids, ["llama-3.1-8b-instant"]);
+        let seen = seen.lock().expect("seen").clone();
+        assert!(
+            seen.iter().any(|line| line.contains("/openai/v1/models")),
+            "Groq-style /openai/v1 base must list /openai/v1/models, got {seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .all(|line| !line.contains("GET /models ") && !line.starts_with("GET /models\r")),
+            "must not GET /models at the origin, got {seen:?}"
+        );
     }
 
     #[tokio::test]

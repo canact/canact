@@ -12,6 +12,13 @@ pub const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const GROK_BUILD_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 /// Anthropic OpenAI-compatible listener (`--provider claude` / `anthropic`).
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
+/// Groq OpenAI-compatible listener (`--provider groq`).
+pub const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
+/// Amazon Bedrock Converse refuse-gate URL (`--provider amazon-bedrock` / `bedrock`).
+///
+/// The shipped profile substitutes `{env:AWS_REGION}`. This default is
+/// only the cloud-key gate and the omitted `--base-url` host.
+pub const BEDROCK_BASE_URL: &str = "https://bedrock-runtime.us-east-1.amazonaws.com";
 
 /// Local-provider default when the user omitted `--base-url`.
 pub fn local_provider_base_url(provider: &str) -> Option<String> {
@@ -38,6 +45,10 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
         XAI_BASE_URL.to_owned()
     } else if is_anthropic_provider_label(&provider) {
         ANTHROPIC_BASE_URL.to_owned()
+    } else if is_groq_provider_label(&provider) {
+        GROQ_BASE_URL.to_owned()
+    } else if is_bedrock_provider_label(&provider) {
+        BEDROCK_BASE_URL.to_owned()
     } else if from_openrouter || provider == "openrouter" || provider == "openrouter.ai" {
         "https://openrouter.ai/api/v1".to_owned()
     } else {
@@ -89,6 +100,26 @@ pub fn is_anthropic_provider_label(provider: &str) -> bool {
         provider.to_ascii_lowercase().as_str(),
         "claude" | "anthropic" | "api.anthropic.com"
     )
+}
+
+/// `--provider groq` / `api.groq.com`.
+pub fn is_groq_provider_label(provider: &str) -> bool {
+    matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "groq" | "api.groq.com"
+    )
+}
+
+/// `--provider amazon-bedrock` / `bedrock` / a Bedrock runtime host.
+pub fn is_bedrock_provider_label(provider: &str) -> bool {
+    let provider = provider.to_ascii_lowercase();
+    matches!(provider.as_str(), "amazon-bedrock" | "bedrock") || is_bedrock_runtime_host(&provider)
+}
+
+fn is_bedrock_runtime_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    host == "bedrock-runtime.amazonaws.com"
+        || (host.starts_with("bedrock-runtime.") && host.ends_with(".amazonaws.com"))
 }
 
 /// True when extra Anthropic headers are required (OAuth + version).
@@ -197,6 +228,14 @@ pub fn resolve_api_key_from(
     anthropic: Option<String>,
     provider: &str,
 ) -> KeyRoute {
+    if is_groq_provider_label(provider) || is_bedrock_provider_label(provider) {
+        return KeyRoute {
+            key: cli.filter(|s| !s.is_empty()),
+            from_openrouter: false,
+            from_xai: false,
+            from_anthropic: false,
+        };
+    }
     let from_openrouter =
         openrouter.is_some() && openai.is_none() && openrouter_default_ok(provider);
     let from_xai = xai.is_some() && openai.is_none() && xai_default_ok(provider);
@@ -286,6 +325,8 @@ pub fn cloud_endpoint_requires_key(base_url: &str) -> bool {
         || host.ends_with(".anthropic.com")
         || host == "cli-chat-proxy.grok.com"
         || host.ends_with(".cli-chat-proxy.grok.com")
+        || is_groq_cloud_host(base_url)
+        || is_bedrock_cloud_host(base_url)
 }
 
 /// True when a cloud host must not be called without an API key.
@@ -307,6 +348,19 @@ pub fn is_grok_build_cloud_host(base_url: &str) -> bool {
     host == "cli-chat-proxy.grok.com" || host.ends_with(".cli-chat-proxy.grok.com")
 }
 
+/// True when `{base}` is api.groq.com.
+pub fn is_groq_cloud_host(base_url: &str) -> bool {
+    let host = url_host_hint(base_url);
+    let host = host.trim_end_matches('.');
+    host == "api.groq.com" || host.ends_with(".groq.com")
+}
+
+/// True when `{base}` is a Bedrock runtime host.
+pub fn is_bedrock_cloud_host(base_url: &str) -> bool {
+    let host = url_host_hint(base_url);
+    is_bedrock_runtime_host(&host)
+}
+
 /// Named-provider missing-key text. Do not list env vars the route will ignore.
 pub fn missing_cloud_key_message(provider: &str, base_url: &str) -> &'static str {
     if uses_xai_credentials(provider)
@@ -316,6 +370,10 @@ pub fn missing_cloud_key_message(provider: &str, base_url: &str) -> &'static str
         "error: set --api-key or XAI_API_KEY for xAI (OPENAI_API_KEY is not sent)"
     } else if is_anthropic_provider_label(provider) || is_anthropic_cloud_host(base_url) {
         "error: set --api-key, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY for Anthropic (OPENAI_API_KEY is not sent)"
+    } else if is_groq_provider_label(provider) || is_groq_cloud_host(base_url) {
+        "error: set --api-key or GROQ_API_KEY for Groq (OPENAI_API_KEY is not sent)"
+    } else if is_bedrock_provider_label(provider) || is_bedrock_cloud_host(base_url) {
+        "error: set --api-key or AWS_BEARER_TOKEN_BEDROCK for Amazon Bedrock (OPENAI_API_KEY is not sent)"
     } else if openrouter_default_ok(provider) && !provider.is_empty() {
         "error: set --api-key, OPENROUTER_API_KEY, or OPENAI_API_KEY for OpenRouter"
     } else if is_openai_provider_label(provider) || is_openai_cloud_host(base_url) {
@@ -564,6 +622,18 @@ mod tests {
         );
         let openai = missing_cloud_key_message("openai", "https://api.openai.com/v1");
         assert!(openai.contains("OPENAI_API_KEY"), "{openai}");
+        let groq = missing_cloud_key_message("groq", GROQ_BASE_URL);
+        assert!(groq.contains("GROQ_API_KEY"), "{groq}");
+        assert!(
+            !groq.contains("set --api-key, OPENAI_API_KEY"),
+            "Groq must not list OPENAI_API_KEY as the fix: {groq}"
+        );
+        let bedrock = missing_cloud_key_message("amazon-bedrock", BEDROCK_BASE_URL);
+        assert!(bedrock.contains("AWS_BEARER_TOKEN_BEDROCK"), "{bedrock}");
+        assert!(
+            !bedrock.contains("set --api-key, OPENAI_API_KEY"),
+            "Bedrock must not list OPENAI_API_KEY as the fix: {bedrock}"
+        );
     }
 
     #[test]
@@ -878,6 +948,107 @@ mod tests {
             provider_from_base_url(ANTHROPIC_BASE_URL),
             "api.anthropic.com"
         );
+    }
+
+    #[test]
+    fn groq_provider_defaults_to_groq_and_requires_key() {
+        for provider in ["groq", "api.groq.com", "Groq"] {
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                GROQ_BASE_URL,
+                "provider {provider} must not default to OpenAI"
+            );
+            assert_eq!(
+                default_compat_base_url(provider, true),
+                GROQ_BASE_URL,
+                "provider {provider} must stay on Groq even when OpenRouter env is set"
+            );
+            assert!(is_groq_provider_label(provider));
+        }
+        assert!(cloud_endpoint_requires_key(GROQ_BASE_URL));
+        assert!(
+            cloud_endpoint_requires_key("https://api.groq.com./openai/v1"),
+            "trailing-dot api.groq.com. must still require a key"
+        );
+        assert!(is_groq_cloud_host(GROQ_BASE_URL));
+        assert!(!is_groq_cloud_host(XAI_BASE_URL));
+        assert_eq!(provider_from_base_url(GROQ_BASE_URL), "api.groq.com");
+        let openai =
+            resolve_api_key_from(None, Some("sk-openai".to_owned()), None, None, None, "groq");
+        assert!(
+            openai.key.is_none(),
+            "provider=groq must not send OPENAI_API_KEY"
+        );
+        let named = resolve_api_key_from(
+            Some("gsk-test".to_owned()),
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "groq",
+        );
+        assert_eq!(named.key.as_deref(), Some("gsk-test"));
+        assert!(!named.from_openrouter);
+        assert!(!named.from_xai);
+        assert!(!named.from_anthropic);
+        assert!(!should_load_xai_oauth("groq", false, false));
+        assert!(!should_load_claude_code_login("groq", false, false));
+    }
+
+    #[test]
+    fn bedrock_provider_defaults_to_bedrock_and_requires_key() {
+        for provider in ["amazon-bedrock", "bedrock", "Bedrock"] {
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                BEDROCK_BASE_URL,
+                "provider {provider} must not default to OpenAI"
+            );
+            assert_eq!(
+                default_compat_base_url(provider, true),
+                BEDROCK_BASE_URL,
+                "provider {provider} must stay on Bedrock even when OpenRouter env is set"
+            );
+            assert!(is_bedrock_provider_label(provider));
+        }
+        assert!(is_bedrock_provider_label(
+            "bedrock-runtime.us-west-2.amazonaws.com"
+        ));
+        assert!(cloud_endpoint_requires_key(BEDROCK_BASE_URL));
+        assert!(cloud_endpoint_requires_key(
+            "https://bedrock-runtime.eu-west-1.amazonaws.com"
+        ));
+        assert!(
+            cloud_endpoint_requires_key("https://bedrock-runtime.us-east-1.amazonaws.com./"),
+            "trailing-dot Bedrock host must still require a key"
+        );
+        assert!(!cloud_endpoint_requires_key(
+            "https://notbedrock-runtime.amazonaws.com"
+        ));
+        assert!(is_bedrock_cloud_host(BEDROCK_BASE_URL));
+        assert!(!is_bedrock_cloud_host(XAI_BASE_URL));
+        let openai = resolve_api_key_from(
+            None,
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "amazon-bedrock",
+        );
+        assert!(
+            openai.key.is_none(),
+            "provider=amazon-bedrock must not send OPENAI_API_KEY"
+        );
+        let named = resolve_api_key_from(
+            Some("bedrock-token".to_owned()),
+            Some("sk-openai".to_owned()),
+            None,
+            None,
+            None,
+            "bedrock",
+        );
+        assert_eq!(named.key.as_deref(), Some("bedrock-token"));
+        assert!(!should_load_xai_oauth("amazon-bedrock", false, false));
+        assert!(!should_load_claude_code_login("bedrock", false, false));
     }
 
     #[test]

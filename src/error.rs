@@ -88,12 +88,14 @@ impl ProbeError {
     /// [`Self::from_http`] and [`Self::not_found_from_body`] stay for
     /// raw HTTP. Do not reimplement the needle table.
     ///
-    /// Needles (case-insensitive): `does not exist`, `unknown model`,
-    /// `model_not_found`. Validation 400 and region-forbidden copy
-    /// return `None` so the host can keep Auth / Transient / Llm.
+    /// Needles (case-insensitive): the [`Self::from_http`] body needles
+    /// plus folded Display copy a host already mapped (`model` plus
+    /// `not found`, `try pulling`, a Display that contains `404`).
+    /// Validation 400 and region-forbidden copy return `None` so the
+    /// host can keep Auth / Transient / Llm.
     #[must_use]
     pub fn not_found_from_message(display: &str) -> Option<Self> {
-        if looks_like_model_not_found(display) {
+        if looks_like_model_not_found(display) || looks_like_folded_not_found_display(display) {
             Some(Self::NotFound(display.trim().chars().take(512).collect()))
         } else {
             None
@@ -104,6 +106,17 @@ impl ProbeError {
 fn looks_like_model_not_found(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
     t.contains("does not exist") || t.contains("model_not_found") || t.contains("unknown model")
+}
+
+/// Extra needles for a host Display that already folded HTTP status.
+/// Keep these off `looks_like_model_not_found` so `from_http` stays
+/// status-scoped.
+fn looks_like_folded_not_found_display(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    (t.contains("model") && t.contains("not found"))
+        || t.contains("try pulling")
+        || (t.contains("http") && t.contains("404"))
+        || (t.contains("404") && t.contains("not found"))
 }
 
 fn json_has_error_object(body: &str) -> bool {
@@ -282,5 +295,45 @@ mod tests {
         );
         assert!(ProbeError::not_found_from_message("rate limited, retry later").is_none());
         assert!(ProbeError::not_found_from_message("").is_none());
+        assert!(
+            ProbeError::not_found_from_message("HTTP 400 Bad Request: bad json").is_none(),
+            "validation 400 Display must stay host-owned"
+        );
+        assert!(
+            ProbeError::not_found_from_message("invalid json at position 404").is_none(),
+            "a bare 404 offset is not a missing-model Display"
+        );
+    }
+
+    #[test]
+    fn not_found_from_message_matches_ollama_display() {
+        let pull = "Model not found. Pull it first with: ollama pull llama3";
+        let msg = not_found_msg(ProbeError::not_found_from_message(pull));
+        assert_eq!(msg, pull);
+        let folded = "HTTP 404 Not Found: not found";
+        let msg = not_found_msg(ProbeError::not_found_from_message(folded));
+        assert_eq!(msg, folded);
+        let try_pulling = "try pulling the weights with ollama pull";
+        let msg = not_found_msg(ProbeError::not_found_from_message(try_pulling));
+        assert_eq!(msg, try_pulling);
+    }
+
+    #[test]
+    fn from_http_needles_stay_status_scoped() {
+        assert!(
+            ProbeError::from_http(
+                400,
+                "Model not found. Pull it first with: ollama pull llama3"
+            )
+            .is_none(),
+            "from_http 400 must not grow Display-only needles"
+        );
+        assert!(
+            ProbeError::from_http(400, "HTTP 404 Not Found: not found").is_none(),
+            "from_http 400 must not treat a folded 404 Display as NotFound"
+        );
+        assert!(ProbeError::from_http(400, "HTTP 400 Bad Request: bad json").is_none());
+        let msg = not_found_msg(ProbeError::from_http(404, "HTTP 404 Not Found: not found"));
+        assert!(msg.contains("404"), "{msg}");
     }
 }
