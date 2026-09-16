@@ -625,7 +625,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1535,7 +1535,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1708,7 +1708,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1765,7 +1765,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2095,7 +2095,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2545,7 +2545,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2660,9 +2660,9 @@ dependencies = [
 
 [[package]]
 name = "wiremux"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "005c53b04c4cf294414fc1f3cf24c9eef051bb81d976e1d9e088c1708afe7886"
+checksum = "d57fa46222ab6695da3cce6aca6ec694daff921ded9a35901cbe71c632959953"
 dependencies = [
  "bytes",
  "futures-util",
@@ -2675,9 +2675,9 @@ dependencies = [
 
 [[package]]
 name = "wiremux-auth"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9104db191ff5b4351e2439ac7b9816c5640356afcb4e83935e876c0a0b39467"
+checksum = "958fc7c340eacc5e44f91b7357f2232262379902df19dfb428d1ca77ec4167c9"
 dependencies = [
  "fs4",
  "getrandom 0.4.3",
