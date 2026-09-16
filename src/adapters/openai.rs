@@ -584,11 +584,11 @@ fn stream_chunk(event: IrStreamEvent) -> Option<ProbeStreamChunk> {
         IrStreamEvent::TextDelta { text } if !text.is_empty() => {
             Some(ProbeStreamChunk::TextDelta { text })
         }
-        IrStreamEvent::ToolCallStart { id, name, .. } => {
-            Some(ProbeStreamChunk::ToolCallStart { id, name })
-        }
-        IrStreamEvent::ToolCallArgDelta { delta, .. } => {
-            Some(ProbeStreamChunk::ToolCallArgDelta { delta })
+        IrStreamEvent::ToolCallStart {
+            id, name, index, ..
+        } => Some(ProbeStreamChunk::ToolCallStart { id, name, index }),
+        IrStreamEvent::ToolCallArgDelta { delta, index } => {
+            Some(ProbeStreamChunk::ToolCallArgDelta { delta, index })
         }
         IrStreamEvent::ToolCallEnd => Some(ProbeStreamChunk::ToolCallEnd),
         IrStreamEvent::FinishReason { reason } => Some(ProbeStreamChunk::Finished {

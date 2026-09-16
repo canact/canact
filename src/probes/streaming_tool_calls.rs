@@ -55,8 +55,8 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
 
     let mut stream = std::pin::pin!(llm.stream_chat(request));
 
-    let mut current_name: Option<String> = None;
-    let mut current_args = String::new();
+    let mut slots: std::collections::HashMap<u32, (Option<String>, String)> =
+        std::collections::HashMap::new();
     let mut best_read_file: Option<Result<bool, ()>> = None;
     let mut last_read_file_args = String::new();
     let mut got_other_tool = false;
@@ -71,37 +71,40 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                     ProbeStreamChunk::Finished { finish: reason } => {
                         finish = *reason;
                     }
-                    ProbeStreamChunk::ToolCallStart { name, .. } => {
-                        flush_read_file_args(
-                            &current_name,
-                            &current_args,
-                            &mut best_read_file,
-                            &mut last_read_file_args,
-                        );
-                        current_args.clear();
-                        if name == "read_file" {
-                            current_name = Some(name.clone());
-                        } else if !name.is_empty() {
-                            got_other_tool = true;
-                            current_name = Some(name.clone());
-                        } else {
-                            current_name = None;
+                    ProbeStreamChunk::ToolCallStart { name, index, .. } => {
+                        let slot = slots.entry(*index).or_insert((None, String::new()));
+                        if !name.is_empty() {
+                            if slot.0.as_deref() == Some("read_file") && !slot.1.is_empty() {
+                                flush_read_file_args(
+                                    &slot.0,
+                                    &slot.1,
+                                    &mut best_read_file,
+                                    &mut last_read_file_args,
+                                );
+                                slot.1.clear();
+                            }
+                            slot.0 = Some(name.clone());
+                            if name != "read_file" {
+                                got_other_tool = true;
+                            }
                         }
                     }
-                    ProbeStreamChunk::ToolCallArgDelta { delta }
-                        if current_name.as_deref() == Some("read_file") =>
-                    {
-                        current_args.push_str(delta);
+                    ProbeStreamChunk::ToolCallArgDelta { delta, index } => {
+                        let slot = slots.entry(*index).or_insert((None, String::new()));
+                        if slot.0.as_deref() == Some("read_file") {
+                            slot.1.push_str(delta);
+                        }
                     }
                     ProbeStreamChunk::ToolCallEnd => {
-                        flush_read_file_args(
-                            &current_name,
-                            &current_args,
-                            &mut best_read_file,
-                            &mut last_read_file_args,
-                        );
-                        current_name = None;
-                        current_args.clear();
+                        for (name, args) in slots.values() {
+                            flush_read_file_args(
+                                name,
+                                args,
+                                &mut best_read_file,
+                                &mut last_read_file_args,
+                            );
+                        }
+                        slots.clear();
                     }
                     _ => {}
                 }
@@ -113,12 +116,9 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
             }
         }
     }
-    flush_read_file_args(
-        &current_name,
-        &current_args,
-        &mut best_read_file,
-        &mut last_read_file_args,
-    );
+    for (name, args) in slots.values() {
+        flush_read_file_args(name, args, &mut best_read_file, &mut last_read_file_args);
+    }
 
     let (score, details) = if !got_any_chunk {
         (0.0, "Stream produced no chunks".to_string())
@@ -237,9 +237,11 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
         ]);
@@ -258,12 +260,15 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"path\":".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "\"/tmp/test.txt\"}".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
         ]);
@@ -277,14 +282,17 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "c0".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "c1".to_string(),
                 name: "write_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: r#"{"path":"/tmp/test.txt"}"#.to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
         ]);
@@ -299,14 +307,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_routes_arg_delta_by_index() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "c0".to_string(),
+                name: "read_file".to_string(),
+                index: 0,
+            }),
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "c1".to_string(),
+                name: "write_file".to_string(),
+                index: 1,
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: r#"{"path":"/tmp/test.txt"}"#.to_string(),
+                index: 0,
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: r#"{"path":"/tmp/other.txt"}"#.to_string(),
+                index: 1,
+            }),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "index-0 read_file args must not mix into write_file: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn streaming_wrong_name_with_string_path_is_not_strong() {
         let llm = StreamMockLlm::new(vec![
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "write_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
         ]);
@@ -322,9 +361,11 @@ mod tests {
                 Ok(ProbeStreamChunk::ToolCallStart {
                     id: "call_1".to_string(),
                     name: "read_file".to_string(),
+                    index: 0,
                 }),
                 Ok(ProbeStreamChunk::ToolCallArgDelta {
                     delta: args.to_string(),
+                    index: 0,
                 }),
                 Ok(ProbeStreamChunk::ToolCallEnd),
             ]);
@@ -345,9 +386,11 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"file_path\":\"/tmp/test.txt\"}".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
         ]);
@@ -365,9 +408,11 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"path\":1}".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
         ]);
@@ -383,9 +428,11 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"path\": broken".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
         ]);
@@ -425,9 +472,11 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"path\":".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
             Ok(ProbeStreamChunk::Finished {
@@ -447,9 +496,11 @@ mod tests {
             Ok(ProbeStreamChunk::ToolCallStart {
                 id: "call_1".to_string(),
                 name: "read_file".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallArgDelta {
                 delta: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+                index: 0,
             }),
             Ok(ProbeStreamChunk::ToolCallEnd),
             Ok(ProbeStreamChunk::Finished {
