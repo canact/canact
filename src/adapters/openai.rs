@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.4.0.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.5.0.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -18,7 +18,9 @@ use crate::client::{
     CatalogPriors, ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeRequest,
     ProbeResponse, ProbeRole, ProbeStreamChunk, ProbeToolCall, ProbeUsage,
 };
-use crate::endpoint::{is_anthropic_cloud_host, is_grok_build_cloud_host};
+use crate::endpoint::{
+    is_anthropic_cloud_host, is_grok_build_cloud_host, is_grok_build_messages_provider_label,
+};
 use crate::error::ProbeError;
 use crate::{finish_from_reason, strip_think_blocks};
 
@@ -336,6 +338,9 @@ fn wire_client_for(
     if is_anthropic_cloud_host(base_url) {
         return anthropic_client(api_key);
     }
+    if is_grok_build_messages_provider_label(provider) {
+        return shipped_client("xai-grok-build-messages", api_key);
+    }
     if is_grok_build_cloud_host(base_url) {
         return shipped_client("xai-grok-build", api_key);
     }
@@ -351,7 +356,6 @@ fn wire_client_for(
     );
     let profile = parse_profile_str(&toml).map_err(|err| ProbeError::Internal(err.to_string()))?;
     let token = StaticToken::new(api_key.unwrap_or(""));
-    let _ = provider;
     WireClient::from_resolved(profile, AnyTokenProvider::Static(token)).map_err(map_client_error)
 }
 

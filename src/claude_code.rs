@@ -1,7 +1,7 @@
 //! Claude Code local OAuth access token via `wiremux-auth`.
 //!
 //! Refresh, keychain, and file parse live in the shipped `anthropic-oauth`
-//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.4.0
+//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.5.0
 //! tries the process login name before the shipped `Claude Code` /
 //! `credentials` keychain accounts. Hosts that only need a stored
 //! Bearer use `token_for_profile_cached` so an expired oat does not
@@ -112,5 +112,50 @@ mod tests {
         let oauth = profile.oauth.expect("oauth");
         let client = oauth.client_id.as_deref().map(str::trim).unwrap_or("");
         assert!(client.is_empty(), "must not ship a product client id");
+    }
+
+    #[test]
+    fn shipped_xai_grok_build_messages_profile_loads() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let profile = wiremux_auth::load_profile("xai-grok-build-messages", &opts)
+            .expect("shipped xai-grok-build-messages");
+        assert_eq!(profile.id, "xai-grok-build-messages");
+        assert_eq!(profile.dialect.wire, Some(wiremux_auth::Wire::Messages));
+        assert_eq!(
+            profile.http.base_url.as_deref(),
+            Some("https://cli-chat-proxy.grok.com")
+        );
+        assert_eq!(
+            profile.http.chat_path.as_deref(),
+            Some("/v1/messages"),
+            "Messages family must not reuse chat-completions"
+        );
+        assert_eq!(
+            profile
+                .http
+                .headers
+                .get("x-grok-client-version")
+                .map(String::as_str),
+            Some("0.1.202"),
+            "cli-chat-proxy returns HTTP 426 without a Grok CLI version"
+        );
+        let oauth = profile.oauth.expect("oauth");
+        let client = oauth.client_id.as_deref().map(str::trim).unwrap_or("");
+        assert!(client.is_empty(), "must not ship a product client id");
+    }
+
+    #[test]
+    fn shipped_profile_ids_load_offline() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let ids = wiremux_auth::shipped_profile_ids();
+        assert!(
+            ids.contains(&"xai-grok-build-messages"),
+            "0.5.0 must ship the Messages Grok Build catalog: {ids:?}"
+        );
+        for id in ids {
+            let profile = wiremux_auth::load_profile(id, &opts)
+                .unwrap_or_else(|err| panic!("shipped {id} must load: {err}"));
+            assert_eq!(profile.id, *id);
+        }
     }
 }

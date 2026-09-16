@@ -32,7 +32,7 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
         return local;
     }
     let provider = provider.to_ascii_lowercase();
-    if is_grok_build_provider_label(&provider) {
+    if is_grok_build_provider_label(&provider) || is_grok_build_messages_provider_label(&provider) {
         GROK_BUILD_BASE_URL.to_owned()
     } else if is_xai_provider_label(&provider) {
         XAI_BASE_URL.to_owned()
@@ -65,9 +65,22 @@ pub fn is_grok_build_provider_label(provider: &str) -> bool {
     )
 }
 
+/// `--provider grok-build-messages` / `xai-grok-build-messages`.
+///
+/// Same host and xAI keys as [`is_grok_build_provider_label`], but
+/// shipped `wire = "messages"` (`/v1/messages`).
+pub fn is_grok_build_messages_provider_label(provider: &str) -> bool {
+    matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "grok-build-messages" | "xai-grok-build-messages"
+    )
+}
+
 /// True when the route uses xAI env keys or `~/.grok/auth.json`.
 pub fn uses_xai_credentials(provider: &str) -> bool {
-    is_xai_provider_label(provider) || is_grok_build_provider_label(provider)
+    is_xai_provider_label(provider)
+        || is_grok_build_provider_label(provider)
+        || is_grok_build_messages_provider_label(provider)
 }
 
 /// `--provider claude` / `anthropic` / `api.anthropic.com`.
@@ -814,6 +827,26 @@ mod tests {
         assert!(should_load_xai_oauth("grok-build", false, false));
         assert!(should_load_xai_oauth("xai-grok-build", true, false));
         assert!(!should_load_claude_code_login("grok-build", false, false));
+    }
+
+    #[test]
+    fn grok_build_messages_provider_stays_on_cli_proxy_and_xai_keys() {
+        for provider in ["grok-build-messages", "xai-grok-build-messages"] {
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                GROK_BUILD_BASE_URL,
+                "provider {provider} must not default to api.x.ai"
+            );
+            assert!(is_grok_build_messages_provider_label(provider));
+            assert!(
+                !is_grok_build_provider_label(provider),
+                "{provider} is Messages, not chat-completions"
+            );
+            assert!(!is_xai_provider_label(provider));
+            assert!(uses_xai_credentials(provider));
+            assert!(should_load_xai_oauth(provider, false, false));
+            assert!(!should_load_claude_code_login(provider, false, false));
+        }
     }
 
     #[test]
