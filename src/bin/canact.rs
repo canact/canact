@@ -6,10 +6,10 @@ use std::process::ExitCode;
 use canact::{
     CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient,
     PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
-    claude_code_access_token, finalize_key_route, list_model_ids, looks_cheap,
-    missing_cloud_key_message, missing_model_message, refuse_cloud_without_key,
-    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio, should_load_claude_code_login,
-    should_load_xai_oauth, xai_oauth_access_token,
+    claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
+    is_groq_provider_label, list_model_ids, looks_cheap, missing_cloud_key_message,
+    missing_model_message, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    run_mcp_stdio, should_load_claude_code_login, should_load_xai_oauth, xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -454,6 +454,16 @@ fn resolve_api_key(
     provider: &str,
     explicit_base_url: bool,
 ) -> canact::KeyRoute {
+    if is_groq_provider_label(provider) {
+        let groq = std::env::var("GROQ_API_KEY").ok().filter(|s| !s.is_empty());
+        return resolve_api_key_from(cli.or(groq), None, None, None, None, provider);
+    }
+    if is_bedrock_provider_label(provider) {
+        let bedrock = std::env::var("AWS_BEARER_TOKEN_BEDROCK")
+            .ok()
+            .filter(|s| !s.is_empty());
+        return resolve_api_key_from(cli.or(bedrock), None, None, None, None, provider);
+    }
     let openai = std::env::var("OPENAI_API_KEY")
         .ok()
         .filter(|s| !s.is_empty());

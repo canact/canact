@@ -145,6 +145,32 @@ mod tests {
     }
 
     #[test]
+    fn shipped_groq_profile_loads() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let profile = wiremux_auth::load_profile("groq", &opts).expect("shipped groq");
+        assert_eq!(profile.id, "groq");
+        assert_eq!(
+            profile.http.base_url.as_deref(),
+            Some("https://api.groq.com")
+        );
+        assert_eq!(
+            profile.http.chat_path.as_deref(),
+            Some("/openai/v1/chat/completions")
+        );
+        assert_eq!(profile.access_env, ["GROQ_API_KEY"]);
+    }
+
+    #[test]
+    fn shipped_amazon_bedrock_profile_loads() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let profile =
+            wiremux_auth::load_profile("amazon-bedrock", &opts).expect("shipped amazon-bedrock");
+        assert_eq!(profile.id, "amazon-bedrock");
+        assert_eq!(profile.dialect.wire, Some(wiremux_auth::Wire::Converse));
+        assert_eq!(profile.access_env, ["AWS_BEARER_TOKEN_BEDROCK"]);
+    }
+
+    #[test]
     fn shipped_profile_ids_load_offline() {
         let opts = wiremux_auth::LoadOptions::default();
         let ids = wiremux_auth::shipped_profile_ids();

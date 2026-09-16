@@ -25,6 +25,8 @@ fn canact() -> Command {
     cmd.env("NO_COLOR", "1");
     cmd.env_remove("CLICOLOR_FORCE");
     cmd.env_remove("GROK_API_KEY");
+    cmd.env_remove("GROQ_API_KEY");
+    cmd.env_remove("AWS_BEARER_TOKEN_BEDROCK");
     cmd.env("HOME", isolated_home());
     #[cfg(windows)]
     cmd.env("USERPROFILE", isolated_home());
@@ -900,6 +902,71 @@ fn probe_named_xai_with_openai_env_asks_for_xai_key() {
     assert!(
         !stderr.contains("set --api-key, OPENAI_API_KEY"),
         "named xAI must not treat OPENAI_API_KEY as the fix: {stderr}"
+    );
+}
+
+#[test]
+fn probe_named_groq_with_openai_env_asks_for_groq_key() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = canact()
+        .args([
+            "probe",
+            "--provider",
+            "groq",
+            "--model",
+            "llama-test",
+            "--cheap",
+            "--force",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env("OPENAI_API_KEY", "sk-openai-must-not-go-to-groq")
+        .env_remove("XAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .output()
+        .expect("spawn probe");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(stderr.contains("GROQ_API_KEY"), "stderr={stderr}");
+    assert!(
+        !stderr.contains("set --api-key, OPENAI_API_KEY"),
+        "named Groq must not treat OPENAI_API_KEY as the fix: {stderr}"
+    );
+}
+
+#[test]
+fn probe_named_bedrock_with_openai_env_asks_for_bedrock_token() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = canact()
+        .args([
+            "probe",
+            "--provider",
+            "amazon-bedrock",
+            "--model",
+            "claude-test",
+            "--cheap",
+            "--force",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env("OPENAI_API_KEY", "sk-openai-must-not-go-to-bedrock")
+        .env_remove("XAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .output()
+        .expect("spawn probe");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(
+        stderr.contains("AWS_BEARER_TOKEN_BEDROCK"),
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("set --api-key, OPENAI_API_KEY"),
+        "named Bedrock must not treat OPENAI_API_KEY as the fix: {stderr}"
     );
 }
 

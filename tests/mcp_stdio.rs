@@ -17,6 +17,8 @@ fn isolated_home() -> &'static std::path::Path {
 fn canact_cmd() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_canact"));
     cmd.env_remove("GROK_API_KEY");
+    cmd.env_remove("GROQ_API_KEY");
+    cmd.env_remove("AWS_BEARER_TOKEN_BEDROCK");
     cmd.env("HOME", isolated_home());
     #[cfg(windows)]
     cmd.env("USERPROFILE", isolated_home());

@@ -179,6 +179,8 @@ fn canact() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_canact"));
     cmd.env("NO_COLOR", "1");
     cmd.env_remove("GROK_API_KEY");
+    cmd.env_remove("GROQ_API_KEY");
+    cmd.env_remove("AWS_BEARER_TOKEN_BEDROCK");
     cmd.env("HOME", isolated_home());
     #[cfg(windows)]
     cmd.env("USERPROFILE", isolated_home());
