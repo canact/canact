@@ -503,19 +503,21 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
             IrStreamEvent::TextDelta { text: delta } => text.push_str(&delta),
             IrStreamEvent::ToolCallStart {
                 id, name, index, ..
-            } => {
-                if !slots.contains_key(&index) {
+            } => match slots.entry(index) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
                     order.push(index);
-                    slots.insert(index, (id, name, String::new()));
-                } else if let Some(slot) = slots.get_mut(&index) {
+                    slot.insert((id, name, String::new()));
+                }
+                std::collections::btree_map::Entry::Occupied(mut slot) => {
+                    let call = slot.get_mut();
                     if !id.is_empty() {
-                        slot.0 = id;
+                        call.0 = id;
                     }
                     if !name.is_empty() {
-                        slot.1 = name;
+                        call.1 = name;
                     }
                 }
-            }
+            },
             IrStreamEvent::ToolCallArgDelta { delta, index } => {
                 if let Some((_, _, args)) = slots.get_mut(&index) {
                     args.push_str(&delta);
