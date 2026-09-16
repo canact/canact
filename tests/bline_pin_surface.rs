@@ -28,7 +28,18 @@ fn bline_pin_sees_not_found_classifier() {
         ProbeError::not_found_from_message("provider: unknown model"),
         Some(ProbeError::NotFound(_))
     ));
+    assert!(matches!(
+        ProbeError::not_found_from_message(
+            "Model not found. Pull it first with: ollama pull llama3"
+        ),
+        Some(ProbeError::NotFound(_))
+    ));
+    assert!(matches!(
+        ProbeError::not_found_from_message("HTTP 404 Not Found: not found"),
+        Some(ProbeError::NotFound(_))
+    ));
     assert!(ProbeError::not_found_from_message("invalid json schema").is_none());
+    assert!(ProbeError::not_found_from_message("HTTP 400 Bad Request: bad json").is_none());
 }
 
 #[cfg(feature = "runtime")]
