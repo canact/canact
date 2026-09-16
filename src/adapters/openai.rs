@@ -493,28 +493,37 @@ fn content_parts(content: &ProbeContent) -> Vec<IrPart> {
 fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
     let mut text = String::new();
     let mut tool_calls = Vec::new();
-    let mut current: Option<(String, String, String)> = None;
+    let mut slots: std::collections::BTreeMap<u32, (String, String, String)> =
+        std::collections::BTreeMap::new();
+    let mut order: Vec<u32> = Vec::new();
     let mut finish = ProbeFinish::Stop;
     let mut usage = None;
     for event in events {
         match event {
             IrStreamEvent::TextDelta { text: delta } => text.push_str(&delta),
-            IrStreamEvent::ToolCallStart { id, name, .. } => {
-                if let Some(call) = current.take() {
-                    push_call(&mut tool_calls, call);
+            IrStreamEvent::ToolCallStart {
+                id, name, index, ..
+            } => match slots.entry(index) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    order.push(index);
+                    slot.insert((id, name, String::new()));
                 }
-                current = Some((id, name, String::new()));
-            }
-            IrStreamEvent::ToolCallArgDelta { delta, .. } => {
-                if let Some((_, _, args)) = &mut current {
+                std::collections::btree_map::Entry::Occupied(mut slot) => {
+                    let call = slot.get_mut();
+                    if !id.is_empty() {
+                        call.0 = id;
+                    }
+                    if !name.is_empty() {
+                        call.1 = name;
+                    }
+                }
+            },
+            IrStreamEvent::ToolCallArgDelta { delta, index } => {
+                if let Some((_, _, args)) = slots.get_mut(&index) {
                     args.push_str(&delta);
                 }
             }
-            IrStreamEvent::ToolCallEnd => {
-                if let Some(call) = current.take() {
-                    push_call(&mut tool_calls, call);
-                }
-            }
+            IrStreamEvent::ToolCallEnd => {}
             IrStreamEvent::FinishReason { reason } => {
                 finish = finish_from_reason(&reason);
             }
@@ -538,8 +547,10 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
             _ => {}
         }
     }
-    if let Some(call) = current {
-        push_call(&mut tool_calls, call);
+    for index in order {
+        if let Some(call) = slots.remove(&index) {
+            push_call(&mut tool_calls, call);
+        }
     }
     if !tool_calls.is_empty() && matches!(finish, ProbeFinish::Stop) {
         finish = ProbeFinish::ToolCalls;
@@ -1240,5 +1251,51 @@ mod tests {
             vision: Some(true),
         });
         assert_eq!(listed.supports_vision, Some(true));
+    }
+
+    #[test]
+    fn fold_events_routes_arg_delta_by_index() {
+        let events = vec![
+            IrStreamEvent::ToolCallStart {
+                id: "c0".into(),
+                name: "read_file".into(),
+                thought_signature: None,
+                index: 0,
+            },
+            IrStreamEvent::ToolCallStart {
+                id: "c1".into(),
+                name: "edit_file".into(),
+                thought_signature: None,
+                index: 1,
+            },
+            IrStreamEvent::ToolCallArgDelta {
+                delta: r#"{"path":"/tmp/a"}"#.into(),
+                index: 0,
+            },
+            IrStreamEvent::ToolCallArgDelta {
+                delta: r#"{"path":"/tmp/b"}"#.into(),
+                index: 1,
+            },
+        ];
+        let resp = fold_events(events);
+        assert_eq!(resp.tool_calls.len(), 2, "{resp:?}");
+        assert_eq!(resp.tool_calls[0].name, "read_file");
+        assert_eq!(
+            resp.tool_calls[0]
+                .arguments
+                .get("path")
+                .and_then(Value::as_str),
+            Some("/tmp/a"),
+            "{resp:?}"
+        );
+        assert_eq!(resp.tool_calls[1].name, "edit_file");
+        assert_eq!(
+            resp.tool_calls[1]
+                .arguments
+                .get("path")
+                .and_then(Value::as_str),
+            Some("/tmp/b"),
+            "{resp:?}"
+        );
     }
 }
