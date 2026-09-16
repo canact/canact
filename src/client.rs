@@ -87,9 +87,13 @@ pub enum ProbeStreamChunk {
     ToolCallStart {
         id: String,
         name: String,
+        /// Parallel tool-call slot. Chat Completions `tool_calls[].index`.
+        index: u32,
     },
     ToolCallArgDelta {
         delta: String,
+        /// Same slot as the matching [`Self::ToolCallStart`].
+        index: u32,
     },
     ToolCallEnd,
     /// Terminal finish reason from the provider. Missing means Stop.
@@ -313,9 +317,11 @@ impl ProbeClient for MockLlm {
                 Ok(ProbeStreamChunk::ToolCallStart {
                     id: "call_1".to_owned(),
                     name: req.tools[0].name.clone(),
+                    index: 0,
                 }),
                 Ok(ProbeStreamChunk::ToolCallArgDelta {
                     delta: "{}".to_owned(),
+                    index: 0,
                 }),
                 Ok(ProbeStreamChunk::ToolCallEnd),
             ]
