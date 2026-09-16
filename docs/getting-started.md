@@ -28,7 +28,7 @@ scoop install canact/canact
 Library (runtime only, no CLI):
 
 ```toml
-canact = { version = "0.5", default-features = false, features = ["runtime"] }
+canact = { version = "0.6", default-features = false, features = ["runtime"] }
 ```
 
 MSRV is Rust 1.95.
