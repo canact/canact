@@ -164,7 +164,13 @@ fn main() -> ExitCode {
 }
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
-    let provider_hint = args.provider.clone().unwrap_or_default();
+    let provider_hint = args
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_owned();
     let first = resolve_api_key(
         args.api_key.clone(),
         &provider_hint,
@@ -361,7 +367,8 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
 }
 
 fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
-    if args.provider.trim().is_empty() {
+    let provider = args.provider.trim();
+    if provider.is_empty() {
         eprintln!("error: --provider is required");
         return Err(1);
     }
@@ -370,19 +377,15 @@ fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
     })?;
-    let matrix = PlumbingMatrix::from_cache(&cache, &args.provider);
+    let matrix = PlumbingMatrix::from_cache(&cache, provider);
     if matrix.rows.is_empty() {
-        if let Some(stale) = cache.stale_suite_version_for_provider(&args.provider) {
+        if let Some(stale) = cache.stale_suite_version_for_provider(provider) {
             eprintln!(
-                "error: cached {} probes are suite {stale} (need {}); run `canact probe` again",
-                args.provider,
+                "error: cached {provider} probes are suite {stale} (need {}); run `canact probe` again",
                 canact::PROBE_SUITE_VERSION
             );
         } else {
-            eprintln!(
-                "error: no cached probes for {} (run `canact probe` first)",
-                args.provider
-            );
+            eprintln!("error: no cached probes for {provider} (run `canact probe` first)",);
         }
         return Err(1);
     }
