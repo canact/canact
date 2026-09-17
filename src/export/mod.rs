@@ -187,16 +187,30 @@ fn merge_overlay_file(path: &std::path::Path, file: &OverlayFiles) -> std::io::R
     }
 }
 
+/// First `/` only: `openrouter/anthropic/claude` is not `anthropic/claude`.
+fn overlay_ids_same_model(left: &str, right: &str) -> bool {
+    let Some((left_prefix, left_suffix)) = left.split_once('/') else {
+        return left == right;
+    };
+    let Some((right_prefix, right_suffix)) = right.split_once('/') else {
+        return false;
+    };
+    left_suffix == right_suffix
+        && normalize_overlay_provider(left_prefix) == normalize_overlay_provider(right_prefix)
+}
+
 fn merge_aider_settings_yaml(existing: &str, incoming: &str) -> String {
     let Some(name_line) = incoming.lines().find(|l| l.starts_with("- name: ")) else {
         return incoming.to_owned();
     };
+    let incoming_name = name_line.strip_prefix("- name: ").unwrap_or(name_line);
     let mut out = String::new();
     let mut skipping = false;
     let mut replaced = false;
     for line in existing.lines() {
         if line.starts_with("- name: ") {
-            if line == name_line {
+            let existing_name = line.strip_prefix("- name: ").unwrap_or(line);
+            if overlay_ids_same_model(existing_name, incoming_name) {
                 skipping = true;
                 if !replaced {
                     out.push_str(incoming);
@@ -232,6 +246,10 @@ fn merge_aider_metadata_json(existing: &str, incoming: &str) -> std::io::Result<
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let src: serde_json::Map<String, serde_json::Value> = serde_json::from_str(incoming)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    dest.retain(|dest_key, _| {
+        !src.keys()
+            .any(|incoming_key| overlay_ids_same_model(dest_key, incoming_key))
+    });
     for (k, v) in src {
         dest.insert(k, v);
     }
@@ -418,6 +436,32 @@ mod tests {
     }
 
     #[test]
+    fn merge_aider_overlay_ids_same_model_matches_family_aliases_only() {
+        assert!(overlay_ids_same_model(
+            "groq/llama-3.1-8b-instant",
+            "api.groq.com/llama-3.1-8b-instant"
+        ));
+        assert!(overlay_ids_same_model(
+            "groq/llama-3.1-8b-instant",
+            "groq.com/llama-3.1-8b-instant"
+        ));
+        assert!(overlay_ids_same_model(
+            "bedrock/amazon.nova-lite-v1:0",
+            "amazon-bedrock/amazon.nova-lite-v1:0"
+        ));
+        assert!(overlay_ids_same_model(
+            "bedrock/amazon.nova-lite-v1:0",
+            "bedrock-runtime.us-east-1.amazonaws.com/amazon.nova-lite-v1:0"
+        ));
+        assert!(!overlay_ids_same_model("groq/a", "groq/b"));
+        assert!(!overlay_ids_same_model("groq/foo", "openai/foo"));
+        assert!(!overlay_ids_same_model(
+            "openrouter/anthropic/claude",
+            "anthropic/claude"
+        ));
+    }
+
+    #[test]
     fn merge_aider_settings_appends_other_model() {
         let existing = "- name: other/m\n  edit_format: whole\n  use_repo_map: false\n";
         let incoming = "- name: ollama/qwen2.5-coder\n  edit_format: diff\n  use_repo_map: true\n";
@@ -435,6 +479,50 @@ mod tests {
         assert_eq!(merged.matches("- name:").count(), 1);
         assert!(merged.contains("edit_format: diff"), "{merged}");
         assert!(!merged.contains("whole"), "{merged}");
+    }
+
+    #[test]
+    fn merge_aider_settings_replaces_groq_host_alias() {
+        let existing = "- name: api.groq.com/llama-3.1-8b-instant\n  edit_format: whole\n  use_repo_map: false\n";
+        let incoming =
+            "- name: groq/llama-3.1-8b-instant\n  edit_format: diff\n  use_repo_map: true\n";
+        let merged = merge_aider_settings_yaml(existing, incoming);
+        assert!(merged.contains("groq/llama-3.1-8b-instant"), "{merged}");
+        assert!(!merged.contains("api.groq.com/"), "{merged}");
+    }
+
+    #[test]
+    fn merge_aider_settings_replaces_bedrock_alias() {
+        let existing = "- name: amazon-bedrock/amazon.nova-lite-v1:0\n  edit_format: whole\n  use_repo_map: false\n";
+        let incoming =
+            "- name: bedrock/amazon.nova-lite-v1:0\n  edit_format: diff\n  use_repo_map: true\n";
+        let merged = merge_aider_settings_yaml(existing, incoming);
+        assert!(merged.contains("bedrock/amazon.nova-lite-v1:0"), "{merged}");
+        assert!(!merged.contains("amazon-bedrock/"), "{merged}");
+        assert_eq!(merged.matches("- name:").count(), 1);
+    }
+
+    #[test]
+    fn merge_aider_metadata_replaces_groq_host_alias() {
+        let existing =
+            "{\n  \"api.groq.com/m\": { \"litellm_provider\": \"groq\", \"mode\": \"chat\" }\n}\n";
+        let incoming =
+            "{\n  \"groq/m\": { \"litellm_provider\": \"groq\", \"mode\": \"chat\" }\n}\n";
+        let merged = merge_aider_metadata_json(existing, incoming).expect("merge");
+        let dest: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&merged).expect("json");
+        assert!(dest.contains_key("groq/m"), "{merged}");
+        assert!(!dest.contains_key("api.groq.com/m"), "{merged}");
+        assert_eq!(dest.len(), 1, "{merged}");
+    }
+
+    #[test]
+    fn merge_aider_settings_appends_other_groq_model() {
+        let existing = "- name: api.groq.com/a\n  edit_format: whole\n  use_repo_map: false\n";
+        let incoming = "- name: groq/b\n  edit_format: diff\n  use_repo_map: true\n";
+        let merged = merge_aider_settings_yaml(existing, incoming);
+        assert!(merged.contains("api.groq.com/a"), "{merged}");
+        assert!(merged.contains("groq/b"), "{merged}");
     }
 
     #[test]
