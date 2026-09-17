@@ -141,6 +141,26 @@ pub fn is_ollama_compat_base(base_url: &str) -> bool {
     loopback && hostport.ends_with(":11434")
 }
 
+/// Ollama's listen URL is `:11434` with no path. canact talks to `/v1`.
+pub fn normalize_ollama_compat_base(base_url: &str) -> String {
+    if !is_ollama_compat_base(base_url) {
+        return base_url.to_owned();
+    }
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.ends_with("/v1") {
+        return trimmed.to_owned();
+    }
+    if url_path_after_authority(trimmed).is_empty() {
+        return format!("{trimmed}/v1");
+    }
+    base_url.to_owned()
+}
+
+fn url_path_after_authority(url: &str) -> &str {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    rest.find('/').map(|i| &rest[i..]).unwrap_or("")
+}
+
 /// Which probe key to send and which default host flags it implies.
 ///
 /// `key` is never logged. Do not `#[derive(Debug)]`.
@@ -405,7 +425,9 @@ pub fn finalize_key_route(
     re_resolve: impl FnOnce(&str) -> KeyRoute,
 ) -> (KeyRoute, String, String) {
     let has_explicit = explicit_base_url.is_some();
-    let base_url = explicit_base_url.unwrap_or_else(|| first.default_base_url(provider_given));
+    let base_url = normalize_ollama_compat_base(
+        &explicit_base_url.unwrap_or_else(|| first.default_base_url(provider_given)),
+    );
     let provider = if provider_given.is_empty() {
         provider_from_base_url(&base_url)
     } else {
@@ -687,6 +709,30 @@ mod tests {
         assert!(!is_ollama_compat_base("https://openrouter.ai/api/v1"));
         assert!(!is_ollama_compat_base(XAI_BASE_URL));
         assert!(!is_ollama_compat_base(ANTHROPIC_BASE_URL));
+    }
+
+    #[test]
+    fn normalize_ollama_listen_url_appends_v1() {
+        assert_eq!(
+            normalize_ollama_compat_base("http://127.0.0.1:11434"),
+            "http://127.0.0.1:11434/v1"
+        );
+        assert_eq!(
+            normalize_ollama_compat_base("http://127.0.0.1:11434/"),
+            "http://127.0.0.1:11434/v1"
+        );
+        assert_eq!(
+            normalize_ollama_compat_base("http://localhost:11434/v1"),
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(
+            normalize_ollama_compat_base("http://127.0.0.1:11434/api"),
+            "http://127.0.0.1:11434/api"
+        );
+        assert_eq!(
+            normalize_ollama_compat_base("http://127.0.0.1:1234"),
+            "http://127.0.0.1:1234"
+        );
     }
 
     #[test]
