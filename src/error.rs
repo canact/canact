@@ -90,9 +90,9 @@ impl ProbeError {
     ///
     /// Needles (case-insensitive): the [`Self::from_http`] body needles
     /// plus folded Display copy a host already mapped (`model` plus
-    /// `not found`, `try pulling`, a Display that contains `404`).
-    /// Validation 400 and region-forbidden copy return `None` so the
-    /// host can keep Auth / Transient / Llm.
+    /// `not found`, `try pulling`, `http 404`, or `404` plus
+    /// `not found`). Validation 400 and region-forbidden copy return
+    /// `None` so the host can keep Auth / Transient / Llm.
     #[must_use]
     pub fn not_found_from_message(display: &str) -> Option<Self> {
         if looks_like_model_not_found(display) || looks_like_folded_not_found_display(display) {
@@ -115,7 +115,7 @@ fn looks_like_folded_not_found_display(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
     (t.contains("model") && t.contains("not found"))
         || t.contains("try pulling")
-        || (t.contains("http") && t.contains("404"))
+        || t.contains("http 404")
         || (t.contains("404") && t.contains("not found"))
 }
 
@@ -302,6 +302,13 @@ mod tests {
         assert!(
             ProbeError::not_found_from_message("invalid json at position 404").is_none(),
             "a bare 404 offset is not a missing-model Display"
+        );
+        assert!(
+            ProbeError::not_found_from_message(
+                "HTTP 400 Bad Request: invalid json at position 404"
+            )
+            .is_none(),
+            "folded validation 400 plus a 404 offset must stay host-owned"
         );
     }
 
