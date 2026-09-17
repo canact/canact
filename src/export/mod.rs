@@ -108,10 +108,11 @@ pub fn aider_edit_format(rec: EditFormatRecommendation) -> &'static str {
 pub fn overlay_model_name(profile: &CapabilityProfile) -> String {
     let lowered = profile.provider.to_ascii_lowercase();
     let provider = normalize_overlay_provider(&lowered);
-    if let Some(rest) = strip_overlay_model_prefix(&profile.model_id, provider, &lowered) {
+    let model_id = profile.model_id.trim();
+    if let Some(rest) = strip_overlay_model_prefix(model_id, provider, &lowered) {
         format!("{provider}/{rest}")
     } else {
-        format!("{provider}/{}", profile.model_id)
+        format!("{provider}/{model_id}")
     }
 }
 

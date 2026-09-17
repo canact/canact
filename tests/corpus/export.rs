@@ -109,6 +109,17 @@ fn overlay_model_name_stable() {
 }
 
 #[test]
+fn overlay_model_name_trims_model_id() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.model_id = "qwen2.5-coder ".into();
+    assert_eq!(overlay_model_name(&p), "ollama/qwen2.5-coder");
+}
+
+#[test]
 fn overlay_localhost_port_still_maps_to_ollama() {
     let mut p = sample(
         CapabilityLevel::Strong,

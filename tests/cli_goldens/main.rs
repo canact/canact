@@ -990,6 +990,30 @@ fn matrix_empty_cache_fails_closed() {
 }
 
 #[test]
+fn matrix_empty_object_cache_fails_closed() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    std::fs::write(&cache_path, "{}").expect("write empty object");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(stderr.contains("no cached probes"), "stderr={stderr}");
+    assert!(
+        !stderr.contains("missing field"),
+        "empty object must not be a serde error: {stderr}"
+    );
+}
+
+#[test]
 fn matrix_prints_json_without_score() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
