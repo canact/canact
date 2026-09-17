@@ -30,12 +30,7 @@ impl CapabilityProfile {
             }
             if let Some(probe) = self.dimension_result(dim) {
                 if probe.is_skipped() || probe.is_unprobed_default() {
-                    let _ = writeln!(
-                        out,
-                        "{:<28}{}",
-                        format!("{}:", display_name(dim)),
-                        "not probed"
-                    );
+                    let _ = writeln!(out, "{:<28}not probed", format!("{}:", display_name(dim)),);
                 } else {
                     let _ = writeln!(
                         out,
