@@ -472,6 +472,52 @@ fn find_profile_hits_across_anthropic_aliases() {
 }
 
 #[test]
+fn find_profile_hits_across_groq_aliases() {
+    let mut cache = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "llama-3.1-8b-instant".into();
+    stored.provider = "groq".into();
+    cache.put(stored);
+    for requested in ["api.groq.com", "groq"] {
+        assert!(
+            cache
+                .find_profile("llama-3.1-8b-instant", requested)
+                .is_some(),
+            "probe --provider groq must hit export --provider {requested}"
+        );
+    }
+    assert!(
+        cache
+            .find_profile("llama-3.1-8b-instant", "openai")
+            .is_none(),
+        "groq must not share the openai family"
+    );
+}
+
+#[test]
+fn find_profile_hits_across_bedrock_aliases() {
+    let mut cache = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "amazon.nova-lite-v1:0".into();
+    stored.provider = "amazon-bedrock".into();
+    cache.put(stored);
+    for requested in ["bedrock", "bedrock-runtime.us-east-1.amazonaws.com"] {
+        assert!(
+            cache
+                .find_profile("amazon.nova-lite-v1:0", requested)
+                .is_some(),
+            "probe --provider amazon-bedrock must hit export --provider {requested}"
+        );
+    }
+    assert!(
+        cache
+            .find_profile("amazon.nova-lite-v1:0", "openai")
+            .is_none(),
+        "bedrock must not share the openai family"
+    );
+}
+
+#[test]
 fn loopback_url_port_does_not_share_ollama_row() {
     let mut cache = ProbeCache::default();
     let mut ollama = sample_profile();
