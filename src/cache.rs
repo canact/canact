@@ -300,7 +300,8 @@ pub struct ProbeCache {
 }
 
 impl ProbeCache {
-    /// Load cache from disk. Returns an empty cache if the file does not exist.
+    /// Load cache from disk. Returns an empty cache if the file does not exist
+    /// or is empty (or only whitespace).
     ///
     /// Applies migrations to fix stale probe scores from older versions.
     pub fn load(path: &Path) -> Result<Self, ProbeError> {
@@ -332,6 +333,9 @@ impl ProbeCache {
 
     fn read_disk(path: &Path) -> Result<Self, ProbeError> {
         let contents = std::fs::read_to_string(path)?;
+        if contents.trim().is_empty() {
+            return Ok(Self::default());
+        }
         Ok(serde_json::from_str(&contents)?)
     }
 
