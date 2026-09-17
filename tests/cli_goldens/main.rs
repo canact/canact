@@ -97,6 +97,57 @@ fn probe_help_lists_cheap_full_vision() {
 }
 
 #[test]
+fn probe_cheap_conflicts_with_suite_full() {
+    let out = canact()
+        .args([
+            "probe",
+            "--provider",
+            "ollama",
+            "--model",
+            "x",
+            "--cheap",
+            "--suite=full",
+            "--cache",
+            isolated_home()
+                .join("cheap-suite.json")
+                .to_str()
+                .expect("utf8"),
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "cheap+suite=full must fail closed");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--cheap") && err.contains("--suite=full"),
+        "{err}"
+    );
+
+    let out = canact()
+        .args([
+            "probe",
+            "--provider",
+            "ollama",
+            "--model",
+            "x",
+            "--full",
+            "--suite=policy",
+            "--cache",
+            isolated_home()
+                .join("full-suite.json")
+                .to_str()
+                .expect("utf8"),
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "full+suite=policy must fail closed");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--full") && err.contains("--suite=policy"),
+        "{err}"
+    );
+}
+
+#[test]
 fn root_help_lists_cheap_full_vision_via_probe() {
     let help = stdout_of(&["--help"]);
     let probe = stdout_of(&["probe", "--help"]);

@@ -572,8 +572,15 @@ fn cached_probe(
 
 fn resolve_suite(args: &ProbeArgs) -> Result<SuiteTier, String> {
     if let Some(raw) = args.suite.as_deref() {
-        return SuiteTier::parse(raw)
-            .ok_or_else(|| format!("unknown --suite={raw} (expected policy, full, or all)"));
+        let parsed = SuiteTier::parse(raw)
+            .ok_or_else(|| format!("unknown --suite={raw} (expected policy, full, or all)"))?;
+        if args.cheap && parsed != SuiteTier::Policy {
+            return Err(format!("--cheap conflicts with --suite={raw}"));
+        }
+        if args.full && parsed != SuiteTier::Full {
+            return Err(format!("--full conflicts with --suite={raw}"));
+        }
+        return Ok(parsed);
     }
     if args.full {
         Ok(SuiteTier::Full)
