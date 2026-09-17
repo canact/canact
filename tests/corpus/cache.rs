@@ -905,15 +905,18 @@ fn load_directory_is_error() {
     let msg = err.to_string();
     assert!(msg.contains("directory"), "{msg}");
     assert!(
-        !msg.contains("os error 21"),
-        "must not dump raw Is a directory: {msg}"
+        !msg.contains("os error 21") && !msg.contains("internal error"),
+        "must not dump raw Is a directory or Internal: {msg}"
     );
     let err = ProbeCache::default()
         .save(dir.path())
         .expect_err("save directory");
     let msg = err.to_string();
     assert!(msg.contains("directory"), "{msg}");
-    assert!(!msg.contains("os error 21"), "{msg}");
+    assert!(
+        !msg.contains("os error 21") && !msg.contains("internal error"),
+        "{msg}"
+    );
 }
 
 #[test]

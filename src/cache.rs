@@ -292,6 +292,17 @@ fn default_suite_v1() -> u32 {
     1
 }
 
+fn cache_path_is_directory(path: &Path) -> ProbeError {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "probe cache must be a file (got a directory: {})",
+            path.display()
+        ),
+    )
+    .into()
+}
+
 /// File-based probe cache keyed by model|provider|effort|suite|cost|vision|ctx.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProbeCache {
@@ -309,10 +320,7 @@ impl ProbeCache {
             return Ok(Self::default());
         }
         if path.is_dir() {
-            return Err(ProbeError::Internal(format!(
-                "probe cache must be a file (got a directory: {})",
-                path.display()
-            )));
+            return Err(cache_path_is_directory(path));
         }
         let len = std::fs::metadata(path)?.len();
         if len > 8 * 1024 * 1024 {
@@ -348,10 +356,7 @@ impl ProbeCache {
     /// Save cache to disk, creating parent directories if necessary.
     pub fn save(&self, path: &Path) -> Result<(), ProbeError> {
         if path.is_dir() {
-            return Err(ProbeError::Internal(format!(
-                "probe cache must be a file (got a directory: {})",
-                path.display()
-            )));
+            return Err(cache_path_is_directory(path));
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
