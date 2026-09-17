@@ -381,6 +381,43 @@ fn probe_json_from_cache(args: &[&str], cheap: bool, advertised: Option<u32>) ->
 }
 
 #[test]
+fn probe_json_trims_model_whitespace_for_cache_hit() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(
+        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+        true,
+        false,
+        None,
+    );
+    cache.save(&cache_path).expect("save cache");
+    let cache_str = cache_path.to_str().expect("utf8 cache path");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--cheap",
+            "--model",
+            "weak-tools ",
+            "--provider",
+            "test",
+            "--cache",
+            cache_str,
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .output()
+        .expect("spawn");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["model"], "weak-tools", "{value}");
+}
+
+#[test]
 fn probe_json_cache_hit_includes_flags() {
     let cheap = probe_json_from_cache(&["--cheap"], true, None);
     assert_eq!(cheap["cacheable"], true, "{cheap}");
