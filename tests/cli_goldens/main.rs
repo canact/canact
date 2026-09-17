@@ -87,6 +87,33 @@ fn mcp_help_mentions_probe_model() {
 }
 
 #[test]
+fn probe_advertised_context_zero_is_refused() {
+    let out = canact()
+        .args([
+            "probe",
+            "--provider",
+            "ollama",
+            "--model",
+            "llama3.2:3b",
+            "--advertised-context",
+            "0",
+            "--cache",
+            isolated_home().join("adv0.json").to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn");
+    assert!(
+        !out.status.success(),
+        "advertised-context 0 must fail closed"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("advertised-context") && (err.contains("0") || err.contains("invalid")),
+        "{err}"
+    );
+}
+
+#[test]
 fn probe_help_lists_cheap_full_vision() {
     let help = stdout_of(&["probe", "--help"]);
     assert!(help.contains("--cheap"), "{help}");

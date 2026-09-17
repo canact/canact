@@ -205,7 +205,10 @@ async fn probe_model_with_route(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "model is required".to_owned())?
         .to_owned();
-    let advertised = json_u32(args.get("advertised_context"));
+    let advertised = match json_u32(args.get("advertised_context")) {
+        Some(0) => return Err("advertised_context must be >= 1".to_owned()),
+        other => other,
+    };
     let cheap = json_bool(args.get("cheap")).unwrap_or(false);
     let full = json_bool(args.get("full")).unwrap_or(false);
     let suite = match args.get("suite").and_then(Value::as_str) {

@@ -92,7 +92,7 @@ struct ProbeArgs {
     cache: Option<PathBuf>,
 
     /// Catalog prior: advertised context window in tokens
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
     advertised_context: Option<u32>,
 }
 
@@ -123,7 +123,7 @@ struct ExportArgs {
     dir: Option<PathBuf>,
 
     /// Catalog advertised context: cache-row key and overlay window
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
     advertised_context: Option<u32>,
 }
 
