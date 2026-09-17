@@ -248,6 +248,30 @@ mod tests {
             meta.litellm_provider, "anthropic",
             "api.anthropic.com must match overlay_model_name family anthropic"
         );
+
+        p.provider = "api.groq.com".to_owned();
+        p.model_id = "llama-3.1-8b-instant".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("groq/llama-3.1-8b-instant")
+            .expect("groq meta");
+        assert_eq!(
+            meta.litellm_provider, "groq",
+            "api.groq.com must match overlay_model_name family groq"
+        );
+
+        p.provider = "amazon-bedrock".to_owned();
+        p.model_id = "amazon.nova-lite-v1:0".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("bedrock/amazon.nova-lite-v1:0")
+            .expect("bedrock meta");
+        assert_eq!(
+            meta.litellm_provider, "bedrock",
+            "amazon-bedrock must match overlay_model_name family bedrock"
+        );
     }
 
     #[test]

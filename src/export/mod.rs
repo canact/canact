@@ -10,6 +10,7 @@ mod cline;
 pub use aider::{AiderMetadataEntry, AiderOverlay, AiderSettingsRow};
 pub use cline::ClineModelInfo;
 
+use crate::endpoint::{is_bedrock_provider_label, is_groq_provider_label};
 use crate::types::{CapabilityProfile, EditFormatRecommendation};
 
 /// Files written by [`HostOverlay::write_to`].
@@ -139,6 +140,12 @@ fn strip_overlay_model_prefix<'a>(
 
 pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
     let lowered = provider.to_ascii_lowercase();
+    if is_groq_provider_label(&lowered) || lowered == "groq.com" {
+        return "groq";
+    }
+    if is_bedrock_provider_label(&lowered) {
+        return "bedrock";
+    }
     match lowered.as_str() {
         "openrouter.ai" | "openrouter" => "openrouter",
         "api.openai.com" | "openai" => "openai",

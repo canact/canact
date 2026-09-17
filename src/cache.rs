@@ -1057,6 +1057,12 @@ fn strip_normalized_provider_prefix<'a>(model_id: &'a str, provider: &str) -> Op
 }
 
 fn provider_family(provider: &str) -> &str {
+    if crate::is_groq_provider_label(provider) || provider.eq_ignore_ascii_case("groq.com") {
+        return "groq";
+    }
+    if crate::is_bedrock_provider_label(provider) {
+        return "bedrock";
+    }
     match provider {
         "openai" | "api.openai.com" => "openai",
         "openrouter" | "openrouter.ai" => "openrouter",

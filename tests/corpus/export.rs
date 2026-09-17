@@ -158,3 +158,33 @@ fn overlay_anthropic_host_maps_to_anthropic_family() {
         "anthropic/claude-haiku-4-5-20251001"
     );
 }
+
+#[test]
+fn overlay_groq_host_maps_to_groq_family() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.model_id = "llama-3.1-8b-instant".into();
+    p.provider = "api.groq.com".into();
+    assert_eq!(overlay_model_name(&p), "groq/llama-3.1-8b-instant");
+    p.provider = "groq".into();
+    assert_eq!(overlay_model_name(&p), "groq/llama-3.1-8b-instant");
+}
+
+#[test]
+fn overlay_bedrock_host_maps_to_bedrock_family() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.model_id = "amazon.nova-lite-v1:0".into();
+    p.provider = "amazon-bedrock".into();
+    assert_eq!(overlay_model_name(&p), "bedrock/amazon.nova-lite-v1:0");
+    p.provider = "bedrock-runtime.us-east-1.amazonaws.com".into();
+    assert_eq!(overlay_model_name(&p), "bedrock/amazon.nova-lite-v1:0");
+    p.provider = "bedrock".into();
+    assert_eq!(overlay_model_name(&p), "bedrock/amazon.nova-lite-v1:0");
+}
