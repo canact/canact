@@ -424,6 +424,14 @@ pub fn finalize_key_route(
     first: KeyRoute,
     re_resolve: impl FnOnce(&str) -> KeyRoute,
 ) -> (KeyRoute, String, String) {
+    let explicit_base_url = explicit_base_url.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_owned())
+        }
+    });
     let has_explicit = explicit_base_url.is_some();
     let base_url = normalize_ollama_compat_base(
         &explicit_base_url.unwrap_or_else(|| first.default_base_url(provider_given)),
@@ -497,7 +505,7 @@ fn url_host_hint(url: &str) -> String {
 }
 
 fn url_host_port_hint(url: &str) -> String {
-    let url = url.to_ascii_lowercase();
+    let url = url.trim().to_ascii_lowercase();
     let after_scheme = url.split("://").nth(1).unwrap_or(&url);
     let authority = after_scheme
         .split(['/', '?', '#'])
@@ -712,6 +720,12 @@ mod tests {
     }
 
     #[test]
+    fn is_ollama_compat_base_trims_whitespace() {
+        assert!(is_ollama_compat_base("http://127.0.0.1:11434 "));
+        assert!(is_ollama_compat_base(" http://127.0.0.1:11434"));
+    }
+
+    #[test]
     fn normalize_ollama_listen_url_appends_v1() {
         assert_eq!(
             normalize_ollama_compat_base("http://127.0.0.1:11434"),
@@ -732,6 +746,15 @@ mod tests {
         assert_eq!(
             normalize_ollama_compat_base("http://127.0.0.1:1234"),
             "http://127.0.0.1:1234"
+        );
+        assert!(is_ollama_compat_base("http://127.0.0.1:11434 "));
+        assert_eq!(
+            normalize_ollama_compat_base("http://127.0.0.1:11434 "),
+            "http://127.0.0.1:11434/v1"
+        );
+        assert_eq!(
+            normalize_ollama_compat_base(" http://127.0.0.1:11434"),
+            "http://127.0.0.1:11434/v1"
         );
     }
 
@@ -1259,5 +1282,38 @@ mod tests {
         assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
         assert!(route.from_anthropic);
         assert_eq!(provider, "api.anthropic.com");
+    }
+
+    #[test]
+    fn finalize_key_route_explicit_ollama_url_trims_and_appends_v1() {
+        let first = resolve_api_key_from(None, None, None, None, None, "");
+        let (route, base_url, provider) =
+            finalize_key_route("", Some("http://127.0.0.1:11434 ".to_owned()), first, |p| {
+                resolve_api_key_from(None, None, None, None, None, p)
+            });
+        assert!(route.key.is_none());
+        assert_eq!(base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(provider, "127.0.0.1:11434");
+    }
+
+    #[test]
+    fn finalize_key_route_whitespace_only_url_is_absent() {
+        let first = resolve_api_key_from(
+            None,
+            None,
+            None,
+            Some("xai-env".to_owned()),
+            Some("sk-ant".to_owned()),
+            "",
+        );
+        let (route, base_url, provider) =
+            finalize_key_route("", Some("  ".to_owned()), first, |_| {
+                panic!("must not re-resolve when URL was whitespace-only")
+            });
+        assert_eq!(route.key.as_deref(), Some("xai-env"));
+        assert!(route.from_xai);
+        assert!(!route.from_anthropic);
+        assert_eq!(base_url, XAI_BASE_URL);
+        assert_eq!(provider, "api.x.ai");
     }
 }
