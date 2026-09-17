@@ -307,12 +307,13 @@ fn cache_path_is_directory(path: &Path) -> ProbeError {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProbeCache {
     /// All cached entries.
+    #[serde(default)]
     pub profiles: HashMap<String, CacheEntry>,
 }
 
 impl ProbeCache {
-    /// Load cache from disk. Returns an empty cache if the file does not exist
-    /// or is empty (or only whitespace).
+    /// Load cache from disk. Returns an empty cache if the file does not exist,
+    /// is empty (or only whitespace), or is `{}`.
     ///
     /// Applies migrations to fix stale probe scores from older versions.
     pub fn load(path: &Path) -> Result<Self, ProbeError> {
@@ -441,7 +442,12 @@ impl ProbeCache {
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
             })
-            .max_by_key(|(_, entry)| entry.cached_at)
+            .max_by_key(|(_, entry)| {
+                (
+                    model_id_exact_rank(&entry.profile.model_id, model_id),
+                    entry.cached_at,
+                )
+            })
             .map(|(key, entry)| (&entry.profile, key_advertised(key)))
     }
 
@@ -499,7 +505,12 @@ impl ProbeCache {
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
             })
-            .max_by_key(|(_, entry)| entry.cached_at)
+            .max_by_key(|(_, entry)| {
+                (
+                    model_id_exact_rank(&entry.profile.model_id, model_id),
+                    entry.cached_at,
+                )
+            })
             .map(|(key, entry)| (&entry.profile, key_is_policy(key)))
     }
 
@@ -544,7 +555,12 @@ impl ProbeCache {
                     && providers_equivalent(&entry.profile.provider, provider)
                     && key.rsplit('|').nth(2) == Some(want_cost)
             })
-            .max_by_key(|(_, entry)| entry.cached_at)
+            .max_by_key(|(_, entry)| {
+                (
+                    model_id_exact_rank(&entry.profile.model_id, model_id),
+                    entry.cached_at,
+                )
+            })
             .map(|(key, entry)| (&entry.profile, key_is_policy(key), key_advertised(key)))
     }
 
@@ -581,7 +597,12 @@ impl ProbeCache {
                     && providers_equivalent(&entry.profile.provider, provider)
                     && key_advertised(key) == advertised
             })
-            .max_by_key(|(_, entry)| entry.cached_at)
+            .max_by_key(|(_, entry)| {
+                (
+                    model_id_exact_rank(&entry.profile.model_id, model_id),
+                    entry.cached_at,
+                )
+            })
             .map(|(key, entry)| (&entry.profile, key_suite(key)))
     }
 
@@ -867,10 +888,11 @@ impl ProbeCache {
                 SuiteTier::Full => 2,
                 SuiteTier::Policy => 1,
             };
-            let model =
-                strip_normalized_provider_prefix(&entry.profile.model_id, &entry.profile.provider)
-                    .unwrap_or(entry.profile.model_id.as_str())
-                    .to_owned();
+            let raw = entry.profile.model_id.trim();
+            let model = strip_normalized_provider_prefix(raw, &entry.profile.provider)
+                .unwrap_or(raw)
+                .trim()
+                .to_owned();
             let keep = match best.get(&model) {
                 Some((old_rank, old_at, _)) => {
                     rank > *old_rank || (rank == *old_rank && entry.cached_at > *old_at)
@@ -1042,12 +1064,18 @@ fn providers_equivalent(stored: &str, requested: &str) -> bool {
     provider_family(&a) == provider_family(&b)
 }
 
+fn model_id_exact_rank(stored: &str, requested: &str) -> u8 {
+    u8::from(stored.trim() == requested.trim() && stored == requested.trim())
+}
+
 fn models_equivalent(
     stored: &str,
     requested: &str,
     requested_provider: &str,
     stored_provider: &str,
 ) -> bool {
+    let stored = stored.trim();
+    let requested = requested.trim();
     if stored == requested {
         return true;
     }

@@ -932,6 +932,15 @@ fn load_empty_file_is_empty() {
 }
 
 #[test]
+fn load_empty_object_is_empty() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("empty-object.json");
+    std::fs::write(&path, "{}").expect("write");
+    let loaded = ProbeCache::load(&path).expect("empty object");
+    assert!(loaded.profiles.is_empty());
+}
+
+#[test]
 fn load_keeps_migrated_profile_when_save_fails() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
@@ -1161,6 +1170,64 @@ fn matrix_profiles_collapses_openrouter_vendor_prefix() {
         rows.iter().map(|p| &p.model_id).collect::<Vec<_>>()
     );
     assert_eq!(rows[0].tool_calling.details, "all");
+}
+
+#[test]
+fn matrix_profiles_collapses_trailing_space_model_id() {
+    let mut cache = ProbeCache::default();
+    let mut policy = sample_profile();
+    policy.model_id = "llama3.2:3b ".into();
+    policy.provider = "ollama".into();
+    policy.tool_calling.details = "policy".into();
+    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    let mut all = sample_profile();
+    all.model_id = "llama3.2:3b".into();
+    all.provider = "ollama".into();
+    all.tool_calling.details = "all".into();
+    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    let rows = cache.matrix_profiles("ollama");
+    assert_eq!(
+        rows.len(),
+        1,
+        "trailing-space model ids must collapse: {:?}",
+        rows.iter().map(|p| &p.model_id).collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0].tool_calling.details, "all");
+}
+
+#[test]
+fn find_profile_matches_trailing_space_model_id() {
+    let mut cache = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "llama3.2:3b ".into();
+    stored.provider = "ollama".into();
+    cache.put(stored);
+    assert!(
+        cache.find_profile("llama3.2:3b", "ollama").is_some(),
+        "export --model llama3.2:3b must hit a stored trailing-space row"
+    );
+}
+
+#[test]
+fn find_profile_and_advertised_prefers_exact_model_id() {
+    let mut cache = ProbeCache::default();
+    let mut spaced = sample_profile();
+    spaced.model_id = "llama3.2:3b ".into();
+    spaced.provider = "ollama".into();
+    spaced.tool_calling.details = "spaced".into();
+    cache.put_with_suite(spaced, canact::SuiteTier::Policy, false, None);
+    let mut exact = sample_profile();
+    exact.model_id = "llama3.2:3b".into();
+    exact.provider = "ollama".into();
+    exact.tool_calling.details = "exact".into();
+    cache.put_with_suite(exact, canact::SuiteTier::All, false, None);
+    let (got, _) = cache
+        .find_profile_and_advertised("llama3.2:3b", "ollama")
+        .expect("row");
+    assert_eq!(
+        got.tool_calling.details, "exact",
+        "trimmed --model must not lose the exact-id row to a newer spaced alias"
+    );
 }
 
 #[test]
