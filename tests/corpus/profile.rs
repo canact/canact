@@ -846,6 +846,21 @@ fn human_table_vision_summary_not_probed_when_skipped() {
         !summary.contains("not supported"),
         "not supported is for a completed Weak vision probe: {table}"
     );
+    let vision_row = table
+        .split("Overall:")
+        .next()
+        .unwrap_or("")
+        .lines()
+        .find(|l| l.starts_with("Vision:"))
+        .unwrap_or("");
+    assert!(
+        vision_row.contains("not probed"),
+        "skipped vision row must match the summary: {table}"
+    );
+    assert!(
+        !vision_row.contains("Weak"),
+        "skipped vision must not print Weak 0.0: {table}"
+    );
 }
 
 #[test]
@@ -973,7 +988,7 @@ fn cheap_skip_probe(name: &str) -> ProbeResult {
 }
 
 #[test]
-fn human_table_prints_completed_weak_for_skipped_medium() {
+fn human_table_prints_not_probed_for_skipped_medium() {
     let mut profile = make_profile(
         CapabilityLevel::Strong,
         CapabilityLevel::Strong,
@@ -986,12 +1001,12 @@ fn human_table_prints_completed_weak_for_skipped_medium() {
         .find(|l| l.contains("Search Replace"))
         .unwrap_or("");
     assert!(
-        search_line.contains("Weak"),
-        "skipped Medium must display as Weak:\n{table}"
+        search_line.contains("not probed"),
+        "skipped Medium must not look measured:\n{table}"
     );
     assert!(
-        !search_line.contains("Medium"),
-        "must not show stored Medium for a skip:\n{table}"
+        !search_line.contains("Weak") && !search_line.contains("Medium"),
+        "must not show stored Medium or completed Weak for a skip:\n{table}"
     );
 }
 
