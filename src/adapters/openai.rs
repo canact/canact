@@ -20,7 +20,8 @@ use crate::client::{
 };
 use crate::endpoint::{
     is_anthropic_cloud_host, is_bedrock_cloud_host, is_bedrock_provider_label,
-    is_grok_build_cloud_host, is_grok_build_messages_provider_label, is_groq_provider_label,
+    is_grok_build_cloud_host, is_grok_build_messages_provider_label, is_groq_cloud_host,
+    is_groq_provider_label,
 };
 use crate::error::ProbeError;
 use crate::{finish_from_reason, strip_think_blocks};
@@ -346,10 +347,10 @@ fn wire_client_for(
     if is_grok_build_cloud_host(base_url) {
         return shipped_client("xai-grok-build", api_key);
     }
-    if is_groq_provider_label(provider) {
+    if is_groq_provider_label(provider) && is_groq_cloud_host(base_url) {
         return shipped_client("groq", api_key);
     }
-    if is_bedrock_provider_label(provider) || is_bedrock_cloud_host(base_url) {
+    if is_bedrock_provider_label(provider) && is_bedrock_cloud_host(base_url) {
         return shipped_client("amazon-bedrock", api_key);
     }
     let (origin, chat_path) = split_compat_base(base_url);
@@ -924,6 +925,46 @@ mod tests {
             Err(ProbeError::Transient(_)) => {}
             other => panic!("expected Transient abort, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn groq_provider_on_loopback_uses_that_base() {
+        let body = chat_ok("ok");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = Arc::clone(&seen);
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let req = read_http(&mut stream);
+                if let Ok(mut log) = seen_thread.lock() {
+                    log.push(req.lines().next().unwrap_or("").to_owned());
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        let base = format!("http://{addr}/openai/v1");
+        let client = OpenAiCompatClient::new(
+            &base,
+            Some(SECRET.into()),
+            "m",
+            "groq",
+            CatalogPriors::default(),
+        )
+        .expect("client");
+        let resp = client.chat(empty_req()).await.expect("chat");
+        assert_eq!(resp.text, "ok");
+        let seen = seen.lock().expect("seen").clone();
+        assert!(
+            seen.iter()
+                .any(|line| line.contains("/openai/v1/chat/completions")),
+            "named groq plus an explicit loopback base must hit that host, got {seen:?}"
+        );
     }
 
     #[tokio::test]
