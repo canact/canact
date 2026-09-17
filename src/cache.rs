@@ -308,6 +308,12 @@ impl ProbeCache {
         if !path.exists() {
             return Ok(Self::default());
         }
+        if path.is_dir() {
+            return Err(ProbeError::Internal(format!(
+                "probe cache must be a file (got a directory: {})",
+                path.display()
+            )));
+        }
         let len = std::fs::metadata(path)?.len();
         if len > 8 * 1024 * 1024 {
             return Err(ProbeError::Internal(format!(
@@ -341,6 +347,12 @@ impl ProbeCache {
 
     /// Save cache to disk, creating parent directories if necessary.
     pub fn save(&self, path: &Path) -> Result<(), ProbeError> {
+        if path.is_dir() {
+            return Err(ProbeError::Internal(format!(
+                "probe cache must be a file (got a directory: {})",
+                path.display()
+            )));
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

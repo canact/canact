@@ -899,6 +899,24 @@ fn load_missing_file_is_empty() {
 }
 
 #[test]
+fn load_directory_is_error() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let err = ProbeCache::load(dir.path()).expect_err("directory");
+    let msg = err.to_string();
+    assert!(msg.contains("directory"), "{msg}");
+    assert!(
+        !msg.contains("os error 21"),
+        "must not dump raw Is a directory: {msg}"
+    );
+    let err = ProbeCache::default()
+        .save(dir.path())
+        .expect_err("save directory");
+    let msg = err.to_string();
+    assert!(msg.contains("directory"), "{msg}");
+    assert!(!msg.contains("os error 21"), "{msg}");
+}
+
+#[test]
 fn load_empty_file_is_empty() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("empty.json");
