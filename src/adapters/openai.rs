@@ -619,11 +619,16 @@ fn map_client_error(err: ClientError) -> ProbeError {
                 ProbeError::Transient(message)
             }
         }
-        ClientError::Vendor { message, .. } => ProbeError::Llm(redact_secrets(&message)),
-        ClientError::Map(err) => ProbeError::Llm(redact_secrets(&err.to_string())),
+        ClientError::Vendor { message, .. } => llm_or_not_found(message),
+        ClientError::Map(err) => llm_or_not_found(err.to_string()),
         ClientError::Transport(message) => ProbeError::Transient(redact_secrets(&message)),
         other => ProbeError::Transient(redact_secrets(&other.to_string())),
     }
+}
+
+fn llm_or_not_found(message: String) -> ProbeError {
+    let message = redact_secrets(&message);
+    ProbeError::not_found_from_message(&message).unwrap_or(ProbeError::Llm(message))
 }
 
 /// Strip Bearer tokens, `sk-` / `gsk_` / `ghp_` / `xai-` keys, and values after Authorization / api-key / api_key.
@@ -993,6 +998,39 @@ mod tests {
                 assert!(msg.contains("does not exist"), "{msg}");
             }
             other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_400_vendor_model_not_found_aborts() {
+        // Live xAI imagine ids: GET /models lists them, chat returns this
+        // Vendor body. Wiremux keeps it Vendor; canact must still abort.
+        let base = spawn_http(
+            400,
+            "Bad Request",
+            br#"{"code":"invalid-argument","error":"Model not found: grok-imagine-image"}"#
+                .to_vec(),
+        );
+        match client(&base).chat(empty_req()).await.expect_err("400") {
+            ProbeError::NotFound(msg) => {
+                assert!(
+                    msg.to_ascii_lowercase().contains("model not found"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vendor_validation_stays_llm() {
+        let err = map_client_error(ClientError::Vendor {
+            status: Some(400),
+            message: "invalid json schema for tools".into(),
+        });
+        match err {
+            ProbeError::Llm(msg) => assert!(msg.contains("invalid json schema"), "{msg}"),
+            other => panic!("expected Llm, got {other:?}"),
         }
     }
 
