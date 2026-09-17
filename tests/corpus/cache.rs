@@ -899,6 +899,18 @@ fn load_missing_file_is_empty() {
 }
 
 #[test]
+fn load_empty_file_is_empty() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("empty.json");
+    std::fs::write(&path, "").expect("write");
+    let loaded = ProbeCache::load(&path).expect("empty file");
+    assert!(loaded.profiles.is_empty());
+    std::fs::write(&path, "  \n").expect("write whitespace");
+    let loaded = ProbeCache::load(&path).expect("whitespace file");
+    assert!(loaded.profiles.is_empty());
+}
+
+#[test]
 fn load_keeps_migrated_profile_when_save_fails() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
