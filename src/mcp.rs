@@ -151,6 +151,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     let provider_given = args
         .get("provider")
         .and_then(Value::as_str)
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
     let api_key_env = args.get("api_key_env").and_then(Value::as_str);
@@ -234,6 +235,7 @@ async fn probe_model_with_route(
     let provider_given = args
         .get("provider")
         .and_then(Value::as_str)
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
     let explicit_base_url = args
