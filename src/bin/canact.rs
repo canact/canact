@@ -190,7 +190,11 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     };
 
     if !args.force
-        && let Some(model) = args.model.as_deref().filter(|s| !s.is_empty())
+        && let Some(model) = args
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     {
         if vision_catalog_flag(&args).is_none()
             && args.advertised_context.is_none()
@@ -301,26 +305,25 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
     })?;
+    let model = args.model.trim();
+    let provider = args.provider.trim();
     let (profile, cached_advertised) = match args.advertised_context {
         Some(n) => cache
-            .find_profile_with_cost_and_advertised(&args.model, &args.provider, Some(n))
+            .find_profile_with_cost_and_advertised(model, provider, Some(n))
             .map(|(p, _)| (p, Some(n)))
-            .or_else(|| cache.find_profile_and_advertised(&args.model, &args.provider)),
-        None => cache.find_profile_and_advertised(&args.model, &args.provider),
+            .or_else(|| cache.find_profile_and_advertised(model, provider)),
+        None => cache.find_profile_and_advertised(model, provider),
     }
     .map(|(p, advertised)| (p.clone(), advertised))
     .ok_or_else(|| {
-        if let Some(stale) = cache.stale_suite_version(&args.model, &args.provider) {
+        if let Some(stale) = cache.stale_suite_version(model, provider) {
             eprintln!(
-                "error: cached probe for {} / {} is suite {stale} (need {}); run `canact probe` again",
-                args.model,
-                args.provider,
+                "error: cached probe for {model} / {provider} is suite {stale} (need {}); run `canact probe` again",
                 canact::PROBE_SUITE_VERSION
             );
         } else {
             eprintln!(
-                "error: no cached probe for {} / {} (run `canact probe` first)",
-                args.model, args.provider
+                "error: no cached probe for {model} / {provider} (run `canact probe` first)",
             );
         }
         1u8
@@ -512,8 +515,11 @@ async fn resolve_model(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<String, u8> {
-    if let Some(model) = args.model.as_deref()
-        && !model.is_empty()
+    if let Some(model) = args
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
     {
         return Ok(model.to_owned());
     }

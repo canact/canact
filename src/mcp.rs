@@ -202,6 +202,7 @@ async fn probe_model_with_route(
     let model = args
         .get("model")
         .and_then(Value::as_str)
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "model is required".to_owned())?
         .to_owned();
