@@ -506,6 +506,13 @@ pub fn is_unreachable_host(err: &ProbeError) -> bool {
         || msg.contains("tcp connect error")
 }
 
+fn no_multimodal_message(err: &str) -> bool {
+    let t = err.to_ascii_lowercase();
+    t.contains("does not support multimodal")
+        || t.contains("does not support image")
+        || t.contains("vision is not supported")
+}
+
 /// Resolve a probe result and whether it is safe to write into the 30-day cache.
 ///
 /// Auth and unreachable hosts abort the suite (`Err`). Definitive "does
@@ -525,6 +532,25 @@ pub fn resolve_probe(
             let err_msg = err.to_string();
             let is_tool_probe = TOOL_PROBE_NAMES.contains(&name);
             let tools_not_supported = err_msg.contains("does not support tools");
+            let vision_not_supported = name == "vision" && no_multimodal_message(&err_msg);
+
+            if vision_not_supported {
+                warn!(
+                    probe = name,
+                    error = %err,
+                    "Model does not support multimodal, scoring as Weak"
+                );
+                return Ok((
+                    ProbeResult {
+                        name: name.to_string(),
+                        score: 0.0,
+                        max_score: 1.0,
+                        level: CapabilityLevel::Weak,
+                        details: "Model does not support multimodal requests".to_string(),
+                    },
+                    true,
+                ));
+            }
 
             if is_tool_probe && tools_not_supported {
                 warn!(probe = name, error = %err, "Model does not support tools, scoring as Weak");
