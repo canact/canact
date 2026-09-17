@@ -105,6 +105,26 @@ fn transient_xml_medium_does_not_open_can_use_tools() {
 }
 
 #[test]
+fn resolve_probe_vision_no_multimodal_is_measured_weak() {
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Llm(
+        r#"{"error":{"code":400,"message":"Multimodal data provided, but model does not support multimodal requests.","type":"invalid_request_error"}}"#
+            .into(),
+    ));
+    let (result, cacheable) = resolve_probe(err, "vision").expect("scored");
+    assert_eq!(result.level, CapabilityLevel::Weak);
+    assert_eq!(result.score, 0.0);
+    assert!(
+        cacheable,
+        "host refused multimodal; that is a measured miss"
+    );
+    assert!(
+        !result.details.starts_with("Probe failed:"),
+        "must be a completed Weak so the human table says not supported: {result:?}"
+    );
+    assert_eq!(result.measured_level(), Some(CapabilityLevel::Weak));
+}
+
+#[test]
 fn resolve_probe_no_tools_is_weak_and_cacheable() {
     let err: Result<ProbeResult, ProbeError> =
         Err(ProbeError::Llm("does not support tools".into()));
