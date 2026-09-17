@@ -603,6 +603,7 @@ impl CapabilityProfile {
     /// This is not a production window to copy into Cline or Aider.
     pub fn recommended_context_tokens(&self, advertised: Option<u32>) -> Option<u32> {
         let measured = self.effective_context_tokens.or(self.probed_context_floor);
+        let advertised = advertised.filter(|&n| n > 0);
         match (advertised, measured) {
             (Some(a), Some(m)) => Some(a.min(m)),
             (None, Some(m)) => Some(m),
@@ -908,6 +909,13 @@ mod recommended_context_tests {
         assert_eq!(value["recommendedContextTokens"], 4096, "{value}");
         assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
         assert_eq!(value["probedContextFloor"], 4096, "{value}");
+    }
+
+    #[test]
+    fn recommended_context_tokens_ignores_zero_advertised() {
+        let mut p = profile();
+        p.probed_context_floor = Some(4096);
+        assert_eq!(p.recommended_context_tokens(Some(0)), Some(4096));
     }
 
     #[test]
