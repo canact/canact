@@ -4,9 +4,6 @@ use std::fmt::Write as _;
 
 use crate::types::{CORE_DIMENSION_NAMES, CapabilityProfile, ConstraintPlacement, DIMENSION_NAMES};
 
-/// How many `/models` ids to include in the missing-`--model` error.
-const MISSING_MODEL_ID_PREVIEW: usize = 8;
-
 impl CapabilityProfile {
     /// Non-`--json` table printed by `canact probe`.
     pub fn format_human_table(&self, verbose: bool) -> String {
@@ -139,7 +136,7 @@ fn display_name(dim: &str) -> String {
 
 /// `--model` is required because `GET /models` did not return exactly one id.
 ///
-/// Includes the count and up to eight preview ids.
+/// Includes the count and every listed id so the user can pick `--model`.
 pub fn missing_model_message<S: AsRef<str>>(ids: &[S]) -> String {
     let n = ids.len();
     let mut msg =
@@ -149,14 +146,11 @@ pub fn missing_model_message<S: AsRef<str>>(ids: &[S]) -> String {
         return msg;
     }
     msg.push_str(": ");
-    for (i, id) in ids.iter().take(MISSING_MODEL_ID_PREVIEW).enumerate() {
+    for (i, id) in ids.iter().enumerate() {
         if i > 0 {
             msg.push_str(", ");
         }
         msg.push_str(id.as_ref());
-    }
-    if n > MISSING_MODEL_ID_PREVIEW {
-        msg.push_str(", ...");
     }
     msg.push(')');
     msg
