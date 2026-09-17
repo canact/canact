@@ -1301,13 +1301,14 @@ fn missing_model_message_zero_ids_includes_count() {
 }
 
 #[test]
-fn missing_model_message_previews_at_most_eight_ids() {
-    let ids: Vec<String> = (1..=12).map(|i| format!("model-{i}")).collect();
+fn missing_model_message_lists_all_ids() {
+    // Live xAI GET /models returns 15 ids; the user must be able to pick any of them.
+    let ids: Vec<String> = (1..=15).map(|i| format!("model-{i}")).collect();
     let msg = missing_model_message(&ids);
-    assert!(msg.contains("got 12"), "{msg}");
+    assert!(msg.contains("got 15"), "{msg}");
     assert!(msg.contains("model-1"), "{msg}");
     assert!(msg.contains("model-8"), "{msg}");
-    assert!(!msg.contains("model-9"), "{msg}");
-    assert!(!msg.contains("model-12"), "{msg}");
-    assert!(msg.contains("..."), "{msg}");
+    assert!(msg.contains("model-9"), "{msg}");
+    assert!(msg.contains("model-15"), "{msg}");
+    assert!(!msg.contains("..."), "{msg}");
 }
