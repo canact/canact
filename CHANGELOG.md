@@ -3,6 +3,36 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.7.0](https://github.com/canact/canact/compare/v0.6.0...v0.7.0) (2026-09-18)
+
+
+### Features
+
+* consume wiremux 0.7.0 ([#258](https://github.com/canact/canact/issues/258)) ([f1b44d4](https://github.com/canact/canact/commit/f1b44d4357835307b7e8688e3df89efb7fbb5191))
+* route groq and bedrock and classify Ollama Display ([#239](https://github.com/canact/canact/issues/239)) ([4a5fd55](https://github.com/canact/canact/commit/4a5fd553ba102de092ef44721d254bb76983ea0b))
+
+
+### Bug Fixes
+
+* abort when vendor chat says model not found ([#245](https://github.com/canact/canact/issues/245)) ([9423da2](https://github.com/canact/canact/commit/9423da2670084eb8b4d6b9c95f5ca949d4c1f49c))
+* append /v1 to Ollama listen URLs ([#255](https://github.com/canact/canact/issues/255)) ([b6d0dba](https://github.com/canact/canact/commit/b6d0dbaa2b43198706e32d471de72351f21dfb42))
+* collapse whitespace-equivalent model ids in cache lookup ([#256](https://github.com/canact/canact/issues/256)) ([f6ca459](https://github.com/canact/canact/commit/f6ca459d419b2e4adf648c52ccd70cf140f1f004))
+* do not call a directory cache an internal error ([#252](https://github.com/canact/canact/issues/252)) ([6d05729](https://github.com/canact/canact/commit/6d0572950f92dbba36e2cd3369c9b701823251ad))
+* flush folded tool calls on ToolCallEnd ([#259](https://github.com/canact/canact/issues/259)) ([a8e4a8c](https://github.com/canact/canact/commit/a8e4a8cc960a82b9f70daa92d811bc323e865bcd))
+* honor explicit groq base-url and tighten folded 404 ([#241](https://github.com/canact/canact/issues/241)) ([da31a08](https://github.com/canact/canact/commit/da31a08566793f62d737a20ae374624572d43aff))
+* list every GET /models id when --model is missing ([#244](https://github.com/canact/canact/issues/244)) ([12f5c3f](https://github.com/canact/canact/commit/12f5c3f19ef7371c10eca6edad37bb389b824bed))
+* map groq and bedrock hosts to overlay families ([#242](https://github.com/canact/canact/issues/242)) ([ebb2a69](https://github.com/canact/canact/commit/ebb2a69a2a805c72add5dcb549de66d262d95550))
+* print not probed for skipped human-table rows ([#246](https://github.com/canact/canact/issues/246)) ([516d4c3](https://github.com/canact/canact/commit/516d4c35489faf102179078acf31ac1df1d10b5e))
+* refuse --cheap when --suite is not policy ([#248](https://github.com/canact/canact/issues/248)) ([660b8c2](https://github.com/canact/canact/commit/660b8c295ca83ac018c15a2f4a8271bcecdbfe3b))
+* refuse a directory as the probe cache path ([#251](https://github.com/canact/canact/issues/251)) ([ba8408f](https://github.com/canact/canact/commit/ba8408f6f9829e07e7678cf1aa7323c8b81cd06d))
+* refuse advertised-context 0 ([#250](https://github.com/canact/canact/issues/250)) ([2f8afe6](https://github.com/canact/canact/commit/2f8afe6980a286b4ffb1bf83ba9000c9cdab82ad))
+* replace alias Aider overlay names on re-export ([#243](https://github.com/canact/canact/issues/243)) ([bdc4817](https://github.com/canact/canact/commit/bdc481797dfd5dce2d6f2e0462b9718a6be8074c))
+* treat an empty probe cache file as empty ([#247](https://github.com/canact/canact/issues/247)) ([1986ace](https://github.com/canact/canact/commit/1986acef8c2c33142d08f8ab96cb9942bf6f99c7))
+* treat multimodal refusal as measured Weak vision ([#249](https://github.com/canact/canact/issues/249)) ([68eb017](https://github.com/canact/canact/commit/68eb017f50f7b3aa47000844bd24089dc4f4c370))
+* trim whitespace on --model before cache lookup ([#253](https://github.com/canact/canact/issues/253)) ([58189ed](https://github.com/canact/canact/commit/58189ed3c951329d088bcec100914ec6144ce922))
+* trim whitespace on --provider before routing ([#254](https://github.com/canact/canact/issues/254)) ([8620272](https://github.com/canact/canact/commit/8620272ba2b17ca1f8afb60d5b684d62f77ddf81))
+* trim whitespace on explicit --base-url before host routing ([#257](https://github.com/canact/canact/issues/257)) ([e029bbf](https://github.com/canact/canact/commit/e029bbf954b52876ed4d7d0b7a02c74014235760))
+
 ## [0.6.0](https://github.com/canact/canact/compare/v0.5.0...v0.6.0) (2026-09-16)
 
 
