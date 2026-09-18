@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.6.0.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.7.0.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -782,8 +782,8 @@ fn is_connect_message(message: &str) -> bool {
     {
         return true;
     }
-    // Wiremux closed-port is often only "error sending request for url (...)".
-    // A hung-after-accept read timeout uses the same prefix plus "timed out".
+    // Closed-port Display may be only the send-url prefix. A hung-after-accept
+    // read timeout uses that prefix plus "timed out" and must stay scored.
     lower.contains("error sending request")
         && !lower.contains("timed out")
         && !lower.contains("timeout")
@@ -1164,6 +1164,44 @@ mod tests {
             }
             other => panic!("expected Transient closed port, got {other:?}"),
         }
+
+        let suffix_timeout = map_client_error(ClientError::Transient {
+            status: None,
+            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): timed out".into(),
+        });
+        match &suffix_timeout {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    !msg.starts_with("failed to connect:"),
+                    "0.7.0 timeout suffix must stay scored: {msg}"
+                );
+            }
+            other => panic!("expected Transient timeout suffix, got {other:?}"),
+        }
+        let (result, cacheable) = resolve_probe(Err(suffix_timeout), "tool_calling")
+            .expect("timeout suffix stays scored");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert!(!cacheable, "timeout must not persist");
+
+        let suffix_connect = map_client_error(ClientError::Transient {
+            status: None,
+            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): error trying to connect".into(),
+        });
+        match &suffix_connect {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    msg.starts_with("failed to connect:"),
+                    "0.7.0 connect suffix must abort: {msg}"
+                );
+            }
+            other => panic!("expected Transient connect suffix, got {other:?}"),
+        }
+        match resolve_probe(Err(suffix_connect), "tool_calling") {
+            Err(ProbeError::Transient(msg)) => {
+                assert!(msg.contains("failed to connect:"), "{msg}");
+            }
+            other => panic!("expected connect-suffix abort, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1257,7 +1295,7 @@ mod tests {
         assert_eq!(
             advertised_context_for_model(&models, "grok-4.6"),
             Some(500_000),
-            "wiremux 0.6.0 list_models must read context_window"
+            "wiremux 0.7.0 list_models must read context_window"
         );
     }
 
