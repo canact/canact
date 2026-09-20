@@ -8,8 +8,9 @@ use canact::{
     PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
     claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
     is_groq_provider_label, list_model_ids, looks_cheap, missing_cloud_key_message,
-    missing_model_message, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
-    run_mcp_stdio, should_load_claude_code_login, should_load_xai_oauth, xai_oauth_access_token,
+    missing_model_message, present_base_url, refuse_cloud_without_key, resolve_api_key_from,
+    resolve_host_catalog, run_mcp_stdio, should_load_claude_code_login, should_load_xai_oauth,
+    xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -163,6 +164,10 @@ fn main() -> ExitCode {
     }
 }
 
+fn cli_explicit_base_url(raw: Option<&str>) -> bool {
+    present_base_url(raw).is_some()
+}
+
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let provider_hint = args
         .provider
@@ -174,7 +179,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let first = resolve_api_key(
         args.api_key.clone(),
         &provider_hint,
-        args.base_url.is_some(),
+        cli_explicit_base_url(args.base_url.as_deref()),
     );
     let (route, base_url, provider) =
         finalize_key_route(&provider_hint, args.base_url.clone(), first, |provider| {
@@ -651,9 +656,27 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_tilde;
-    use canact::{looks_cheap, resolve_api_key_from};
+    use super::{cli_explicit_base_url, expand_tilde};
+    use canact::{looks_cheap, resolve_api_key_from, should_load_xai_oauth};
     use std::path::PathBuf;
+
+    #[test]
+    fn whitespace_only_base_url_does_not_skip_oauth() {
+        assert!(!cli_explicit_base_url(Some("  ")));
+        assert!(!cli_explicit_base_url(Some("")));
+        assert!(!cli_explicit_base_url(None));
+        assert!(cli_explicit_base_url(Some(" http://127.0.0.1:11434 ")));
+        assert!(should_load_xai_oauth(
+            "",
+            false,
+            cli_explicit_base_url(Some("  "))
+        ));
+        assert!(!should_load_xai_oauth(
+            "",
+            false,
+            cli_explicit_base_url(Some("http://127.0.0.1:11434"))
+        ));
+    }
 
     #[test]
     fn api_key_flag_plus_openrouter_env_routes_to_openrouter() {

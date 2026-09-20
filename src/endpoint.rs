@@ -416,6 +416,11 @@ fn is_openai_cloud_host(base_url: &str) -> bool {
     host == "api.openai.com" || host.ends_with(".openai.com")
 }
 
+/// Present `--base-url` / MCP `base_url` after trim. Whitespace-only is absent.
+pub fn present_base_url(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// After an explicit base URL is known, re-resolve the key when
 /// the user omitted `--provider` / MCP `provider`.
 pub fn finalize_key_route(
@@ -1315,5 +1320,26 @@ mod tests {
         assert!(!route.from_anthropic);
         assert_eq!(base_url, XAI_BASE_URL);
         assert_eq!(provider, "api.x.ai");
+    }
+
+    #[test]
+    fn present_base_url_whitespace_only_is_absent() {
+        assert_eq!(present_base_url(Some("  ")), None);
+        assert_eq!(present_base_url(Some("")), None);
+        assert_eq!(present_base_url(None), None);
+        assert_eq!(
+            present_base_url(Some(" http://127.0.0.1:11434 ")),
+            Some("http://127.0.0.1:11434")
+        );
+        assert!(should_load_xai_oauth(
+            "",
+            false,
+            present_base_url(Some("  ")).is_some()
+        ));
+        assert!(!should_load_xai_oauth(
+            "",
+            false,
+            present_base_url(Some("http://127.0.0.1:11434")).is_some()
+        ));
     }
 }

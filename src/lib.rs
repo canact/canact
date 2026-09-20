@@ -18,9 +18,9 @@ pub use endpoint::{
     is_anthropic_provider_label, is_bedrock_cloud_host, is_bedrock_provider_label,
     is_grok_build_cloud_host, is_grok_build_messages_provider_label, is_grok_build_provider_label,
     is_groq_cloud_host, is_groq_provider_label, is_ollama_compat_base, is_xai_provider_label,
-    local_provider_base_url, looks_cheap, missing_cloud_key_message, provider_from_base_url,
-    refuse_cloud_without_key, resolve_api_key_from, should_load_claude_code_login,
-    should_load_xai_oauth, uses_xai_credentials,
+    local_provider_base_url, looks_cheap, missing_cloud_key_message, present_base_url,
+    provider_from_base_url, refuse_cloud_without_key, resolve_api_key_from,
+    should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
 };
 pub use error::ProbeError;
 pub use matrix::{PlumbingCell, PlumbingMatrix, PlumbingRow};

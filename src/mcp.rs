@@ -10,7 +10,7 @@ use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
     is_anthropic_provider_label, is_bedrock_provider_label, is_groq_provider_label, looks_cheap,
-    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    present_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
     should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
     xai_oauth_access_token,
 };
@@ -162,10 +162,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
     let openrouter = std::env::var("OPENROUTER_API_KEY")
         .ok()
         .filter(|s| !s.is_empty());
-    let has_explicit_base = args
-        .get("base_url")
-        .and_then(Value::as_str)
-        .is_some_and(|s| !s.is_empty());
+    let has_explicit_base = mcp_present_base_url(args).is_some();
     let skip_oauth = api_key_env.is_some_and(|v| !v.is_empty());
     let other_before_xai = openai.is_some() || openrouter.is_some() || named_key.is_some();
     let xai = if skip_oauth {
@@ -263,11 +260,7 @@ async fn probe_model_with_route(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
-    let explicit_base_url = args
-        .get("base_url")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
+    let explicit_base_url = mcp_present_base_url(args).map(str::to_owned);
     let (route, base_url, provider) =
         finalize_key_route(provider_given, explicit_base_url, first, |provider| {
             let named_key = mcp_named_or_route_key(api_key_env, provider);
@@ -386,6 +379,10 @@ async fn probe_model_with_route(
 
 fn trim_api_key_env(raw: Option<&str>) -> Option<&str> {
     raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn mcp_present_base_url(args: &Value) -> Option<&str> {
+    present_base_url(args.get("base_url").and_then(Value::as_str))
 }
 
 /// Injected-key MCP route. Tests pass values so they do not race on env.
@@ -824,6 +821,32 @@ mod tests {
         let _env = IsolatedApiKeyEnv::set_openai("sk-mcp-padded-lookup");
         let named = mcp_named_or_route_key(Some(" OPENAI_API_KEY "), "openai");
         assert_eq!(named.as_deref(), Some("sk-mcp-padded-lookup"));
+    }
+
+    #[test]
+    fn mcp_whitespace_only_base_url_is_not_explicit() {
+        let args = json!({ "base_url": "  " });
+        let has_explicit_base = mcp_present_base_url(&args).is_some();
+        assert!(
+            !has_explicit_base,
+            "whitespace-only MCP base_url must not skip oauth"
+        );
+        assert!(should_load_xai_oauth("", false, has_explicit_base));
+        assert_eq!(mcp_present_base_url(&args).map(str::to_owned), None);
+
+        let empty = json!({ "base_url": "" });
+        assert!(mcp_present_base_url(&empty).is_none());
+
+        let padded = json!({ "base_url": " http://127.0.0.1:11434 " });
+        assert_eq!(
+            mcp_present_base_url(&padded),
+            Some("http://127.0.0.1:11434")
+        );
+        assert!(!should_load_xai_oauth(
+            "",
+            false,
+            mcp_present_base_url(&padded).is_some()
+        ));
     }
 
     #[test]
