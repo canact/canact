@@ -303,6 +303,13 @@ mod tests {
     }
 
     #[test]
+    fn full_suite_omitted_output_cap_is_fail() {
+        let p = profile();
+        let row = PlumbingRow::from_profile_with_suite(&p, Some(SuiteTier::Full));
+        assert_eq!(row.max_output_tokens, PlumbingCell::Fail);
+    }
+
+    #[test]
     fn xml_only_is_degraded() {
         let mut p = profile();
         p.tool_calling = probe("tool_calling", CapabilityLevel::Weak);

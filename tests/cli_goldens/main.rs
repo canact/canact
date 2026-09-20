@@ -1189,6 +1189,104 @@ fn matrix_without_provider_lists_every_cached_row() {
 }
 
 #[test]
+fn matrix_provider_grok_filters_mixed_cache() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut grok = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    grok.model_id = "grok-4-fast-non-reasoning".to_owned();
+    grok.provider = "grok".to_owned();
+    let mut ollama = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    ollama.model_id = "llama3.2:3b".to_owned();
+    ollama.provider = "ollama".to_owned();
+    cache.put(grok);
+    cache.put(ollama);
+    cache.save(&cache_path).expect("save");
+    let path = cache_path.to_str().expect("utf8");
+    for provider_arg in ["grok", " grok "] {
+        let out = canact()
+            .args(["matrix", "--provider", provider_arg, "--cache", path])
+            .output()
+            .expect("spawn matrix");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "provider={provider_arg:?} stdout={stdout}\nstderr={stderr}"
+        );
+        let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+        assert_eq!(value["provider"], "grok", "{value}");
+        let rows = value["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 1, "{value}");
+        assert_eq!(rows[0]["model"], "grok-4-fast-non-reasoning", "{value}");
+    }
+}
+
+#[test]
+fn matrix_whitespace_provider_lists_every_cached_row() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut grok = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    grok.model_id = "grok-4-fast-non-reasoning".to_owned();
+    grok.provider = "grok".to_owned();
+    let mut ollama = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    ollama.model_id = "llama3.2:3b".to_owned();
+    ollama.provider = "ollama".to_owned();
+    cache.put(grok);
+    cache.put(ollama);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "   ",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert!(value.get("provider").is_none(), "{value}");
+    assert_eq!(value["rows"].as_array().expect("rows").len(), 2, "{value}");
+}
+
+#[test]
+fn matrix_missing_provider_fails_closed() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut grok = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    grok.model_id = "grok-4-fast-non-reasoning".to_owned();
+    grok.provider = "grok".to_owned();
+    cache.put(grok);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "missing",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(
+        stderr.contains("no cached probes for missing"),
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("required arguments"),
+        "unknown provider must not be clap-required: {stderr}"
+    );
+}
+
+#[test]
 fn matrix_without_provider_empty_cache_fails_closed() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
@@ -1318,6 +1416,45 @@ fn matrix_policy_row_skips_unmeasured_output_and_placement() {
     assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
     assert_eq!(value["rows"][0]["maxOutputTokens"], "skipped", "{value}");
+    assert_eq!(
+        value["rows"][0]["constraintPlacement"], "skipped",
+        "{value}"
+    );
+}
+
+#[test]
+fn matrix_full_row_omitted_output_cap_is_fail() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "full-row".to_owned();
+    profile.provider = "grok".to_owned();
+    profile.max_output_tokens = None;
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".into(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Skipped: diagnostic suite (use --suite=all)".into(),
+    };
+    let mut cache = ProbeCache::default();
+    cache.put_with_suite(profile, SuiteTier::Full, false, None);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "grok",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["rows"][0]["maxOutputTokens"], "fail", "{value}");
     assert_eq!(
         value["rows"][0]["constraintPlacement"], "skipped",
         "{value}"
@@ -1550,4 +1687,75 @@ fn matrix_stale_suite_explains_rerun() {
         !stderr.contains("no cached probes"),
         "stale suite must not look empty: {stderr}"
     );
+}
+
+#[test]
+fn matrix_without_provider_stale_only_explains_rerun() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "llama3.2:3b".to_owned();
+    profile.provider = "ollama".to_owned();
+    let mut cache = ProbeCache::default();
+    cache.put_with_settings(
+        profile,
+        "unset",
+        PROBE_SUITE_VERSION - 1,
+        true,
+        false,
+        Some(131_072),
+    );
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args(["matrix", "--cache", cache_path.to_str().expect("utf8")])
+        .output()
+        .expect("spawn matrix");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(
+        stderr.contains(&format!("suite {}", PROBE_SUITE_VERSION - 1)),
+        "stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("need {PROBE_SUITE_VERSION}")),
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("no cached probes"),
+        "unfiltered stale suite must not look empty: {stderr}"
+    );
+}
+
+#[test]
+fn matrix_without_provider_skips_stale_and_keeps_current() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut grok = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    grok.model_id = "grok-4-fast-non-reasoning".to_owned();
+    grok.provider = "grok".to_owned();
+    let mut ollama = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    ollama.model_id = "llama3.2:3b".to_owned();
+    ollama.provider = "ollama".to_owned();
+    let mut cache = ProbeCache::default();
+    cache.put(grok);
+    cache.put_with_settings(
+        ollama,
+        "unset",
+        PROBE_SUITE_VERSION - 1,
+        true,
+        false,
+        Some(131_072),
+    );
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args(["matrix", "--cache", cache_path.to_str().expect("utf8")])
+        .output()
+        .expect("spawn matrix");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    let rows = value["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "{value}");
+    assert_eq!(rows[0]["model"], "grok-4-fast-non-reasoning", "{value}");
 }
