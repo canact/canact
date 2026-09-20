@@ -32,7 +32,7 @@ enum Command {
     Probe(ProbeArgs),
     /// Write Aider or Cline overlay files from a cached probe
     Export(ExportArgs),
-    /// Plumbing table from cached probes (pass / degraded / fail, no rank)
+    /// Plumbing table from cached probes (pass / degraded / fail / skipped, no rank)
     Matrix(MatrixArgs),
     /// Serve MCP stdio (`probe_model` returns host-policy JSON, not TTFT)
     Mcp,
@@ -130,9 +130,9 @@ struct ExportArgs {
 
 #[derive(clap::Args)]
 struct MatrixArgs {
-    /// Provider whose cached models appear in the table
+    /// Provider whose cached models appear in the table (omit for every provider)
     #[arg(long)]
-    provider: String,
+    provider: Option<String>,
 
     /// Probe cache file [default: platform cache dir / canact / probes.json]
     #[arg(long)]
@@ -372,25 +372,38 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
 }
 
 fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
-    let provider = args.provider.trim();
-    if provider.is_empty() {
-        eprintln!("error: --provider is required");
-        return Err(1);
-    }
+    let provider = args
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
     })?;
-    let matrix = PlumbingMatrix::from_cache(&cache, provider);
+    let matrix = PlumbingMatrix::from_cache_filter(&cache, provider);
     if matrix.rows.is_empty() {
-        if let Some(stale) = cache.stale_suite_version_for_provider(provider) {
-            eprintln!(
-                "error: cached {provider} probes are suite {stale} (need {}); run `canact probe` again",
-                canact::PROBE_SUITE_VERSION
-            );
+        let stale = match provider {
+            Some(p) => cache.stale_suite_version_for_provider(p),
+            None => cache.stale_suite_version_any(),
+        };
+        if let Some(stale) = stale {
+            if let Some(p) = provider {
+                eprintln!(
+                    "error: cached {p} probes are suite {stale} (need {}); run `canact probe` again",
+                    canact::PROBE_SUITE_VERSION
+                );
+            } else {
+                eprintln!(
+                    "error: cached probes are suite {stale} (need {}); run `canact probe` again",
+                    canact::PROBE_SUITE_VERSION
+                );
+            }
+        } else if let Some(p) = provider {
+            eprintln!("error: no cached probes for {p} (run `canact probe` first)");
         } else {
-            eprintln!("error: no cached probes for {provider} (run `canact probe` first)",);
+            eprintln!("error: no cached probes (run `canact probe` first)");
         }
         return Err(1);
     }

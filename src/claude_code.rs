@@ -3,9 +3,9 @@
 //! Refresh, keychain, and file parse live in the shipped `anthropic-oauth`
 //! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.7.0
 //! tries the process login name before the shipped `Claude Code` /
-//! `credentials` keychain accounts. Hosts that only need a stored
-//! Bearer use `token_for_profile_cached` so an expired oat does not
-//! POST `token_url`.
+//! `credentials` keychain accounts. Login uses `token_for_profile` so an
+//! expired oat POSTs `token_url` (bounded refresh). Do not call that
+//! helper from a unit test against the developer keychain; isolate HOME.
 
 /// Test hook kept so existing CLI/MCP tests compile. Isolation is owned by
 /// `wiremux-auth` `IsolatedHome` (feature `test-util`).
@@ -25,31 +25,26 @@ impl ClaudeCodeKeychainIsolation {
 /// Access token from catalog id `anthropic-oauth` (file, keychain, or env).
 ///
 /// Runs on a helper thread so a current-thread Tokio runtime can call this
-/// from `async` without nesting `block_on`.
+/// from `async` without nesting `block_on`. Refreshes an expired oat.
 pub fn claude_code_access_token() -> Option<String> {
-    std::thread::spawn(|| {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .ok()?;
-        rt.block_on(wiremux_auth::token_for_profile_cached("anthropic-oauth"))
-            .ok()
-    })
-    .join()
-    .ok()
-    .flatten()
+    oauth_access_token("anthropic-oauth")
 }
 
 /// Access token from catalog id `xai-oauth` (`~/.grok/auth.json`).
 ///
-/// Env `XAI_API_KEY` / `GROK_API_KEY` still win at the caller.
+/// Env `XAI_API_KEY` / `GROK_API_KEY` still win at the caller. Refreshes
+/// an expired oat.
 pub fn xai_oauth_access_token() -> Option<String> {
-    std::thread::spawn(|| {
+    oauth_access_token("xai-oauth")
+}
+
+fn oauth_access_token(profile_id: &'static str) -> Option<String> {
+    std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .ok()?;
-        rt.block_on(wiremux_auth::token_for_profile_cached("xai-oauth"))
+        rt.block_on(wiremux_auth::token_for_profile(profile_id))
             .ok()
     })
     .join()
@@ -59,6 +54,20 @@ pub fn xai_oauth_access_token() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn login_uses_refreshing_token_for_profile() {
+        let src = include_str!("claude_code.rs");
+        let prod = src.split("mod tests").next().expect("production");
+        assert!(
+            prod.contains("token_for_profile(profile_id)"),
+            "Claude/xAI login must refresh via token_for_profile"
+        );
+        assert!(
+            !prod.contains("token_for_profile_cached"),
+            "cached Bearer skips token_url and leaves an expired oat"
+        );
+    }
+
     #[test]
     fn shipped_anthropic_oauth_profile_loads() {
         let opts = wiremux_auth::LoadOptions::default();
