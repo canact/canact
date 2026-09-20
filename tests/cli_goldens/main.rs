@@ -114,6 +114,48 @@ fn probe_advertised_context_zero_is_refused() {
 }
 
 #[test]
+fn probe_padded_advertised_context_parses() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(
+        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+        true,
+        false,
+        Some(4096),
+    );
+    cache.save(&cache_path).expect("save cache");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--cheap",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--advertised-context",
+            " 4096 ",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "padded advertised-context must parse; stdout={stdout}\nstderr={stderr}"
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["advertisedContextTokens"], 4096, "{value}");
+}
+
+#[test]
 fn probe_help_lists_cheap_full_vision() {
     let help = stdout_of(&["probe", "--help"]);
     assert!(help.contains("--cheap"), "{help}");
@@ -172,6 +214,48 @@ fn probe_cheap_conflicts_with_suite_full() {
         err.contains("--full") && err.contains("--suite=policy"),
         "{err}"
     );
+}
+
+#[test]
+fn probe_padded_suite_parses_full() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut policy = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
+    policy.effective_context_tokens = Some(111);
+    cache.put_with_suite(policy, SuiteTier::Policy, false, None);
+    let mut full = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
+    full.effective_context_tokens = Some(999);
+    cache.put_with_suite(full, SuiteTier::Full, false, None);
+    cache.save(&cache_path).expect("save cache");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--suite",
+            " full ",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "padded --suite must parse Full; stdout={stdout}\nstderr={stderr}"
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["suite"], "full", "{value}");
+    assert_eq!(value["effectiveContextTokens"], 999, "{value}");
 }
 
 #[test]
@@ -342,6 +426,64 @@ fn probe_cheap_cache_is_not_returned_on_full() {
         full_stderr.contains("authentication error:"),
         "stderr={full_stderr}"
     );
+}
+
+#[cfg(unix)]
+fn seed_default_cache_locations(home: &std::path::Path, xdg: &std::path::Path, cache: &ProbeCache) {
+    let parents = [
+        xdg.join("canact"),
+        home.join("Library").join("Caches").join("canact"),
+        home.join(".cache").join("canact"),
+    ];
+    for parent in parents {
+        std::fs::create_dir_all(&parent).expect("cache dir");
+        cache
+            .save(&parent.join("probes.json"))
+            .expect("save default cache");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn probe_whitespace_cache_uses_default_path() {
+    let home = tempfile::tempdir().expect("home");
+    let xdg = home.path().join("xdg-cache");
+    let mut cache = ProbeCache::default();
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
+    profile.model_id = "whitespace-cache-model".to_owned();
+    profile.effective_context_tokens = Some(4242);
+    cache.put_with_knobs(profile, true, false, None);
+    seed_default_cache_locations(home.path(), &xdg, &cache);
+    let out = canact()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("XDG_CACHE_HOME", &xdg)
+        .args([
+            "probe",
+            "--json",
+            "--cheap",
+            "--model",
+            "whitespace-cache-model",
+            "--provider",
+            "test",
+            "--cache",
+            "   ",
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "whitespace --cache must use default; stdout={stdout}\nstderr={stderr}"
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert_eq!(value["model"], "whitespace-cache-model", "{value}");
+    assert_eq!(value["effectiveContextTokens"], 4242, "{value}");
 }
 
 fn probe_json_from_cache(args: &[&str], cheap: bool, advertised: Option<u32>) -> serde_json::Value {
@@ -852,6 +994,45 @@ fn export_aider_writes_cwd_when_dir_omitted() {
         "metadata missing; stderr={stderr}"
     );
     assert!(stderr.contains("wrote"), "stderr={stderr}");
+}
+
+#[test]
+fn export_whitespace_dir_writes_cwd() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(cached_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+    ));
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .current_dir(dir.path())
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            "   ",
+        ])
+        .output()
+        .expect("spawn export");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        dir.path().join(".aider.model.settings.yml").is_file(),
+        "whitespace --dir must omit to cwd; stderr={stderr}"
+    );
+    assert!(
+        dir.path().join(".aider.model.metadata.json").is_file(),
+        "whitespace --dir must omit to cwd; stderr={stderr}"
+    );
 }
 
 #[test]
