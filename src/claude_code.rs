@@ -26,30 +26,48 @@ impl ClaudeCodeKeychainIsolation {
 ///
 /// Runs on a helper thread so a current-thread Tokio runtime can call this
 /// from `async` without nesting `block_on`. Refreshes an expired oat.
-pub fn claude_code_access_token() -> Option<String> {
+/// `Ok(None)` means no login. `Err` is a failed refresh (Auth), not a
+/// missing-key.
+pub fn claude_code_access_token() -> Result<Option<String>, String> {
     oauth_access_token("anthropic-oauth")
 }
 
 /// Access token from catalog id `xai-oauth` (`~/.grok/auth.json`).
 ///
 /// Env `XAI_API_KEY` / `GROK_API_KEY` still win at the caller. Refreshes
-/// an expired oat.
-pub fn xai_oauth_access_token() -> Option<String> {
+/// an expired oat. Same `Ok(None)` vs `Err` split as
+/// [`claude_code_access_token`].
+pub fn xai_oauth_access_token() -> Result<Option<String>, String> {
     oauth_access_token("xai-oauth")
 }
 
-fn oauth_access_token(profile_id: &'static str) -> Option<String> {
+fn classify_oauth_result(
+    result: Result<String, wiremux_auth::AuthError>,
+) -> Result<Option<String>, String> {
+    match result {
+        Ok(token) => Ok(Some(token)),
+        Err(wiremux_auth::AuthError::MissingField(_)) => Ok(None),
+        Err(err) => {
+            let msg = err.to_string();
+            if msg.contains("no credentials") {
+                Ok(None)
+            } else {
+                Err(msg)
+            }
+        }
+    }
+}
+
+fn oauth_access_token(profile_id: &'static str) -> Result<Option<String>, String> {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .ok()?;
-        rt.block_on(wiremux_auth::token_for_profile(profile_id))
-            .ok()
+            .map_err(|err| err.to_string())?;
+        classify_oauth_result(rt.block_on(wiremux_auth::token_for_profile(profile_id)))
     })
     .join()
-    .ok()
-    .flatten()
+    .unwrap_or_else(|_| Err("oauth helper thread panicked".to_owned()))
 }
 
 #[cfg(test)]
@@ -66,6 +84,31 @@ mod tests {
             !prod.contains("token_for_profile_cached"),
             "cached Bearer skips token_url and leaves an expired oat"
         );
+    }
+
+    #[test]
+    fn oauth_missing_field_is_absent() {
+        let err = wiremux_auth::AuthError::MissingField("refresh_token".into());
+        assert_eq!(super::classify_oauth_result(Err(err)).unwrap(), None);
+    }
+
+    #[test]
+    fn oauth_no_credentials_is_absent() {
+        let err = wiremux_auth::AuthError::TokenProvider(
+            "no credentials (file); re-authenticate using the profile login flow".into(),
+        );
+        assert_eq!(super::classify_oauth_result(Err(err)).unwrap(), None);
+    }
+
+    #[test]
+    fn oauth_vendor_rejected_is_auth_not_missing() {
+        let err = wiremux_auth::AuthError::VendorRejected {
+            status: 400,
+            summary: "invalid_grant".into(),
+        };
+        let msg = super::classify_oauth_result(Err(err)).unwrap_err();
+        assert!(msg.contains("vendor rejected"), "{msg}");
+        assert!(msg.contains("invalid_grant"), "{msg}");
     }
 
     #[test]

@@ -203,7 +203,7 @@ fn anthropic_default_ok(provider: &str) -> bool {
     provider.is_empty() || is_anthropic_provider_label(provider)
 }
 
-/// Whether to call `token_for_profile_cached("anthropic-oauth")`.
+/// Whether to call `token_for_profile("anthropic-oauth")`.
 ///
 /// Skip on named non-Anthropic routes so an expired Claude Code keychain
 /// item cannot stall an Ollama or xAI probe while wiremux refreshes.
@@ -220,7 +220,7 @@ pub fn should_load_claude_code_login(
     is_anthropic_provider_label(provider) || (provider.is_empty() && !other_cloud_keys)
 }
 
-/// Whether to call `token_for_profile_cached("xai-oauth")` (`~/.grok/auth.json`).
+/// Whether to call `token_for_profile("xai-oauth")` (`~/.grok/auth.json`).
 ///
 /// Same skip rules as [`should_load_claude_code_login`]: named non-xAI
 /// routes and a first resolve with `--base-url` must not read Grok login.
@@ -427,8 +427,8 @@ pub fn finalize_key_route(
     provider_given: &str,
     explicit_base_url: Option<String>,
     first: KeyRoute,
-    re_resolve: impl FnOnce(&str) -> KeyRoute,
-) -> (KeyRoute, String, String) {
+    re_resolve: impl FnOnce(&str) -> Result<KeyRoute, String>,
+) -> Result<(KeyRoute, String, String), String> {
     let explicit_base_url = explicit_base_url.and_then(|s| {
         let t = s.trim();
         if t.is_empty() {
@@ -447,11 +447,11 @@ pub fn finalize_key_route(
         provider_given.to_owned()
     };
     let route = if provider_given.is_empty() && has_explicit {
-        re_resolve(&provider)
+        re_resolve(&provider)?
     } else {
         first
     };
-    (route, base_url, provider)
+    Ok((route, base_url, provider))
 }
 
 /// True when the host or model looks local/free so the cheap suite is enough.
@@ -1138,15 +1138,16 @@ mod tests {
         assert!(first.from_xai, "precondition: empty provider prefers xAI");
         let (route, base_url, provider) =
             finalize_key_route("", Some(ANTHROPIC_BASE_URL.to_owned()), first, |p| {
-                resolve_api_key_from(
+                Ok(resolve_api_key_from(
                     None,
                     None,
                     None,
                     Some("xai-env".to_owned()),
                     Some("sk-ant-env".to_owned()),
                     p,
-                )
-            });
+                ))
+            })
+            .expect("route");
         assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
         assert!(route.from_anthropic);
         assert!(!route.from_xai);
@@ -1163,8 +1164,16 @@ mod tests {
         );
         let (route, base_url, provider) =
             finalize_key_route("", Some(XAI_BASE_URL.to_owned()), first, |p| {
-                resolve_api_key_from(None, None, None, None, Some("sk-ant".to_owned()), p)
-            });
+                Ok(resolve_api_key_from(
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("sk-ant".to_owned()),
+                    p,
+                ))
+            })
+            .expect("route");
         assert!(
             route.key.is_none(),
             "must not send an Anthropic key to api.x.ai"
@@ -1186,7 +1195,8 @@ mod tests {
         );
         let (route, base_url, provider) = finalize_key_route("", None, first, |_| {
             panic!("must not re-resolve when URL was omitted")
-        });
+        })
+        .expect("route");
         assert_eq!(route.key.as_deref(), Some("xai-env"));
         assert!(route.from_xai);
         assert!(!route.from_anthropic);
@@ -1208,7 +1218,8 @@ mod tests {
         let (route, base_url, provider) =
             finalize_key_route("claude", Some(XAI_BASE_URL.to_owned()), first, |_| {
                 panic!("must not re-resolve when --provider was given")
-            });
+            })
+            .expect("route");
         assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
         assert!(route.from_anthropic);
         assert!(!route.from_xai);
@@ -1248,15 +1259,16 @@ mod tests {
         );
         let (route, base_url, provider) =
             finalize_key_route("", Some(XAI_BASE_URL.to_owned()), first, |p| {
-                resolve_api_key_from(
+                Ok(resolve_api_key_from(
                     None,
                     Some("sk-openai".to_owned()),
                     None,
                     Some("xai-env".to_owned()),
                     None,
                     p,
-                )
-            });
+                ))
+            })
+            .expect("route");
         assert_eq!(route.key.as_deref(), Some("xai-env"));
         assert!(route.from_xai);
         assert_eq!(base_url, XAI_BASE_URL);
@@ -1275,15 +1287,16 @@ mod tests {
         );
         let (route, _, provider) =
             finalize_key_route("", Some(ANTHROPIC_BASE_URL.to_owned()), first, |p| {
-                resolve_api_key_from(
+                Ok(resolve_api_key_from(
                     None,
                     Some("sk-openai".to_owned()),
                     None,
                     None,
                     Some("sk-ant-env".to_owned()),
                     p,
-                )
-            });
+                ))
+            })
+            .expect("route");
         assert_eq!(route.key.as_deref(), Some("sk-ant-env"));
         assert!(route.from_anthropic);
         assert_eq!(provider, "api.anthropic.com");
@@ -1294,8 +1307,9 @@ mod tests {
         let first = resolve_api_key_from(None, None, None, None, None, "");
         let (route, base_url, provider) =
             finalize_key_route("", Some("http://127.0.0.1:11434 ".to_owned()), first, |p| {
-                resolve_api_key_from(None, None, None, None, None, p)
-            });
+                Ok(resolve_api_key_from(None, None, None, None, None, p))
+            })
+            .expect("route");
         assert!(route.key.is_none());
         assert_eq!(base_url, "http://127.0.0.1:11434/v1");
         assert_eq!(provider, "127.0.0.1:11434");
@@ -1314,7 +1328,8 @@ mod tests {
         let (route, base_url, provider) =
             finalize_key_route("", Some("  ".to_owned()), first, |_| {
                 panic!("must not re-resolve when URL was whitespace-only")
-            });
+            })
+            .expect("route");
         assert_eq!(route.key.as_deref(), Some("xai-env"));
         assert!(route.from_xai);
         assert!(!route.from_anthropic);

@@ -172,6 +172,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
             .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
     } else {
         xai_key_for_route(provider_given, other_before_xai, has_explicit_base)
+            .map_err(|msg| format!("authentication error: {msg}"))?
     };
     let other_cloud_keys =
         openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
@@ -179,6 +180,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         None
     } else {
         anthropic_key_for_route(provider_given, other_cloud_keys, has_explicit_base)
+            .map_err(|msg| format!("authentication error: {msg}"))?
     };
     let route = mcp_resolve_key_route(
         api_key_env,
@@ -278,16 +280,16 @@ async fn probe_model_with_route(
                     .filter(|s| !s.is_empty())
                     .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
             } else {
-                xai_key_for_route(provider, other_before_xai, false)
+                xai_key_for_route(provider, other_before_xai, false)?
             };
             let other_cloud_keys =
                 openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
             let anthropic = if skip_oauth {
                 None
             } else {
-                anthropic_key_for_route(provider, other_cloud_keys, false)
+                anthropic_key_for_route(provider, other_cloud_keys, false)?
             };
-            mcp_resolve_key_route(
+            Ok(mcp_resolve_key_route(
                 api_key_env,
                 named_key,
                 openai,
@@ -295,8 +297,9 @@ async fn probe_model_with_route(
                 xai,
                 anthropic,
                 provider,
-            )
-        });
+            ))
+        })
+        .map_err(|msg| format!("authentication error: {msg}"))?;
     let api_key = route.key.clone();
     if !force {
         if let Some(profile) = cache.get_with_suite(&model, &provider, suite, vision, advertised) {
@@ -458,32 +461,34 @@ fn xai_key_for_route(
     provider: &str,
     other_cloud_keys: bool,
     explicit_base_url: bool,
-) -> Option<String> {
-    std::env::var("XAI_API_KEY")
+) -> Result<Option<String>, String> {
+    if let Some(key) = std::env::var("XAI_API_KEY")
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
-        .or_else(|| {
-            if should_load_xai_oauth(provider, other_cloud_keys, explicit_base_url) {
-                xai_oauth_access_token()
-            } else {
-                None
-            }
-        })
+    {
+        return Ok(Some(key));
+    }
+    if should_load_xai_oauth(provider, other_cloud_keys, explicit_base_url) {
+        xai_oauth_access_token()
+    } else {
+        Ok(None)
+    }
 }
 
 fn anthropic_key_for_route(
     provider: &str,
     other_cloud_keys: bool,
     explicit_base_url: bool,
-) -> Option<String> {
-    anthropic_env_key().or_else(|| {
-        if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) {
-            claude_code_access_token()
-        } else {
-            None
-        }
-    })
+) -> Result<Option<String>, String> {
+    if let Some(key) = anthropic_env_key() {
+        return Ok(Some(key));
+    }
+    if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) {
+        claude_code_access_token()
+    } else {
+        Ok(None)
+    }
 }
 
 fn default_cache_path() -> PathBuf {
