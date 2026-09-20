@@ -147,7 +147,7 @@ impl SuiteTier {
 
     /// Parse `policy` / `full` / `all`.
     pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
+        match raw.trim() {
             "policy" | "cheap" => Some(Self::Policy),
             "full" => Some(Self::Full),
             "all" => Some(Self::All),
@@ -1076,5 +1076,22 @@ mod recommended_context_tests {
         ));
         assert!(all.get("constraintPlacement").is_none(), "{all}");
         assert_eq!(p.constraint_placement(), None);
+    }
+}
+
+#[cfg(test)]
+mod suite_tier_tests {
+    use super::SuiteTier;
+
+    #[test]
+    fn suite_tier_parse_trims_whitespace() {
+        assert_eq!(SuiteTier::parse(" full "), Some(SuiteTier::Full));
+        assert_eq!(SuiteTier::parse("policy "), Some(SuiteTier::Policy));
+        assert_eq!(SuiteTier::parse(" cheap"), Some(SuiteTier::Policy));
+        assert_eq!(SuiteTier::parse(" all "), Some(SuiteTier::All));
+        assert_eq!(SuiteTier::parse("full"), Some(SuiteTier::Full));
+        assert_eq!(SuiteTier::parse(""), None);
+        assert_eq!(SuiteTier::parse("   "), None);
+        assert_eq!(SuiteTier::parse("unknown"), None);
     }
 }

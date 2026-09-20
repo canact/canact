@@ -92,7 +92,7 @@ struct ProbeArgs {
     cache: Option<PathBuf>,
 
     /// Catalog prior: advertised context window in tokens
-    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long, value_name = "N", value_parser = parse_advertised_context)]
     advertised_context: Option<u32>,
 }
 
@@ -123,7 +123,7 @@ struct ExportArgs {
     dir: Option<PathBuf>,
 
     /// Catalog advertised context: cache-row key and overlay window
-    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long, value_name = "N", value_parser = parse_advertised_context)]
     advertised_context: Option<u32>,
 }
 
@@ -181,7 +181,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             resolve_api_key(args.api_key.clone(), provider, false)
         });
     let api_key = route.key.clone();
-    let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
+    let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let mut cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
@@ -306,7 +306,7 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         eprintln!("error: specify --aider or --cline");
         return Err(1);
     }
-    let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
+    let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
@@ -341,7 +341,7 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         HostOverlay::cline(&profile, advertised)
     };
     let files = overlay.files();
-    let dir = expand_tilde(args.dir.clone().unwrap_or_else(|| PathBuf::from(".")));
+    let dir = resolve_user_path(args.dir.clone(), PathBuf::from("."));
     if dir.exists() && !dir.is_dir() {
         eprintln!(
             "error: --dir must be a directory (got a file: {})",
@@ -372,7 +372,7 @@ fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
         eprintln!("error: --provider is required");
         return Err(1);
     }
-    let cache_path = expand_tilde(args.cache.clone().unwrap_or_else(default_cache_path));
+    let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
@@ -550,6 +550,28 @@ fn default_cache_path() -> PathBuf {
         .join("probes.json")
 }
 
+fn parse_advertised_context(raw: &str) -> Result<u32, String> {
+    let trimmed = raw.trim();
+    let n: u32 = trimmed.parse().map_err(|_| {
+        format!(
+            "invalid value '{raw}' for '--advertised-context <N>': invalid digit found in string"
+        )
+    })?;
+    if n < 1 {
+        return Err(format!(
+            "invalid value '{raw}' for '--advertised-context <N>': {n} is not in 1.."
+        ));
+    }
+    Ok(n)
+}
+
+fn resolve_user_path(raw: Option<PathBuf>, default: PathBuf) -> PathBuf {
+    match raw {
+        Some(p) if !p.to_string_lossy().trim().is_empty() => expand_tilde(p),
+        _ => default,
+    }
+}
+
 fn vision_catalog_flag(args: &ProbeArgs) -> Option<bool> {
     if args.vision {
         Some(true)
@@ -610,16 +632,21 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn expand_tilde(path: PathBuf) -> PathBuf {
-    let raw = path.to_string_lossy();
+    let owned = path.to_string_lossy();
+    let raw = owned.trim();
     if raw == "~" {
-        return home_dir().unwrap_or(path);
+        return home_dir().unwrap_or_else(|| PathBuf::from(raw));
     }
     if let Some(rest) = raw.strip_prefix("~/")
         && let Some(home) = home_dir()
     {
         return home.join(rest);
     }
-    path
+    if raw == owned.as_ref() {
+        path
+    } else {
+        PathBuf::from(raw)
+    }
 }
 
 #[cfg(test)]
@@ -813,6 +840,29 @@ mod tests {
         assert_eq!(expand_tilde(PathBuf::from("~")), home);
         assert_eq!(
             expand_tilde(PathBuf::from("/tmp/overlays")),
+            PathBuf::from("/tmp/overlays")
+        );
+        assert_eq!(
+            expand_tilde(PathBuf::from(" ~/overlays ")),
+            home.join("overlays")
+        );
+        assert_eq!(expand_tilde(PathBuf::from(" ~ ")), home);
+    }
+
+    #[test]
+    fn resolve_user_path_whitespace_uses_default() {
+        let default = PathBuf::from("/tmp/canact-default");
+        assert_eq!(super::resolve_user_path(None, default.clone()), default);
+        assert_eq!(
+            super::resolve_user_path(Some(PathBuf::from("   ")), default.clone()),
+            default
+        );
+        assert_eq!(
+            super::resolve_user_path(Some(PathBuf::from("")), default.clone()),
+            default
+        );
+        assert_eq!(
+            super::resolve_user_path(Some(PathBuf::from("/tmp/overlays")), default),
             PathBuf::from("/tmp/overlays")
         );
     }
