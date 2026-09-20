@@ -176,15 +176,27 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         .filter(|s| !s.is_empty())
         .unwrap_or("")
         .to_owned();
-    let first = resolve_api_key(
+    let first = match resolve_api_key(
         args.api_key.clone(),
         &provider_hint,
         cli_explicit_base_url(args.base_url.as_deref()),
-    );
+    ) {
+        Ok(route) => route,
+        Err(msg) => {
+            eprintln!("error: authentication error: {msg}");
+            return Err(1);
+        }
+    };
     let (route, base_url, provider) =
-        finalize_key_route(&provider_hint, args.base_url.clone(), first, |provider| {
+        match finalize_key_route(&provider_hint, args.base_url.clone(), first, |provider| {
             resolve_api_key(args.api_key.clone(), provider, false)
-        });
+        }) {
+            Ok(resolved) => resolved,
+            Err(msg) => {
+                eprintln!("error: authentication error: {msg}");
+                return Err(1);
+            }
+        };
     let api_key = route.key.clone();
     let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let mut cache = ProbeCache::load(&cache_path).map_err(|e| {
@@ -477,16 +489,30 @@ fn resolve_api_key(
     cli: Option<String>,
     provider: &str,
     explicit_base_url: bool,
-) -> canact::KeyRoute {
+) -> Result<canact::KeyRoute, String> {
     if is_groq_provider_label(provider) {
         let groq = std::env::var("GROQ_API_KEY").ok().filter(|s| !s.is_empty());
-        return resolve_api_key_from(cli.or(groq), None, None, None, None, provider);
+        return Ok(resolve_api_key_from(
+            cli.or(groq),
+            None,
+            None,
+            None,
+            None,
+            provider,
+        ));
     }
     if is_bedrock_provider_label(provider) {
         let bedrock = std::env::var("AWS_BEARER_TOKEN_BEDROCK")
             .ok()
             .filter(|s| !s.is_empty());
-        return resolve_api_key_from(cli.or(bedrock), None, None, None, None, provider);
+        return Ok(resolve_api_key_from(
+            cli.or(bedrock),
+            None,
+            None,
+            None,
+            None,
+            provider,
+        ));
     }
     let openai = std::env::var("OPENAI_API_KEY")
         .ok()
@@ -502,33 +528,34 @@ fn resolve_api_key(
         || openrouter.is_some()
         || xai_env.is_some()
         || cli.as_ref().is_some_and(|s| !s.is_empty());
-    let xai = xai_env.or_else(|| {
-        if should_load_xai_oauth(provider, other_before_xai_oauth, explicit_base_url) {
-            xai_oauth_access_token()
-        } else {
-            None
+    let xai = match xai_env {
+        Some(key) => Some(key),
+        None if should_load_xai_oauth(provider, other_before_xai_oauth, explicit_base_url) => {
+            xai_oauth_access_token()?
         }
-    });
+        None => None,
+    };
     let other_cloud_keys = openai.is_some()
         || openrouter.is_some()
         || xai.is_some()
         || cli.as_ref().is_some_and(|s| !s.is_empty());
-    let anthropic = std::env::var("ANTHROPIC_AUTH_TOKEN")
+    let anthropic = match std::env::var("ANTHROPIC_AUTH_TOKEN")
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| {
             std::env::var("ANTHROPIC_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
-        })
-        .or_else(|| {
-            if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) {
-                claude_code_access_token()
-            } else {
-                None
-            }
-        });
-    resolve_api_key_from(cli, openai, openrouter, xai, anthropic, provider)
+        }) {
+        Some(key) => Some(key),
+        None if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) => {
+            claude_code_access_token()?
+        }
+        None => None,
+    };
+    Ok(resolve_api_key_from(
+        cli, openai, openrouter, xai, anthropic, provider,
+    ))
 }
 
 async fn resolve_model(
