@@ -215,24 +215,45 @@ async fn probe_model_with_route(
             _ => return Err("advertised_context must be >= 1".to_owned()),
         },
     };
-    let cheap = json_bool(args.get("cheap")).unwrap_or(false);
-    let full = json_bool(args.get("full")).unwrap_or(false);
-    let suite = match args.get("suite").and_then(Value::as_str) {
-        Some(raw) => SuiteTier::parse(raw)
-            .ok_or_else(|| format!("unknown suite={raw} (expected policy, full, or all)"))?,
+    let cheap = present_json_bool(args, "cheap")?.unwrap_or(false);
+    let full = present_json_bool(args, "full")?.unwrap_or(false);
+    let suite = match args.get("suite") {
         None if full => SuiteTier::Full,
-        None if cheap => SuiteTier::Policy,
         None => SuiteTier::Policy,
+        Some(v) => {
+            let parsed = v
+                .as_str()
+                .map(str::trim)
+                .and_then(SuiteTier::parse)
+                .ok_or_else(|| {
+                    format!(
+                        "unknown suite={} (expected policy, full, or all)",
+                        json_label(v)
+                    )
+                })?;
+            if cheap && parsed != SuiteTier::Policy {
+                return Err(format!("cheap conflicts with suite={}", json_label(v)));
+            }
+            if full && parsed != SuiteTier::Full {
+                return Err(format!("full conflicts with suite={}", json_label(v)));
+            }
+            parsed
+        }
     };
-    let vision_flag = json_bool(args.get("vision"));
+    let vision_flag = present_json_bool(args, "vision")?;
     let vision = vision_flag.unwrap_or(false);
-    let force = json_bool(args.get("force")).unwrap_or(false);
-    let cache_path = args
-        .get("cache")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .map(expand_tilde)
-        .unwrap_or_else(default_cache_path);
+    let force = present_json_bool(args, "force")?.unwrap_or(false);
+    let cache_path = match args.get("cache").and_then(Value::as_str) {
+        None => default_cache_path(),
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                default_cache_path()
+            } else {
+                expand_tilde(PathBuf::from(trimmed))
+            }
+        }
+    };
     let mut cache = ProbeCache::load(&cache_path)
         .map_err(|e| format!("failed to load cache {}: {e}", cache_path.display()))?;
 
@@ -501,7 +522,23 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 fn json_bool(v: Option<&Value>) -> Option<bool> {
     let v = v?;
     v.as_bool()
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
+fn present_json_bool(args: &Value, key: &str) -> Result<Option<bool>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(v) => json_bool(Some(v))
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be a boolean")),
+    }
+}
+
+fn json_label(v: &Value) -> String {
+    match v.as_str() {
+        Some(s) => s.to_owned(),
+        None => v.to_string(),
+    }
 }
 
 fn json_u32(v: Option<&Value>) -> Option<u32> {
@@ -1002,6 +1039,281 @@ mod tests {
             Value::Null,
             "{envelope}"
         );
+    }
+
+    fn seed_openai_cache(
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+        tokens: Option<u32>,
+    ) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("gpt-4o", "openai");
+        profile.effective_context_tokens = tokens;
+        cache.put_with_suite(profile, suite, vision, advertised);
+        cache.save(&cache_path).expect("save");
+        (dir, cache_path.to_str().expect("utf8").to_owned())
+    }
+
+    struct IsolatedHome {
+        _lock: MutexGuard<'static, ()>,
+        prev_home: Option<OsString>,
+        prev_userprofile: Option<OsString>,
+        prev_xdg: Option<OsString>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl IsolatedHome {
+        fn new() -> Self {
+            static LOCK: Mutex<()> = Mutex::new(());
+            let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let dir = tempfile::tempdir().expect("temp home");
+            let prev_home = std::env::var_os("HOME");
+            let prev_userprofile = std::env::var_os("USERPROFILE");
+            let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+            let xdg = dir.path().join("cache");
+            unsafe {
+                std::env::set_var("HOME", dir.path());
+                std::env::set_var("USERPROFILE", dir.path());
+                std::env::set_var("XDG_CACHE_HOME", &xdg);
+            }
+            Self {
+                _lock: lock,
+                prev_home,
+                prev_userprofile,
+                prev_xdg,
+                _dir: dir,
+            }
+        }
+    }
+
+    impl Drop for IsolatedHome {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev_home {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+                match &self.prev_userprofile {
+                    Some(v) => std::env::set_var("USERPROFILE", v),
+                    None => std::env::remove_var("USERPROFILE"),
+                }
+                match &self.prev_xdg {
+                    Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+                    None => std::env::remove_var("XDG_CACHE_HOME"),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_cheap_true_conflicts_with_suite_full() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Full, false, None, Some(999));
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_str,
+            "cheap": true,
+            "suite": "full",
+        });
+        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("cheap") && err.contains("suite"),
+            "cheap+suite=full must name cheap vs suite: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_full_true_conflicts_with_suite_policy() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Policy, false, None, Some(111));
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_str,
+            "full": true,
+            "suite": "policy",
+        });
+        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("full") && err.contains("suite"),
+            "full+suite=policy must name full vs suite: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_padded_suite_parses_full() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Full, false, None, Some(999));
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_str,
+            "suite": " full ",
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .expect("padded suite must parse Full");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["suite"], "full", "{envelope}");
+    }
+
+    #[tokio::test]
+    async fn mcp_present_suite_non_string_is_refused() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Policy, false, None, Some(111));
+        for suite in [json!(null), json!(true), json!(1)] {
+            let args = json!({
+                "model": "gpt-4o",
+                "provider": "openai",
+                "cache": cache_str,
+                "suite": suite,
+            });
+            let err = probe_model_with_route(&args, mcp_empty_route(), None)
+                .await
+                .unwrap_err();
+            assert!(
+                err.contains("unknown suite"),
+                "present {suite} must not omit to policy: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_present_invalid_bools_are_refused() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Policy, false, None, Some(111));
+        for (key, value) in [
+            ("cheap", json!("yes")),
+            ("cheap", json!(2)),
+            ("cheap", json!(null)),
+            ("full", json!("yes")),
+            ("vision", json!("yes")),
+            ("vision", json!(null)),
+            ("force", json!("yes")),
+        ] {
+            let mut args = json!({
+                "model": "gpt-4o",
+                "provider": "openai",
+                "cache": cache_str,
+            });
+            args[key] = value.clone();
+            let err = probe_model_with_route(&args, mcp_empty_route(), None)
+                .await
+                .unwrap_err();
+            assert!(
+                err.contains(key),
+                "present {key}={value} must name {key}: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_padded_cheap_true_conflicts_with_suite_full() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Full, false, None, Some(999));
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_str,
+            "cheap": " true ",
+            "suite": "full",
+        });
+        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("cheap") && err.contains("suite"),
+            "padded cheap true must parse and conflict with suite=full: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_omitted_cheap_stays_policy() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Policy, false, None, Some(111));
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_str,
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .expect("omitted cheap is policy");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["suite"], "policy", "{envelope}");
+    }
+
+    #[tokio::test]
+    async fn mcp_cheap_and_full_without_suite_is_full() {
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let mut cache = ProbeCache::default();
+        let mut policy = CapabilityProfile::unprobed("gpt-4o", "openai");
+        policy.effective_context_tokens = Some(111);
+        cache.put_with_suite(policy, SuiteTier::Policy, false, None);
+        let mut full = CapabilityProfile::unprobed("gpt-4o", "openai");
+        full.effective_context_tokens = Some(999);
+        cache.put_with_suite(full, SuiteTier::Full, false, None);
+        cache.save(&cache_path).expect("save");
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_path.to_str().expect("utf8"),
+            "cheap": true,
+            "full": true,
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .expect("cheap+full with no suite is Full");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["suite"], "full", "{envelope}");
+    }
+
+    #[tokio::test]
+    async fn mcp_whitespace_cache_uses_default_path() {
+        let _home = IsolatedHome::new();
+        let cache_path = default_cache_path();
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent).expect("cache dir");
+        }
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("gpt-4o", "openai");
+        profile.effective_context_tokens = Some(4242);
+        cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+        cache.save(&cache_path).expect("save");
+        for cache_arg in ["", "   "] {
+            let args = json!({
+                "model": "gpt-4o",
+                "provider": "openai",
+                "cache": cache_arg,
+            });
+            let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("whitespace cache {cache_arg:?} must use default: {err}")
+                });
+            assert_eq!(envelope["fromCache"], true, "{cache_arg:?} {envelope}");
+            assert_eq!(
+                envelope["effectiveContextTokens"], 4242,
+                "{cache_arg:?} {envelope}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_vision_omitted_uses_catalog_cache() {
+        let (_dir, cache_str) = seed_openai_cache(SuiteTier::Policy, true, None, Some(777));
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_str,
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .expect("omitted vision uses catalog cache");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["effectiveContextTokens"], 777, "{envelope}");
     }
 
     #[test]
