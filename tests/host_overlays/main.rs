@@ -335,6 +335,75 @@ fn cli_export_normalizes_mixed_case_litellm_provider() {
 }
 
 #[test]
+fn cli_export_normalizes_lmstudio_vllm_litellm_providers() {
+    for (provider, model, expected_name, expected_family) in [
+        (
+            "lmstudio",
+            "qwen2.5-coder",
+            "lm_studio/qwen2.5-coder",
+            "lm_studio",
+        ),
+        (
+            "lm_studio",
+            "qwen2.5-coder",
+            "lm_studio/qwen2.5-coder",
+            "lm_studio",
+        ),
+        (
+            "vllm",
+            "qwen2.5-coder",
+            "hosted_vllm/qwen2.5-coder",
+            "hosted_vllm",
+        ),
+        ("grok-build", "grok-4", "grok-build/grok-4", "grok-build"),
+    ] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cache_path = dir.path().join("probes.json");
+        let mut cache = ProbeCache::default();
+        let mut profile = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
+        profile.model_id = model.into();
+        profile.provider = provider.into();
+        cache.put(profile);
+        cache.save(&cache_path).expect("save");
+        let out_dir = dir.path().join("overlays");
+
+        let aider = canact()
+            .args([
+                "export",
+                "--aider",
+                "--model",
+                model,
+                "--provider",
+                provider,
+                "--cache",
+                cache_path.to_str().expect("utf8"),
+                "--dir",
+                out_dir.to_str().expect("utf8"),
+            ])
+            .output()
+            .expect("export aider");
+        assert!(
+            aider.status.success(),
+            "provider={provider} stderr={}",
+            String::from_utf8_lossy(&aider.stderr)
+        );
+        let settings =
+            std::fs::read_to_string(out_dir.join(".aider.model.settings.yml")).expect("yml");
+        assert!(
+            settings.contains(&format!("name: {expected_name}")),
+            "provider={provider} expected name {expected_name}, got {settings}"
+        );
+        let metadata =
+            std::fs::read_to_string(out_dir.join(".aider.model.metadata.json")).expect("metadata");
+        let value: serde_json::Value = serde_json::from_str(&metadata).expect("json");
+        assert_eq!(
+            value[expected_name]["litellm_provider"], expected_family,
+            "provider={provider} litellm_provider must be {expected_family}, got {value}"
+        );
+    }
+}
+
+#[test]
 fn cli_export_advertised_context_selects_matching_row() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");

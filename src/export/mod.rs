@@ -152,6 +152,8 @@ pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
         "api.openai.com" | "openai" => "openai",
         "api.x.ai" | "x.ai" | "xai" | "grok" => "xai",
         "api.anthropic.com" | "anthropic" | "claude" => "anthropic",
+        "lmstudio" | "lm_studio" => "lm_studio",
+        "vllm" | "hosted_vllm" => "hosted_vllm",
         p if overlay_loopback_host(p) => "ollama",
         _ => provider,
     }
@@ -417,6 +419,88 @@ mod tests {
     }
 
     #[test]
+    fn overlay_name_maps_lmstudio_to_lm_studio() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.provider = "lmstudio".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "lm_studio/qwen2.5-coder",
+            "Aider/LiteLLM expect lm_studio/, not lmstudio/"
+        );
+        p.provider = "LMStudio".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "lm_studio/qwen2.5-coder",
+            "mixed-case LMStudio must export as lm_studio/"
+        );
+        p.provider = "lm_studio".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "lm_studio/qwen2.5-coder",
+            "already-normalized lm_studio must stay lm_studio"
+        );
+    }
+
+    #[test]
+    fn overlay_name_maps_vllm_to_hosted_vllm() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.provider = "vllm".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "hosted_vllm/qwen2.5-coder",
+            "LiteLLM OpenAI-compat expects hosted_vllm/, not vllm/"
+        );
+        p.provider = "hosted_vllm".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "hosted_vllm/qwen2.5-coder",
+            "already-normalized hosted_vllm must stay hosted_vllm"
+        );
+    }
+
+    #[test]
+    fn overlay_name_keeps_grok_build_off_xai() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.model_id = "grok-4".to_owned();
+        for provider in [
+            "grok-build",
+            "xai-grok-build",
+            "cli-chat-proxy.grok.com",
+            "grok-build-messages",
+        ] {
+            p.provider = provider.to_owned();
+            assert_eq!(
+                overlay_model_name(&p),
+                format!("{provider}/grok-4"),
+                "{provider} must not map to xai (wrong host)"
+            );
+            assert_eq!(
+                normalize_overlay_provider(provider),
+                provider,
+                "{provider} must stay {provider}, not xai"
+            );
+        }
+        p.provider = "grok".to_owned();
+        assert_eq!(
+            overlay_model_name(&p),
+            "xai/grok-4",
+            "plain grok still maps to xai"
+        );
+    }
+
+    #[test]
     fn aider_edit_format_maps_ladder() {
         assert_eq!(
             aider_edit_format(EditFormatRecommendation::SearchReplace),
@@ -460,6 +544,15 @@ mod tests {
             "openrouter/anthropic/claude",
             "anthropic/claude"
         ));
+        assert!(overlay_ids_same_model(
+            "lm_studio/qwen2.5-coder",
+            "lmstudio/qwen2.5-coder"
+        ));
+        assert!(overlay_ids_same_model(
+            "hosted_vllm/qwen2.5-coder",
+            "vllm/qwen2.5-coder"
+        ));
+        assert!(!overlay_ids_same_model("grok-build/grok-4", "xai/grok-4"));
     }
 
     #[test]
