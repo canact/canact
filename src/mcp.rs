@@ -154,7 +154,7 @@ async fn probe_model_args(args: &Value) -> Result<Value, String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
-    let api_key_env = args.get("api_key_env").and_then(Value::as_str);
+    let api_key_env = trim_api_key_env(args.get("api_key_env").and_then(Value::as_str));
     let named_key = mcp_named_or_route_key(api_key_env, provider_given);
     let openai = std::env::var("OPENAI_API_KEY")
         .ok()
@@ -200,6 +200,7 @@ async fn probe_model_with_route(
     first: KeyRoute,
     api_key_env: Option<&str>,
 ) -> Result<Value, String> {
+    let api_key_env = trim_api_key_env(api_key_env);
     let model = args
         .get("model")
         .and_then(Value::as_str)
@@ -207,9 +208,12 @@ async fn probe_model_with_route(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "model is required".to_owned())?
         .to_owned();
-    let advertised = match json_u32(args.get("advertised_context")) {
-        Some(0) => return Err("advertised_context must be >= 1".to_owned()),
-        other => other,
+    let advertised = match args.get("advertised_context") {
+        None => None,
+        Some(v) => match json_u32(Some(v)) {
+            Some(n) if n >= 1 => Some(n),
+            _ => return Err("advertised_context must be >= 1".to_owned()),
+        },
     };
     let cheap = json_bool(args.get("cheap")).unwrap_or(false);
     let full = json_bool(args.get("full")).unwrap_or(false);
@@ -359,6 +363,10 @@ async fn probe_model_with_route(
     Ok(run.host_policy_envelope())
 }
 
+fn trim_api_key_env(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// Injected-key MCP route. Tests pass values so they do not race on env.
 fn mcp_resolve_key_route(
     api_key_env: Option<&str>,
@@ -369,37 +377,37 @@ fn mcp_resolve_key_route(
     anthropic: Option<String>,
     provider: &str,
 ) -> KeyRoute {
-    match api_key_env {
-        Some(var) if !var.is_empty() => KeyRoute {
+    match trim_api_key_env(api_key_env) {
+        Some(var) => KeyRoute {
             key: named_key,
             from_openrouter: var == "OPENROUTER_API_KEY",
             from_xai: var == "XAI_API_KEY" || var == "GROK_API_KEY",
             from_anthropic: var == "ANTHROPIC_AUTH_TOKEN" || var == "ANTHROPIC_API_KEY",
         },
-        _ if is_groq_provider_label(provider) || is_bedrock_provider_label(provider) => {
+        None if is_groq_provider_label(provider) || is_bedrock_provider_label(provider) => {
             resolve_api_key_from(named_key, None, None, None, None, provider)
         }
-        _ => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
+        None => resolve_api_key_from(None, openai, openrouter, xai, anthropic, provider),
     }
 }
 
 fn mcp_named_or_route_key(api_key_env: Option<&str>, provider: &str) -> Option<String> {
-    match api_key_env {
-        Some(var) if !var.is_empty() => std::env::var(var).ok().filter(|s| !s.is_empty()),
-        _ if is_groq_provider_label(provider) => {
+    match trim_api_key_env(api_key_env) {
+        Some(var) => std::env::var(var).ok().filter(|s| !s.is_empty()),
+        None if is_groq_provider_label(provider) => {
             std::env::var("GROQ_API_KEY").ok().filter(|s| !s.is_empty())
         }
-        _ if is_bedrock_provider_label(provider) => std::env::var("AWS_BEARER_TOKEN_BEDROCK")
+        None if is_bedrock_provider_label(provider) => std::env::var("AWS_BEARER_TOKEN_BEDROCK")
             .ok()
             .filter(|s| !s.is_empty()),
-        _ => None,
+        None => None,
     }
 }
 
 /// Named `api_key_env` does not fall back to OPENAI_API_KEY / XAI_API_KEY.
 fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
-    match api_key_env {
-        Some(var) if !var.is_empty() => format!("{var} is unset or empty"),
+    match trim_api_key_env(api_key_env) {
+        Some(var) => format!("{var} is unset or empty"),
         _ if uses_xai_credentials(provider) => {
             "set api_key_env or XAI_API_KEY for xAI (OPENAI_API_KEY is not sent)".to_owned()
         }
@@ -499,8 +507,8 @@ fn json_bool(v: Option<&Value>) -> Option<bool> {
 fn json_u32(v: Option<&Value>) -> Option<u32> {
     let v = v?;
     v.as_u64()
-        .map(|n| n as u32)
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        .and_then(|n| u32::try_from(n).ok())
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
 }
 
 fn error_response(id: Value, message: String) -> Value {
@@ -591,8 +599,60 @@ fn write_message(writer: &mut impl Write, value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ANTHROPIC_BASE_URL, BEDROCK_BASE_URL, GROQ_BASE_URL, XAI_BASE_URL};
+    use crate::{
+        ANTHROPIC_BASE_URL, BEDROCK_BASE_URL, CapabilityProfile, GROQ_BASE_URL, XAI_BASE_URL,
+    };
+    use std::ffi::OsString;
     use std::io::Cursor;
+    use std::sync::{Mutex, MutexGuard};
+
+    fn mcp_empty_route() -> KeyRoute {
+        KeyRoute {
+            key: None,
+            from_openrouter: false,
+            from_xai: false,
+            from_anthropic: false,
+        }
+    }
+
+    struct IsolatedApiKeyEnv {
+        _lock: MutexGuard<'static, ()>,
+        openai: Option<OsString>,
+        grok: Option<OsString>,
+    }
+
+    impl IsolatedApiKeyEnv {
+        fn set_openai(value: &str) -> Self {
+            static LOCK: Mutex<()> = Mutex::new(());
+            let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let openai = std::env::var_os("OPENAI_API_KEY");
+            let grok = std::env::var_os("GROK_API_KEY");
+            unsafe {
+                std::env::set_var("OPENAI_API_KEY", value);
+                std::env::remove_var("GROK_API_KEY");
+            }
+            Self {
+                _lock: lock,
+                openai,
+                grok,
+            }
+        }
+    }
+
+    impl Drop for IsolatedApiKeyEnv {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.openai {
+                    Some(v) => std::env::set_var("OPENAI_API_KEY", v),
+                    None => std::env::remove_var("OPENAI_API_KEY"),
+                }
+                match &self.grok {
+                    Some(v) => std::env::set_var("GROK_API_KEY", v),
+                    None => std::env::remove_var("GROK_API_KEY"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn mcp_openrouter_provider_uses_openrouter_key_when_xai_also_set() {
@@ -719,6 +779,228 @@ mod tests {
         assert!(
             !err.contains("OPENAI_API_KEY") && !err.contains("XAI_API_KEY"),
             "named api_key_env error must not list fallback env vars: {err}"
+        );
+    }
+
+    #[test]
+    fn mcp_padded_api_key_env_looks_up_trimmed_name() {
+        let _env = IsolatedApiKeyEnv::set_openai("sk-mcp-padded-lookup");
+        let named = mcp_named_or_route_key(Some(" OPENAI_API_KEY "), "openai");
+        assert_eq!(named.as_deref(), Some("sk-mcp-padded-lookup"));
+    }
+
+    #[test]
+    fn mcp_whitespace_only_api_key_env_is_omitted() {
+        let route = mcp_resolve_key_route(
+            Some("   "),
+            None,
+            Some("sk-openai".to_owned()),
+            Some("sk-or".to_owned()),
+            Some("xai-env".to_owned()),
+            Some("sk-ant".to_owned()),
+            "openai",
+        );
+        assert_eq!(
+            route.key.as_deref(),
+            Some("sk-openai"),
+            "whitespace-only api_key_env must omit, not name a padded env var"
+        );
+        let err = mcp_missing_key_error(Some("   "), "openai");
+        assert_eq!(err, mcp_missing_key_error(None, "openai"));
+        assert!(
+            !err.contains("is unset or empty"),
+            "whitespace-only api_key_env must not say the padded name is unset: {err}"
+        );
+    }
+
+    #[test]
+    fn mcp_padded_api_key_env_sets_from_flags_like_unpadded() {
+        let padded_or = mcp_resolve_key_route(
+            Some(" OPENROUTER_API_KEY "),
+            Some("sk-or".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            "",
+        );
+        let unpadded_or = mcp_resolve_key_route(
+            Some("OPENROUTER_API_KEY"),
+            Some("sk-or".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            "",
+        );
+        assert_eq!(padded_or.from_openrouter, unpadded_or.from_openrouter);
+        assert!(padded_or.from_openrouter);
+        assert!(!padded_or.from_xai);
+        assert!(!padded_or.from_anthropic);
+
+        let padded_xai = mcp_resolve_key_route(
+            Some(" XAI_API_KEY "),
+            Some("xai-named".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            "",
+        );
+        let unpadded_xai = mcp_resolve_key_route(
+            Some("XAI_API_KEY"),
+            Some("xai-named".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            "",
+        );
+        assert_eq!(padded_xai.from_xai, unpadded_xai.from_xai);
+        assert!(padded_xai.from_xai);
+
+        let padded_ant = mcp_resolve_key_route(
+            Some(" ANTHROPIC_API_KEY "),
+            Some("sk-ant".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            "",
+        );
+        let unpadded_ant = mcp_resolve_key_route(
+            Some("ANTHROPIC_API_KEY"),
+            Some("sk-ant".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            "",
+        );
+        assert_eq!(padded_ant.from_anthropic, unpadded_ant.from_anthropic);
+        assert!(padded_ant.from_anthropic);
+    }
+
+    #[tokio::test]
+    async fn mcp_padded_api_key_env_missing_key_names_trimmed_var() {
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let route = mcp_resolve_key_route(
+            Some(" FOO_KEY "),
+            None,
+            Some("sk-openai".to_owned()),
+            Some("sk-or".to_owned()),
+            Some("xai-env".to_owned()),
+            Some("sk-ant".to_owned()),
+            "openai",
+        );
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "force": true,
+            "cache": cache_path.to_str().expect("utf8"),
+            "api_key_env": " FOO_KEY ",
+        });
+        let err = probe_model_with_route(&args, route, Some(" FOO_KEY "))
+            .await
+            .unwrap_err();
+        assert_eq!(err, "FOO_KEY is unset or empty");
+    }
+
+    #[tokio::test]
+    async fn mcp_advertised_context_zero_is_refused() {
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "advertised_context": 0,
+        });
+        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "advertised_context must be >= 1");
+    }
+
+    #[tokio::test]
+    async fn mcp_advertised_context_present_invalid_is_refused() {
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let mut cache = ProbeCache::default();
+        cache.put_with_suite(
+            CapabilityProfile::unprobed("gpt-4o", "openai"),
+            SuiteTier::Policy,
+            false,
+            None,
+        );
+        cache.save(&cache_path).expect("save");
+        let cache_str = cache_path.to_str().expect("utf8");
+        for advertised in [json!(-1), json!(0.5), json!("nope"), json!(null)] {
+            let args = json!({
+                "model": "gpt-4o",
+                "provider": "openai",
+                "cache": cache_str,
+                "advertised_context": advertised,
+            });
+            let err = probe_model_with_route(&args, mcp_empty_route(), None)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err, "advertised_context must be >= 1",
+                "present {advertised} must not omit"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_advertised_context_padded_string_parses() {
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let mut cache = ProbeCache::default();
+        let mut omitted = CapabilityProfile::unprobed("gpt-4o", "openai");
+        omitted.effective_context_tokens = Some(111);
+        cache.put_with_suite(omitted, SuiteTier::Policy, false, None);
+        let mut padded = CapabilityProfile::unprobed("gpt-4o", "openai");
+        padded.effective_context_tokens = Some(4096);
+        cache.put_with_suite(padded, SuiteTier::Policy, false, Some(4096));
+        cache.save(&cache_path).expect("save");
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_path.to_str().expect("utf8"),
+            "advertised_context": " 4096 ",
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .expect("padded advertised_context must hit ctx4096");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["advertisedContextTokens"], 4096, "{envelope}");
+    }
+
+    #[tokio::test]
+    async fn mcp_advertised_context_omitted_stays_none() {
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let mut cache = ProbeCache::default();
+        cache.put_with_suite(
+            CapabilityProfile::unprobed("gpt-4o", "openai"),
+            SuiteTier::Policy,
+            false,
+            None,
+        );
+        cache.save(&cache_path).expect("save");
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": cache_path.to_str().expect("utf8"),
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+            .await
+            .expect("omitted advertised_context is a cache hit");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(
+            envelope["advertisedContextTokens"],
+            Value::Null,
+            "{envelope}"
         );
     }
 
