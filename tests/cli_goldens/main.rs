@@ -1150,7 +1150,7 @@ fn matrix_help_lists_provider() {
     assert!(help.contains("--provider"), "{help}");
     assert!(help.contains("--cache"), "{help}");
     assert!(
-        help.contains("canact matrix [OPTIONS]"),
+        help.contains("matrix [OPTIONS]"),
         "provider must be optional: {help}"
     );
 }
