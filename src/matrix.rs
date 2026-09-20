@@ -1,9 +1,9 @@
-//! Plumbing conformance table. Pass / degraded / fail. No composite score.
+//! Plumbing conformance table. Pass / degraded / fail / skipped. No composite score.
 
 use serde::{Deserialize, Serialize};
 
 use crate::cache::ProbeCache;
-use crate::types::{CapabilityLevel, CapabilityProfile, EditFormatRecommendation};
+use crate::types::{CapabilityLevel, CapabilityProfile, EditFormatRecommendation, SuiteTier};
 
 /// One plumbing cell. Not a rank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,8 +13,10 @@ pub enum PlumbingCell {
     Pass,
     /// Works with a host workaround (XML, JSON repair, unified diff).
     Degraded,
-    /// Missing or unusable.
+    /// Missing or unusable after a completed measurement.
     Fail,
+    /// Dimension was not measured (policy/full skip or unprobed default).
+    Skipped,
 }
 
 /// One cached model's plumbing cells.
@@ -47,8 +49,8 @@ pub struct PlumbingRow {
     pub max_output_tokens: PlumbingCell,
     /// `constraintPlacement` was measured (`system` or `user`).
     ///
-    /// Fail when unprobed, skipped (policy/full), or error. Never invent
-    /// `system`.
+    /// Skipped when the diagnostic was not run. Fail when it ran and
+    /// stayed unmeasured. Never invent `system`.
     pub constraint_placement: PlumbingCell,
 }
 
@@ -56,7 +58,8 @@ pub struct PlumbingRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlumbingMatrix {
-    /// Provider filter used to build the table.
+    /// Provider filter used to build the table. Empty when unfiltered.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub provider: String,
     /// One row per model, sorted by model id.
     pub rows: Vec<PlumbingRow>,
@@ -64,7 +67,15 @@ pub struct PlumbingMatrix {
 
 impl PlumbingRow {
     /// Score one profile. Semantic probes stay out.
+    ///
+    /// Unspecified suite treats an omitted output cap as fail (completed
+    /// measurement with no parsed ceiling).
     pub fn from_profile(profile: &CapabilityProfile) -> Self {
+        Self::from_profile_with_suite(profile, None)
+    }
+
+    /// Score one profile with the cache-row suite (policy / full / all).
+    pub fn from_profile_with_suite(profile: &CapabilityProfile, suite: Option<SuiteTier>) -> Self {
         Self {
             model: profile.model_id.clone(),
             provider: profile.provider.clone(),
@@ -83,16 +94,8 @@ impl PlumbingRow {
             } else {
                 PlumbingCell::Fail
             },
-            max_output_tokens: if profile.max_output_tokens.is_some() {
-                PlumbingCell::Pass
-            } else {
-                PlumbingCell::Fail
-            },
-            constraint_placement: if profile.constraint_placement().is_some() {
-                PlumbingCell::Pass
-            } else {
-                PlumbingCell::Fail
-            },
+            max_output_tokens: output_cap_cell(profile, suite),
+            constraint_placement: constraint_cell(profile),
         }
     }
 }
@@ -104,16 +107,47 @@ impl PlumbingMatrix {
     /// has several suite rows, the richest suite wins (all, then full,
     /// then policy).
     pub fn from_cache(cache: &ProbeCache, provider: &str) -> Self {
-        let profiles = cache.matrix_profiles(provider);
-        let rows = profiles
+        Self::from_cache_filter(cache, Some(provider))
+    }
+
+    /// Build a table, optionally filtered by provider.
+    ///
+    /// `None` includes every current-suite row. Empty `provider` in the
+    /// JSON object is omitted.
+    pub fn from_cache_filter(cache: &ProbeCache, provider: Option<&str>) -> Self {
+        let filter = provider.map(str::trim).filter(|s| !s.is_empty());
+        let rows = cache
+            .matrix_entries(filter)
             .into_iter()
-            .map(PlumbingRow::from_profile)
+            .map(|entry| PlumbingRow::from_profile_with_suite(entry.profile, Some(entry.suite)))
             .collect();
         Self {
-            provider: provider.to_owned(),
+            provider: filter.unwrap_or("").to_owned(),
             rows,
         }
     }
+}
+
+fn output_cap_cell(profile: &CapabilityProfile, suite: Option<SuiteTier>) -> PlumbingCell {
+    if profile.max_output_tokens.is_some() {
+        return PlumbingCell::Pass;
+    }
+    match suite {
+        Some(SuiteTier::Policy) => PlumbingCell::Skipped,
+        Some(SuiteTier::All | SuiteTier::Full) | None => PlumbingCell::Fail,
+    }
+}
+
+fn constraint_cell(profile: &CapabilityProfile) -> PlumbingCell {
+    if profile.constraint_placement().is_some() {
+        return PlumbingCell::Pass;
+    }
+    if profile.system_message_adherence.is_skipped()
+        || profile.system_message_adherence.is_unprobed_default()
+    {
+        return PlumbingCell::Skipped;
+    }
+    PlumbingCell::Fail
 }
 
 fn measured_medium_pass(pr: &crate::types::ProbeResult) -> PlumbingCell {
@@ -239,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn skipped_constraint_placement_is_fail() {
+    fn skipped_constraint_placement_is_skipped() {
         let mut p = profile();
         p.system_message_adherence = ProbeResult {
             name: "system_message_adherence".into(),
@@ -250,7 +284,22 @@ mod tests {
         };
         assert!(p.constraint_placement().is_none());
         let row = PlumbingRow::from_profile(&p);
-        assert_eq!(row.constraint_placement, PlumbingCell::Fail);
+        assert_eq!(row.constraint_placement, PlumbingCell::Skipped);
+    }
+
+    #[test]
+    fn policy_omitted_output_cap_is_skipped() {
+        let p = profile();
+        assert!(p.max_output_tokens.is_none());
+        let row = PlumbingRow::from_profile_with_suite(&p, Some(SuiteTier::Policy));
+        assert_eq!(row.max_output_tokens, PlumbingCell::Skipped);
+    }
+
+    #[test]
+    fn all_suite_omitted_output_cap_is_fail() {
+        let p = profile();
+        let row = PlumbingRow::from_profile_with_suite(&p, Some(SuiteTier::All));
+        assert_eq!(row.max_output_tokens, PlumbingCell::Fail);
     }
 
     #[test]
@@ -326,5 +375,16 @@ mod tests {
         let cache = ProbeCache::default();
         let matrix = PlumbingMatrix::from_cache(&cache, "ollama");
         assert!(matrix.rows.is_empty());
+    }
+
+    #[test]
+    fn unfiltered_cache_omits_provider_field() {
+        let mut cache = ProbeCache::default();
+        cache.put(profile());
+        let matrix = PlumbingMatrix::from_cache_filter(&cache, None);
+        assert!(matrix.provider.is_empty());
+        let value = serde_json::to_value(&matrix).unwrap();
+        assert!(value.get("provider").is_none(), "{value}");
+        assert_eq!(value["rows"].as_array().unwrap().len(), 1);
     }
 }

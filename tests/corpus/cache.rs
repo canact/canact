@@ -1196,6 +1196,23 @@ fn matrix_profiles_collapses_trailing_space_model_id() {
 }
 
 #[test]
+fn matrix_entries_none_includes_every_provider() {
+    let mut cache = ProbeCache::default();
+    let mut grok = sample_profile();
+    grok.model_id = "grok-4".into();
+    grok.provider = "grok".into();
+    cache.put_with_suite(grok, canact::SuiteTier::Policy, false, None);
+    let mut ollama = sample_profile();
+    ollama.model_id = "llama3.2:3b".into();
+    ollama.provider = "ollama".into();
+    cache.put_with_suite(ollama, canact::SuiteTier::Policy, false, None);
+    let all = cache.matrix_entries(None);
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(cache.matrix_entries(Some("grok")).len(), 1);
+    assert_eq!(cache.matrix_profiles("grok").len(), 1);
+}
+
+#[test]
 fn find_profile_matches_trailing_space_model_id() {
     let mut cache = ProbeCache::default();
     let mut stored = sample_profile();

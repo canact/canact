@@ -1149,6 +1149,60 @@ fn matrix_help_lists_provider() {
     let help = stdout_of(&["matrix", "--help"]);
     assert!(help.contains("--provider"), "{help}");
     assert!(help.contains("--cache"), "{help}");
+    assert!(
+        help.contains("matrix [OPTIONS]"),
+        "provider must be optional: {help}"
+    );
+}
+
+#[test]
+fn matrix_without_provider_lists_every_cached_row() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    let mut grok = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    grok.model_id = "grok-4-fast-non-reasoning".to_owned();
+    grok.provider = "grok".to_owned();
+    let mut ollama = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    ollama.model_id = "llama3.2:3b".to_owned();
+    ollama.provider = "ollama".to_owned();
+    cache.put(grok);
+    cache.put(ollama);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args(["matrix", "--cache", cache_path.to_str().expect("utf8")])
+        .output()
+        .expect("spawn matrix");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert!(value.get("provider").is_none(), "{value}");
+    let rows = value["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2, "{value}");
+    let models: Vec<&str> = rows
+        .iter()
+        .map(|r| r["model"].as_str().expect("model"))
+        .collect();
+    assert!(models.contains(&"grok-4-fast-non-reasoning"), "{value}");
+    assert!(models.contains(&"llama3.2:3b"), "{value}");
+}
+
+#[test]
+fn matrix_without_provider_empty_cache_fails_closed() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = canact()
+        .args(["matrix", "--cache", cache_path.to_str().expect("utf8")])
+        .output()
+        .expect("spawn matrix");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "stderr={stderr}");
+    assert!(stderr.contains("no cached probes"), "stderr={stderr}");
+    assert!(
+        !stderr.contains("required arguments"),
+        "omitted --provider must not be clap-required: {stderr}"
+    );
 }
 
 #[test]
@@ -1229,6 +1283,45 @@ fn matrix_prints_json_without_score() {
     assert_eq!(value["rows"][0]["model"], "alpha", "{value}");
     assert_eq!(value["rows"][0]["nativeTools"], "pass", "{value}");
     assert_eq!(value["rows"][1]["nativeTools"], "fail", "{value}");
+}
+
+#[test]
+fn matrix_policy_row_skips_unmeasured_output_and_placement() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    profile.model_id = "cheap-row".to_owned();
+    profile.provider = "grok".to_owned();
+    profile.max_output_tokens = None;
+    profile.system_message_adherence = ProbeResult {
+        name: "system_message_adherence".into(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Skipped: diagnostic suite (use --suite=all)".into(),
+    };
+    let mut cache = ProbeCache::default();
+    cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "matrix",
+            "--provider",
+            "grok",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn matrix");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    assert_eq!(value["rows"][0]["maxOutputTokens"], "skipped", "{value}");
+    assert_eq!(
+        value["rows"][0]["constraintPlacement"], "skipped",
+        "{value}"
+    );
 }
 
 #[test]
