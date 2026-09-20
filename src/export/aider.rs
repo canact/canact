@@ -275,6 +275,61 @@ mod tests {
     }
 
     #[test]
+    fn overlay_lmstudio_vllm_litellm_provider_families() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+
+        p.provider = "lmstudio".to_owned();
+        p.model_id = "qwen2.5-coder".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("lm_studio/qwen2.5-coder")
+            .expect("lmstudio meta");
+        assert_eq!(
+            meta.litellm_provider, "lm_studio",
+            "lmstudio must export litellm_provider lm_studio"
+        );
+
+        p.provider = "lm_studio".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("lm_studio/qwen2.5-coder")
+            .expect("lm_studio meta");
+        assert_eq!(
+            meta.litellm_provider, "lm_studio",
+            "already-normalized lm_studio must stay lm_studio"
+        );
+
+        p.provider = "vllm".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("hosted_vllm/qwen2.5-coder")
+            .expect("vllm meta");
+        assert_eq!(
+            meta.litellm_provider, "hosted_vllm",
+            "vllm must export litellm_provider hosted_vllm"
+        );
+
+        p.provider = "grok-build".to_owned();
+        p.model_id = "grok-4".to_owned();
+        let overlay = AiderOverlay::from_profile(&p, Some(8192));
+        let meta = overlay
+            .metadata
+            .get("grok-build/grok-4")
+            .expect("grok-build meta");
+        assert_eq!(
+            meta.litellm_provider, "grok-build",
+            "grok-build must stay grok-build, not xai"
+        );
+    }
+
+    #[test]
     fn weak_edit_exports_aider_whole() {
         let p = sample_profile(
             CapabilityLevel::Weak,

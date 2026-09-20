@@ -199,3 +199,63 @@ fn overlay_bedrock_host_maps_to_bedrock_family() {
     p.provider = "bedrock".into();
     assert_eq!(overlay_model_name(&p), "bedrock/amazon.nova-lite-v1:0");
 }
+
+#[test]
+fn overlay_lmstudio_maps_to_lm_studio_family() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.provider = "lmstudio".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "lm_studio/qwen2.5-coder",
+        "Aider/LiteLLM expect lm_studio/, not lmstudio/"
+    );
+    p.provider = "lm_studio".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "lm_studio/qwen2.5-coder",
+        "already-normalized lm_studio must stay lm_studio"
+    );
+}
+
+#[test]
+fn overlay_vllm_maps_to_hosted_vllm_family() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.provider = "vllm".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "hosted_vllm/qwen2.5-coder",
+        "LiteLLM OpenAI-compat expects hosted_vllm/, not vllm/"
+    );
+    p.provider = "hosted_vllm".into();
+    assert_eq!(overlay_model_name(&p), "hosted_vllm/qwen2.5-coder");
+}
+
+#[test]
+fn overlay_grok_build_stays_off_xai_family() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.model_id = "grok-4".into();
+    p.provider = "grok-build".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "grok-build/grok-4",
+        "grok-build must not map to xai"
+    );
+    p.provider = "xai-grok-build".into();
+    assert_eq!(overlay_model_name(&p), "xai-grok-build/grok-4");
+    p.provider = "cli-chat-proxy.grok.com".into();
+    assert_eq!(overlay_model_name(&p), "cli-chat-proxy.grok.com/grok-4");
+    p.provider = "grok-build-messages".into();
+    assert_eq!(overlay_model_name(&p), "grok-build-messages/grok-4");
+}
