@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.7.0.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.8.0.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -11,7 +11,7 @@ use futures::Stream;
 use futures::StreamExt;
 use serde_json::Value;
 use wiremux::ir::{IrItem, IrPart, IrRequest, IrSampling, IrStreamEvent, IrTool};
-use wiremux::{ClientError, ListedModel as WireListed, WireClient};
+use wiremux::{ClientError, ListedModel as WireListed, TransientKind, WireClient};
 use wiremux_auth::{AnyTokenProvider, LoadOptions, StaticToken, parse_profile_str};
 
 use crate::client::{
@@ -21,7 +21,7 @@ use crate::client::{
 use crate::endpoint::{
     is_anthropic_cloud_host, is_bedrock_cloud_host, is_bedrock_provider_label,
     is_grok_build_cloud_host, is_grok_build_messages_provider_label, is_groq_cloud_host,
-    is_groq_provider_label,
+    is_groq_provider_label, is_openai_codex_provider_label,
 };
 use crate::error::ProbeError;
 use crate::{finish_from_reason, strip_think_blocks};
@@ -341,6 +341,9 @@ fn wire_client_for(
     if is_anthropic_cloud_host(base_url) {
         return anthropic_client(api_key);
     }
+    if is_openai_codex_provider_label(provider) {
+        return shipped_client("openai-codex", api_key);
+    }
     if is_grok_build_messages_provider_label(provider) {
         return shipped_client("xai-grok-build-messages", api_key);
     }
@@ -622,9 +625,9 @@ fn map_client_error(err: ClientError) -> ProbeError {
         ClientError::Auth { message, .. } => ProbeError::Auth(redact_secrets(&message)),
         ClientError::NotFound { message, .. } => ProbeError::NotFound(redact_secrets(&message)),
         ClientError::RateLimit { retry_after, .. } => ProbeError::RateLimit { retry_after },
-        ClientError::Transient { message, .. } => {
+        ClientError::Transient { message, kind, .. } => {
             let message = redact_secrets(&message);
-            if is_connect_message(&message) && !message.starts_with("failed to connect:") {
+            if kind == TransientKind::Connect && !message.starts_with("failed to connect:") {
                 ProbeError::Transient(format!("failed to connect: {message}"))
             } else {
                 ProbeError::Transient(message)
@@ -781,23 +784,6 @@ fn skip_secret_key(input: &str, mut i: usize) -> usize {
         }
     }
     i
-}
-
-fn is_connect_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    if lower.contains("connection refused")
-        || lower.contains("connect error")
-        || lower.contains("error trying to connect")
-        || lower.contains("tcp connect error")
-        || lower.contains("dns error")
-    {
-        return true;
-    }
-    // Closed-port Display may be only the send-url prefix. A hung-after-accept
-    // read timeout uses that prefix plus "timed out" and must stay scored.
-    lower.contains("error sending request")
-        && !lower.contains("timed out")
-        && !lower.contains("timeout")
 }
 
 fn json_positive_u32(value: Option<&Value>) -> Option<u32> {
@@ -1101,118 +1087,99 @@ mod tests {
         assert_eq!(resp.text, "");
     }
 
-    #[test]
-    fn send_timeout_is_not_connect_abort() {
-        let err = map_client_error(ClientError::Transient {
+    fn transient(message: &str, kind: TransientKind) -> ClientError {
+        ClientError::Transient {
             status: None,
-            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): operation timed out".into(),
-        });
+            message: message.into(),
+            kind,
+        }
+    }
+
+    fn assert_connect_abort(err: ProbeError) {
         match &err {
             ProbeError::Transient(msg) => {
                 assert!(
-                    !msg.starts_with("failed to connect:"),
-                    "send timeout must not look like connect abort: {msg}"
-                );
-            }
-            other => panic!("expected Transient, got {other:?}"),
-        }
-        let (result, cacheable) =
-            resolve_probe(Err(err), "tool_calling").expect("send timeout stays scored");
-        assert_eq!(result.level, CapabilityLevel::Medium);
-        assert!(!cacheable, "timeout must not persist");
-
-        let connect = map_client_error(ClientError::Transient {
-            status: None,
-            message: "error trying to connect: tcp connect error: Connection refused".into(),
-        });
-        match &connect {
-            ProbeError::Transient(msg) => {
-                assert!(
                     msg.starts_with("failed to connect:"),
-                    "true connect must stay prefixed: {msg}"
+                    "connect must stay prefixed: {msg}"
                 );
             }
             other => panic!("expected Transient connect, got {other:?}"),
         }
-        match resolve_probe(Err(connect), "tool_calling") {
+        match resolve_probe(Err(err), "tool_calling") {
             Err(ProbeError::Transient(msg)) => {
                 assert!(msg.contains("failed to connect:"), "{msg}");
             }
             other => panic!("expected Transient abort, got {other:?}"),
         }
+    }
 
-        let connect_timeout = map_client_error(ClientError::Transient {
-            status: None,
-            message: "error sending request for url (http://192.0.2.1:11434/v1/chat/completions): error trying to connect: tcp connect error: Operation timed out".into(),
-        });
-        match &connect_timeout {
-            ProbeError::Transient(msg) => {
-                assert!(
-                    msg.starts_with("failed to connect:"),
-                    "SYN timeout must still abort: {msg}"
-                );
-            }
-            other => panic!("expected Transient connect timeout, got {other:?}"),
-        }
-        match resolve_probe(Err(connect_timeout), "tool_calling") {
-            Err(ProbeError::Transient(msg)) => {
-                assert!(msg.contains("failed to connect:"), "{msg}");
-            }
-            other => panic!("expected connect-timeout abort, got {other:?}"),
-        }
-
-        let closed = map_client_error(ClientError::Transient {
-            status: None,
-            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions)"
-                .into(),
-        });
-        match &closed {
-            ProbeError::Transient(msg) => {
-                assert!(
-                    msg.starts_with("failed to connect:"),
-                    "closed port without refused text must still abort: {msg}"
-                );
-            }
-            other => panic!("expected Transient closed port, got {other:?}"),
-        }
-
-        let suffix_timeout = map_client_error(ClientError::Transient {
-            status: None,
-            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): timed out".into(),
-        });
-        match &suffix_timeout {
+    fn assert_scored_timeout(err: ProbeError) {
+        match &err {
             ProbeError::Transient(msg) => {
                 assert!(
                     !msg.starts_with("failed to connect:"),
-                    "0.7.0 timeout suffix must stay scored: {msg}"
+                    "timeout must not look like connect abort: {msg}"
                 );
             }
-            other => panic!("expected Transient timeout suffix, got {other:?}"),
+            other => panic!("expected Transient, got {other:?}"),
         }
-        let (result, cacheable) = resolve_probe(Err(suffix_timeout), "tool_calling")
-            .expect("timeout suffix stays scored");
+        let (result, cacheable) =
+            resolve_probe(Err(err), "tool_calling").expect("timeout stays scored");
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert!(!cacheable, "timeout must not persist");
+    }
 
-        let suffix_connect = map_client_error(ClientError::Transient {
-            status: None,
-            message: "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): error trying to connect".into(),
-        });
-        match &suffix_connect {
+    #[test]
+    fn send_timeout_is_not_connect_abort() {
+        assert_scored_timeout(map_client_error(transient(
+            "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): operation timed out",
+            TransientKind::Timeout,
+        )));
+        assert_connect_abort(map_client_error(transient(
+            "error trying to connect: tcp connect error: Connection refused",
+            TransientKind::Connect,
+        )));
+        assert_connect_abort(map_client_error(transient(
+            "error sending request for url (http://192.0.2.1:11434/v1/chat/completions): error trying to connect: tcp connect error: Operation timed out",
+            TransientKind::Connect,
+        )));
+        assert_connect_abort(map_client_error(transient(
+            "error sending request for url (http://127.0.0.1:11434/v1/chat/completions)",
+            TransientKind::Connect,
+        )));
+        assert_scored_timeout(map_client_error(transient(
+            "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): timed out",
+            TransientKind::Timeout,
+        )));
+        assert_connect_abort(map_client_error(transient(
+            "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): error trying to connect",
+            TransientKind::Connect,
+        )));
+    }
+
+    #[test]
+    fn transient_kind_wins_over_display() {
+        assert_scored_timeout(map_client_error(transient(
+            "error sending request for url (http://127.0.0.1:11434/v1/chat/completions)",
+            TransientKind::Timeout,
+        )));
+        let reset = map_client_error(transient(
+            "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): connection reset",
+            TransientKind::Reset,
+        ));
+        match &reset {
             ProbeError::Transient(msg) => {
                 assert!(
-                    msg.starts_with("failed to connect:"),
-                    "0.7.0 connect suffix must abort: {msg}"
+                    !msg.starts_with("failed to connect:"),
+                    "reset after connect must stay scored: {msg}"
                 );
             }
-            other => panic!("expected Transient connect suffix, got {other:?}"),
+            other => panic!("expected Transient reset, got {other:?}"),
         }
-        match resolve_probe(Err(suffix_connect), "tool_calling") {
-            Err(ProbeError::Transient(msg)) => {
-                assert!(msg.contains("failed to connect:"), "{msg}");
-            }
-            other => panic!("expected connect-suffix abort, got {other:?}"),
-        }
+        let (result, cacheable) =
+            resolve_probe(Err(reset), "tool_calling").expect("reset stays scored");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert!(!cacheable);
     }
 
     #[tokio::test]
@@ -1306,7 +1273,7 @@ mod tests {
         assert_eq!(
             advertised_context_for_model(&models, "grok-4.6"),
             Some(500_000),
-            "wiremux 0.7.0 list_models must read context_window"
+            "wiremux 0.8.0 list_models must read context_window"
         );
     }
 
