@@ -1,7 +1,7 @@
 //! Claude Code local OAuth access token via `wiremux-auth`.
 //!
 //! Refresh, keychain, and file parse live in the shipped `anthropic-oauth`
-//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.7.0
+//! profile. Env `ANTHROPIC_*` still wins at the caller. wiremux-auth 0.8.0
 //! tries the process login name before the shipped `Claude Code` /
 //! `credentials` keychain accounts. Login uses `token_for_profile` so an
 //! expired oat POSTs `token_url` (bounded refresh). Do not call that
@@ -197,6 +197,25 @@ mod tests {
     }
 
     #[test]
+    fn shipped_openai_codex_profile_loads() {
+        let opts = wiremux_auth::LoadOptions::default();
+        let profile =
+            wiremux_auth::load_profile("openai-codex", &opts).expect("shipped openai-codex");
+        assert_eq!(profile.id, "openai-codex");
+        assert_eq!(profile.dialect.wire, Some(wiremux_auth::Wire::Responses));
+        assert_eq!(
+            profile.http.base_url.as_deref(),
+            Some("https://api.openai.com")
+        );
+        assert_eq!(
+            profile.http.chat_path.as_deref(),
+            Some("/v1/responses"),
+            "Codex must not reuse chat-completions"
+        );
+        assert_eq!(profile.access_env, ["OPENAI_API_KEY"]);
+    }
+
+    #[test]
     fn shipped_groq_profile_loads() {
         let opts = wiremux_auth::LoadOptions::default();
         let profile = wiremux_auth::load_profile("groq", &opts).expect("shipped groq");
@@ -228,15 +247,19 @@ mod tests {
         let ids = wiremux_auth::shipped_profile_ids();
         assert!(
             ids.contains(&"xai-grok-build-messages"),
-            "0.7.0 must ship the Messages Grok Build catalog: {ids:?}"
+            "0.8.0 must ship the Messages Grok Build catalog: {ids:?}"
         );
         assert!(
             ids.contains(&"amazon-bedrock"),
-            "0.7.0 must ship the Bedrock catalog: {ids:?}"
+            "0.8.0 must ship the Bedrock catalog: {ids:?}"
         );
         assert!(
             ids.contains(&"groq"),
-            "0.7.0 must ship the Groq catalog: {ids:?}"
+            "0.8.0 must ship the Groq catalog: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"openai-codex"),
+            "0.8.0 must ship the Responses Codex catalog: {ids:?}"
         );
         for id in ids {
             let profile = wiremux_auth::load_profile(id, &opts)

@@ -491,19 +491,13 @@ fn unix_now() -> u64 {
 }
 
 /// True when the host never answered (TCP/DNS/connect), not a scored reply.
+///
+/// After wiremux 0.8.0 the adapter prefixes only `TransientKind::Connect`.
+/// Do not scrape Display for refused / dns.
 pub fn is_unreachable_host(err: &ProbeError) -> bool {
-    let msg = err.to_string().to_ascii_lowercase();
-    if msg.contains("failed to connect:") {
-        return true;
-    }
-    if msg.contains("timed out") || msg.contains("timeout") {
-        return false;
-    }
-    msg.contains("connection refused")
-        || msg.contains("connect error")
-        || msg.contains("dns error")
-        || msg.contains("error trying to connect")
-        || msg.contains("tcp connect error")
+    err.to_string()
+        .to_ascii_lowercase()
+        .contains("failed to connect:")
 }
 
 fn no_multimodal_message(err: &str) -> bool {

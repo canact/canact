@@ -9,10 +9,10 @@ use serde_json::{Value, json};
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
-    is_anthropic_provider_label, is_bedrock_provider_label, is_groq_provider_label, looks_cheap,
-    present_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
-    should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
-    xai_oauth_access_token,
+    is_anthropic_provider_label, is_bedrock_provider_label, is_groq_provider_label,
+    is_openai_codex_provider_label, looks_cheap, present_base_url, refuse_cloud_without_key,
+    resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
+    should_load_xai_oauth, uses_xai_credentials, xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -440,6 +440,9 @@ fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
         }
         _ if is_bedrock_provider_label(provider) => {
             "set api_key_env or AWS_BEARER_TOKEN_BEDROCK for Amazon Bedrock (OPENAI_API_KEY is not sent)".to_owned()
+        }
+        _ if is_openai_codex_provider_label(provider) => {
+            "set api_key_env or OPENAI_API_KEY".to_owned()
         }
         _ => "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
             .to_owned(),
@@ -1426,6 +1429,38 @@ mod tests {
         assert!(
             !bedrock_err.contains("set api_key_env (or OPENAI_API_KEY"),
             "Bedrock missing-key must not list OPENAI_API_KEY as the fix: {bedrock_err}"
+        );
+
+        let codex = mcp_resolve_key_route(
+            None,
+            None,
+            Some("sk-openai".to_owned()),
+            Some("sk-or".to_owned()),
+            Some("xai-key".to_owned()),
+            None,
+            "openai-codex",
+        );
+        assert_eq!(codex.key.as_deref(), Some("sk-openai"));
+        assert!(!codex.from_openrouter);
+        assert!(!codex.from_xai);
+        let codex_or = mcp_resolve_key_route(
+            None,
+            None,
+            None,
+            Some("sk-or".to_owned()),
+            None,
+            None,
+            "openai-codex",
+        );
+        assert!(
+            codex_or.key.is_none(),
+            "provider=openai-codex must not send OPENROUTER_API_KEY"
+        );
+        let codex_err = mcp_missing_key_error(None, "openai-codex");
+        assert!(codex_err.contains("OPENAI_API_KEY"), "{codex_err}");
+        assert!(
+            !codex_err.contains("OPENROUTER_API_KEY"),
+            "Codex missing-key must not list OpenRouter: {codex_err}"
         );
     }
 

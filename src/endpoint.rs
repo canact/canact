@@ -49,6 +49,8 @@ pub fn default_compat_base_url(provider: &str, from_openrouter: bool) -> String 
         GROQ_BASE_URL.to_owned()
     } else if is_bedrock_provider_label(&provider) {
         BEDROCK_BASE_URL.to_owned()
+    } else if is_openai_codex_provider_label(&provider) {
+        "https://api.openai.com/v1".to_owned()
     } else if from_openrouter || provider == "openrouter" || provider == "openrouter.ai" {
         "https://openrouter.ai/api/v1".to_owned()
     } else {
@@ -84,6 +86,17 @@ pub fn is_grok_build_messages_provider_label(provider: &str) -> bool {
     matches!(
         provider.to_ascii_lowercase().as_str(),
         "grok-build-messages" | "xai-grok-build-messages"
+    )
+}
+
+/// `--provider openai-codex` / `codex`.
+///
+/// Distinct from Chat Completions `openai` / `api.openai.com`. This
+/// family loads shipped `openai-codex` (`wire = "responses"`).
+pub fn is_openai_codex_provider_label(provider: &str) -> bool {
+    matches!(
+        provider.to_ascii_lowercase().as_str(),
+        "openai-codex" | "codex"
     )
 }
 
@@ -251,6 +264,17 @@ pub fn resolve_api_key_from(
     if is_groq_provider_label(provider) || is_bedrock_provider_label(provider) {
         return KeyRoute {
             key: cli.filter(|s| !s.is_empty()),
+            from_openrouter: false,
+            from_xai: false,
+            from_anthropic: false,
+        };
+    }
+    if is_openai_codex_provider_label(provider) {
+        let key = cli
+            .filter(|s| !s.is_empty())
+            .or_else(|| openai.filter(|s| !s.is_empty()));
+        return KeyRoute {
+            key,
             from_openrouter: false,
             from_xai: false,
             from_anthropic: false,
@@ -991,6 +1015,50 @@ mod tests {
             assert!(should_load_xai_oauth(provider, false, false));
             assert!(!should_load_claude_code_login(provider, false, false));
         }
+    }
+
+    #[test]
+    fn openai_codex_provider_is_responses_not_chat_completions() {
+        for provider in ["openai-codex", "codex", "OpenAI-Codex"] {
+            assert!(is_openai_codex_provider_label(provider));
+            assert_eq!(
+                default_compat_base_url(provider, false),
+                "https://api.openai.com/v1",
+                "provider {provider} stays on api.openai.com"
+            );
+            assert_eq!(
+                default_compat_base_url(provider, true),
+                "https://api.openai.com/v1",
+                "provider {provider} must not switch to OpenRouter"
+            );
+            assert!(!should_load_xai_oauth(provider, false, false));
+            assert!(!should_load_claude_code_login(provider, false, false));
+            let openai = resolve_api_key_from(
+                None,
+                Some("sk-openai".to_owned()),
+                Some("sk-or".to_owned()),
+                Some("xai-key".to_owned()),
+                None,
+                provider,
+            );
+            assert_eq!(
+                openai.key.as_deref(),
+                Some("sk-openai"),
+                "provider={provider} must send OPENAI_API_KEY"
+            );
+            assert!(!openai.from_openrouter);
+            assert!(!openai.from_xai);
+            let openrouter_only =
+                resolve_api_key_from(None, None, Some("sk-or".to_owned()), None, None, provider);
+            assert!(
+                openrouter_only.key.is_none(),
+                "provider={provider} must not send OPENROUTER_API_KEY"
+            );
+        }
+        assert!(!is_openai_codex_provider_label("openai"));
+        assert!(!is_openai_codex_provider_label("api.openai.com"));
+        let msg = missing_cloud_key_message("openai-codex", "https://api.openai.com/v1");
+        assert!(msg.contains("OPENAI_API_KEY"), "{msg}");
     }
 
     #[test]
