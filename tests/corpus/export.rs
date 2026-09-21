@@ -259,3 +259,27 @@ fn overlay_grok_build_stays_off_xai_family() {
     p.provider = "grok-build-messages".into();
     assert_eq!(overlay_model_name(&p), "grok-build-messages/grok-4");
 }
+
+#[test]
+fn overlay_openai_codex_maps_codex_alias_not_openai() {
+    let mut p = sample(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+        CapabilityLevel::Weak,
+    );
+    p.model_id = "gpt-5".into();
+    p.provider = "codex".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "openai-codex/gpt-5",
+        "codex alias must export as openai-codex/, not openai/ Chat Completions"
+    );
+    p.provider = "openai-codex".into();
+    assert_eq!(overlay_model_name(&p), "openai-codex/gpt-5");
+    p.provider = "openai".into();
+    assert_eq!(
+        overlay_model_name(&p),
+        "openai/gpt-5",
+        "plain openai must stay Chat Completions openai/"
+    );
+}
