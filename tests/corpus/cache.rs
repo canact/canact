@@ -495,6 +495,31 @@ fn find_profile_hits_across_groq_aliases() {
 }
 
 #[test]
+fn find_profile_hits_across_openai_codex_aliases() {
+    let mut cache = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "gpt-5".into();
+    stored.provider = "openai-codex".into();
+    cache.put(stored);
+    for requested in ["codex", "OpenAI-Codex", "openai-codex"] {
+        assert!(
+            cache.find_profile("gpt-5", requested).is_some(),
+            "probe --provider openai-codex must hit --provider {requested}"
+        );
+    }
+    assert!(
+        cache.find_profile("gpt-5", "openai").is_none(),
+        "openai-codex must not share the Chat Completions openai family"
+    );
+    let rows = cache.matrix_profiles("codex");
+    assert_eq!(
+        rows.len(),
+        1,
+        "matrix --provider codex must list the openai-codex row"
+    );
+}
+
+#[test]
 fn find_profile_hits_across_bedrock_aliases() {
     let mut cache = ProbeCache::default();
     let mut stored = sample_profile();

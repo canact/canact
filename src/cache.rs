@@ -1162,6 +1162,9 @@ fn provider_family(provider: &str) -> &str {
     if crate::is_bedrock_provider_label(provider) {
         return "bedrock";
     }
+    if crate::is_openai_codex_provider_label(provider) {
+        return "openai-codex";
+    }
     match provider {
         "openai" | "api.openai.com" => "openai",
         "openrouter" | "openrouter.ai" => "openrouter",

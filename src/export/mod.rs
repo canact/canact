@@ -10,7 +10,9 @@ mod cline;
 pub use aider::{AiderMetadataEntry, AiderOverlay, AiderSettingsRow};
 pub use cline::ClineModelInfo;
 
-use crate::endpoint::{is_bedrock_provider_label, is_groq_provider_label};
+use crate::endpoint::{
+    is_bedrock_provider_label, is_groq_provider_label, is_openai_codex_provider_label,
+};
 use crate::types::{CapabilityProfile, EditFormatRecommendation};
 
 /// Files written by [`HostOverlay::write_to`].
@@ -146,6 +148,9 @@ pub(crate) fn normalize_overlay_provider(provider: &str) -> &str {
     }
     if is_bedrock_provider_label(&lowered) {
         return "bedrock";
+    }
+    if is_openai_codex_provider_label(&lowered) {
+        return "openai-codex";
     }
     match lowered.as_str() {
         "openrouter.ai" | "openrouter" => "openrouter",
@@ -553,6 +558,11 @@ mod tests {
             "vllm/qwen2.5-coder"
         ));
         assert!(!overlay_ids_same_model("grok-build/grok-4", "xai/grok-4"));
+        assert!(overlay_ids_same_model("openai-codex/gpt-5", "codex/gpt-5"));
+        assert!(!overlay_ids_same_model(
+            "openai-codex/gpt-5",
+            "openai/gpt-5"
+        ));
     }
 
     #[test]
