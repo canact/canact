@@ -916,9 +916,8 @@ mod tests {
         match &err {
             ProbeError::Transient(msg) => {
                 assert!(
-                    msg.starts_with("failed to connect:")
-                        || msg.to_ascii_lowercase().contains("connection refused"),
-                    "connect refuse must stay Transient: {msg}"
+                    msg.starts_with("failed to connect:"),
+                    "closed port must stay prefixed connect abort: {msg}"
                 );
             }
             other => panic!("expected Transient connect, got {other:?}"),
@@ -1180,6 +1179,11 @@ mod tests {
             resolve_probe(Err(reset), "tool_calling").expect("reset stays scored");
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert!(!cacheable);
+
+        assert_scored_timeout(map_client_error(transient(
+            "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): HTTP 503",
+            TransientKind::Http,
+        )));
     }
 
     #[tokio::test]
