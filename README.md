@@ -49,7 +49,7 @@ scoop install canact/canact
 Library (runtime only, no CLI):
 
 ```toml
-canact = { version = "0.7", default-features = false, features = ["runtime"] }
+canact = { version = "0.8", default-features = false, features = ["runtime"] }
 ```
 
 Default features are empty so a host pin does not pull clap. MSRV is
