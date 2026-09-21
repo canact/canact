@@ -3,6 +3,25 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.8.0](https://github.com/canact/canact/compare/v0.7.0...v0.8.0) (2026-09-21)
+
+
+### Features
+
+* consume wiremux 0.8.0 ([#273](https://github.com/canact/canact/issues/273)) ([ad59fa4](https://github.com/canact/canact/commit/ad59fa47b804e03b946992aa78cf015dfe10d71e))
+
+
+### Bug Fixes
+
+* map lmstudio and vllm overlay providers to LiteLLM families ([#266](https://github.com/canact/canact/issues/266)) ([5cff9ea](https://github.com/canact/canact/commit/5cff9ea011fce4d83423f4d4dfe129894b2b7d9f))
+* map oauth refresh failure to Auth ([#272](https://github.com/canact/canact/issues/272)) ([cb55345](https://github.com/canact/canact/commit/cb553450386587bf76094029ede6b9a05c818bcb))
+* refresh Claude oat and matrix plumbing leftovers ([#271](https://github.com/canact/canact/issues/271)) ([994b14b](https://github.com/canact/canact/commit/994b14be721581d0675bcbb85bd7bb3e7593eb85))
+* refuse invalid MCP cheap/suite flags and empty cache ([#264](https://github.com/canact/canact/issues/264)) ([1d4b4e9](https://github.com/canact/canact/commit/1d4b4e929e5c95bee83d8da4a9629ad8dbd77cfb))
+* treat openai-codex and codex as one cache family ([#274](https://github.com/canact/canact/issues/274)) ([bb0e096](https://github.com/canact/canact/commit/bb0e096ab046d4ca3ce55be944d2ca7ff738c5b7))
+* treat whitespace-only base_url as omitted for oauth skip ([#267](https://github.com/canact/canact/issues/267)) ([e123169](https://github.com/canact/canact/commit/e123169847caf69e131bc2dfa89961e765e6060c))
+* trim CLI suite, advertised-context, and path flags ([#265](https://github.com/canact/canact/issues/265)) ([321dd86](https://github.com/canact/canact/commit/321dd86f506a49988994c2a698a487e2f851ee80))
+* trim MCP api_key_env and refuse invalid advertised_context ([#262](https://github.com/canact/canact/issues/262)) ([b1ae10b](https://github.com/canact/canact/commit/b1ae10b066143bfc63474edf9cf5d8b5c39220a7))
+
 ## [0.7.0](https://github.com/canact/canact/compare/v0.6.0...v0.7.0) (2026-09-18)
 
 
