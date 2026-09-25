@@ -37,13 +37,13 @@ version = "7"
 optional = true
 
 [dependencies.wiremux]
-version = "0.8.0"
+version = "0.9.1"
 optional = true
 default-features = false
 features = ["client"]
 
 [dependencies.wiremux-auth]
-version = "0.8.0"
+version = "0.9.1"
 optional = true
 
 [dev-dependencies]
