@@ -3,6 +3,13 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.9.0](https://github.com/canact/canact/compare/v0.8.0...v0.9.0) (2026-09-25)
+
+
+### Features
+
+* consume wiremux 0.9.1 ([#277](https://github.com/canact/canact/issues/277)) ([ac09d10](https://github.com/canact/canact/commit/ac09d10371c50e3e62eecfb6a84e2531f8eaa2ca))
+
 ## [0.8.0](https://github.com/canact/canact/compare/v0.7.0...v0.8.0) (2026-09-21)
 
 
