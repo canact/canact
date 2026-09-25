@@ -492,8 +492,8 @@ fn unix_now() -> u64 {
 
 /// True when the host never answered (TCP/DNS/connect), not a scored reply.
 ///
-/// After wiremux 0.8.0 the adapter prefixes only `TransientKind::Connect`.
-/// Do not scrape Display for refused / dns.
+/// After wiremux 0.9.1 the adapter prefixes only `TransientKind::Connect`.
+/// `is_reset()` and `is_timeout()` stay scored. Do not scrape Display.
 pub fn is_unreachable_host(err: &ProbeError) -> bool {
     err.to_string()
         .to_ascii_lowercase()

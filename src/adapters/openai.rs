@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.8.0.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.9.1.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -1162,10 +1162,14 @@ mod tests {
             "error sending request for url (http://127.0.0.1:11434/v1/chat/completions)",
             TransientKind::Timeout,
         )));
-        let reset = map_client_error(transient(
+        let reset_err = transient(
             "error sending request for url (http://127.0.0.1:11434/v1/chat/completions): connection reset",
             TransientKind::Reset,
-        ));
+        );
+        assert!(reset_err.is_reset());
+        assert!(!reset_err.is_connect());
+        assert!(!reset_err.is_timeout());
+        let reset = map_client_error(reset_err);
         match &reset {
             ProbeError::Transient(msg) => {
                 assert!(
@@ -1277,7 +1281,7 @@ mod tests {
         assert_eq!(
             advertised_context_for_model(&models, "grok-4.6"),
             Some(500_000),
-            "wiremux 0.8.0 list_models must read context_window"
+            "wiremux 0.9.1 list_models must read context_window"
         );
     }
 
