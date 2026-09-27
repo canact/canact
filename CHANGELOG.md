@@ -3,6 +3,20 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.9.0](https://github.com/canact/canact/compare/v0.8.0...v0.9.0) (2026-09-27)
+
+
+### Features
+
+* consume wiremux 0.9.1 ([#277](https://github.com/canact/canact/issues/277)) ([ac09d10](https://github.com/canact/canact/commit/ac09d10371c50e3e62eecfb6a84e2531f8eaa2ca))
+* consume wiremux 0.9.2 ([#281](https://github.com/canact/canact/issues/281)) ([bdc6534](https://github.com/canact/canact/commit/bdc6534dbb16a30661ef390b00b0c6f862369456))
+
+
+### Bug Fixes
+
+* name only the env vars an MCP provider will use ([#283](https://github.com/canact/canact/issues/283)) ([8480ef7](https://github.com/canact/canact/commit/8480ef7981094e08c738cfe92304b34482d90ef7))
+* type connect failures as ProbeError::Unreachable ([#282](https://github.com/canact/canact/issues/282)) ([535a993](https://github.com/canact/canact/commit/535a9930852039c04a694d78731d1c8214d426ee))
+
 ## [0.8.0](https://github.com/canact/canact/compare/v0.7.0...v0.8.0) (2026-09-21)
 
 
