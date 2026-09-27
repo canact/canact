@@ -492,12 +492,11 @@ fn unix_now() -> u64 {
 
 /// True when the host never answered (TCP/DNS/connect), not a scored reply.
 ///
-/// After wiremux 0.9.2 the adapter prefixes only `TransientKind::Connect`.
-/// `is_reset()` and `is_timeout()` stay scored. Do not scrape Display.
+/// Matches [`ProbeError::Unreachable`] only. A `Transient` message that
+/// still contains `failed to connect:` is scored Medium. Timeout and
+/// reset stay scored. Do not scrape Display.
 pub fn is_unreachable_host(err: &ProbeError) -> bool {
-    err.to_string()
-        .to_ascii_lowercase()
-        .contains("failed to connect:")
+    err.is_connect()
 }
 
 fn no_multimodal_message(err: &str) -> bool {
