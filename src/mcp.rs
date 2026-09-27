@@ -448,7 +448,9 @@ fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
         _ if openrouter_default_ok(provider) && !provider.is_empty() => {
             "set api_key_env, OPENROUTER_API_KEY, or OPENAI_API_KEY for OpenRouter".to_owned()
         }
-        _ if is_openai_provider_label(provider) => "set api_key_env or OPENAI_API_KEY".to_owned(),
+        _ if is_openai_provider_label(provider) || provider.trim().is_empty() => {
+            "set api_key_env or OPENAI_API_KEY".to_owned()
+        }
         _ => "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
             .to_owned(),
     }
@@ -1513,9 +1515,10 @@ mod tests {
             "provider=openrouter must not list xAI or Anthropic: {openrouter_err}"
         );
         let empty_err = mcp_missing_key_error(None, "");
+        assert_eq!(empty_err, "set api_key_env or OPENAI_API_KEY");
         assert!(
-            empty_err.contains("XAI_API_KEY"),
-            "empty provider keeps the generic missing-key list: {empty_err}"
+            !empty_err.contains("XAI_API_KEY"),
+            "empty provider defaults to OpenAI and must not list other clouds: {empty_err}"
         );
         assert_eq!(
             route_url("api.openai.com", true, false, false),
