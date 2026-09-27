@@ -40,6 +40,10 @@ fn bline_pin_sees_not_found_classifier() {
     ));
     assert!(ProbeError::not_found_from_message("invalid json schema").is_none());
     assert!(ProbeError::not_found_from_message("HTTP 400 Bad Request: bad json").is_none());
+    let connect = ProbeError::unreachable("failed to connect: tcp");
+    assert!(connect.is_connect());
+    assert!(connect.to_string().contains("failed to connect:"));
+    assert!(!ProbeError::Transient("failed to connect: tcp".into()).is_connect());
 }
 
 #[cfg(feature = "runtime")]

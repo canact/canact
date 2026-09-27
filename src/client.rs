@@ -257,6 +257,7 @@ fn clone_probe_error(err: &ProbeError) -> ProbeError {
         ProbeError::NotFound(s) => ProbeError::NotFound(s.clone()),
         ProbeError::Llm(s) => ProbeError::Llm(s.clone()),
         ProbeError::Transient(s) => ProbeError::Transient(s.clone()),
+        ProbeError::Unreachable(s) => ProbeError::Unreachable(s.clone()),
         ProbeError::RateLimit { retry_after } => ProbeError::RateLimit {
             retry_after: *retry_after,
         },

@@ -6,7 +6,7 @@ use canact::{
     CapabilityLevel, CapabilityProfile, CatalogPriors, DIMENSION_NAMES, MockLlm, ProbeCache,
     ProbeClient, ProbeContent, ProbeContentPart, ProbeError, ProbeFinish, ProbeRequest,
     ProbeResponse, ProbeResult, ProbeRun, ProbeRunner, ProbeStreamChunk, ProbeTool, SuiteTier,
-    TOOL_PROBE_NAMES, classify, resolve_probe,
+    TOOL_PROBE_NAMES, classify, is_unreachable_host, resolve_probe,
 };
 
 fn sample_profile() -> CapabilityProfile {
@@ -184,31 +184,45 @@ fn resolve_probe_not_found_aborts() {
 
 #[test]
 fn resolve_probe_unreachable_host_aborts() {
-    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient(
-        "failed to connect: error sending request for url (http://127.0.0.1:1/v1/chat/completions)"
-            .into(),
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::unreachable(
+        "error sending request for url (http://127.0.0.1:1/v1/chat/completions)",
     ));
     let result = resolve_probe(err, "tool_calling");
     match result {
-        Err(ProbeError::Transient(msg)) => {
-            assert!(msg.contains("failed to connect"), "{msg}");
+        Err(err @ ProbeError::Unreachable(_)) => {
+            assert!(is_unreachable_host(&err));
+            assert!(err.to_string().contains("failed to connect:"), "{err}");
         }
-        other => panic!("expected Transient abort, got {other:?}"),
+        other => panic!("expected Unreachable abort, got {other:?}"),
     }
 }
 
 #[test]
+fn resolve_probe_prefixed_transient_stays_scored() {
+    let err: Result<ProbeResult, ProbeError> =
+        Err(ProbeError::Transient("failed to connect: tcp".into()));
+    let probe_err = ProbeError::Transient("failed to connect: tcp".into());
+    assert!(!probe_err.is_connect());
+    assert!(!is_unreachable_host(&probe_err));
+    let connection = ProbeError::Transient("connection error: error trying to connect".into());
+    assert!(!is_unreachable_host(&connection));
+    let (result, cacheable) = resolve_probe(err, "tool_calling").expect("prefix is not a type");
+    assert_eq!(result.level, CapabilityLevel::Medium);
+    assert!(!cacheable, "a prefixed Transient must not persist");
+}
+
+#[test]
 fn resolve_probe_connect_timeout_aborts() {
-    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Transient(
-        "failed to connect: error sending request for url (http://192.0.2.1:11434/v1/chat/completions): timed out"
-            .into(),
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::unreachable(
+        "failed to connect: error sending request for url (http://192.0.2.1:11434/v1/chat/completions): timed out",
     ));
     let result = resolve_probe(err, "tool_calling");
     match result {
-        Err(ProbeError::Transient(msg)) => {
-            assert!(msg.contains("failed to connect:"), "{msg}");
+        Err(ProbeError::Unreachable(msg)) => {
+            assert!(msg.contains("timed out"), "{msg}");
+            assert!(!msg.starts_with("failed to connect:"), "{msg}");
         }
-        other => panic!("expected connect-timeout abort, got {other:?}"),
+        other => panic!("expected Unreachable abort, got {other:?}"),
     }
 }
 

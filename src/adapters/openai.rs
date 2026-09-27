@@ -627,8 +627,8 @@ fn map_client_error(err: ClientError) -> ProbeError {
         ClientError::RateLimit { retry_after, .. } => ProbeError::RateLimit { retry_after },
         ClientError::Transient { message, kind, .. } => {
             let message = redact_secrets(&message);
-            if kind == TransientKind::Connect && !message.starts_with("failed to connect:") {
-                ProbeError::Transient(format!("failed to connect: {message}"))
+            if kind == TransientKind::Connect {
+                ProbeError::unreachable(message)
             } else {
                 ProbeError::Transient(message)
             }
@@ -914,17 +914,21 @@ mod tests {
             .await
             .expect_err("closed port");
         match &err {
-            ProbeError::Transient(msg) => {
+            ProbeError::Unreachable(msg) => {
                 assert!(
-                    msg.starts_with("failed to connect:"),
-                    "closed port must stay prefixed connect abort: {msg}"
+                    !msg.starts_with("failed to connect:"),
+                    "prefix lives on Display, not the payload: {msg}"
+                );
+                assert!(
+                    err.to_string().contains("failed to connect:"),
+                    "CLI text must still see the prefix: {err}"
                 );
             }
-            other => panic!("expected Transient connect, got {other:?}"),
+            other => panic!("expected Unreachable connect, got {other:?}"),
         }
         match resolve_probe(Err(err), "tool_calling") {
-            Err(ProbeError::Transient(_)) => {}
-            other => panic!("expected Transient abort, got {other:?}"),
+            Err(ProbeError::Unreachable(_)) => {}
+            other => panic!("expected Unreachable abort, got {other:?}"),
         }
     }
 
@@ -1096,19 +1100,21 @@ mod tests {
 
     fn assert_connect_abort(err: ProbeError) {
         match &err {
-            ProbeError::Transient(msg) => {
+            ProbeError::Unreachable(msg) => {
+                assert!(!msg.is_empty(), "connect payload must keep the cause");
+                assert!(err.is_connect());
                 assert!(
-                    msg.starts_with("failed to connect:"),
-                    "connect must stay prefixed: {msg}"
+                    err.to_string().contains("failed to connect:"),
+                    "CLI text must still see the prefix: {err}"
                 );
             }
-            other => panic!("expected Transient connect, got {other:?}"),
+            other => panic!("expected Unreachable connect, got {other:?}"),
         }
         match resolve_probe(Err(err), "tool_calling") {
-            Err(ProbeError::Transient(msg)) => {
-                assert!(msg.contains("failed to connect:"), "{msg}");
+            Err(ProbeError::Unreachable(msg)) => {
+                assert!(!msg.is_empty(), "{msg}");
             }
-            other => panic!("expected Transient abort, got {other:?}"),
+            other => panic!("expected Unreachable abort, got {other:?}"),
         }
     }
 

@@ -15,8 +15,19 @@ pub enum ProbeError {
     #[error("LLM error: {0}")]
     Llm(String),
     /// Timeout, network reset, or other transient failure.
+    ///
+    /// A closed port or DNS failure is [`Self::Unreachable`], not this
+    /// variant. Do not prefix the message with `failed to connect:`.
     #[error("transient error: {0}")]
     Transient(String),
+    /// TCP, DNS, or connect never reached the host. Suite abort.
+    ///
+    /// Display stays `transient error: failed to connect: {0}` so CLI
+    /// text that searches that prefix still matches. Hosts match this
+    /// variant or [`Self::is_connect`]. Do not scrape Display for
+    /// `refused` or `dns`.
+    #[error("transient error: failed to connect: {0}")]
+    Unreachable(String),
     /// HTTP 429. Do not persist a 30-day score.
     #[error("rate limited")]
     RateLimit { retry_after: Option<u64> },
@@ -32,6 +43,26 @@ pub enum ProbeError {
 }
 
 impl ProbeError {
+    /// Closed port, DNS, or connect failure. Strips a leading
+    /// `failed to connect:` so Display does not repeat the prefix.
+    #[must_use]
+    pub fn unreachable(message: impl Into<String>) -> Self {
+        let message = message.into();
+        let body = message
+            .strip_prefix("failed to connect:")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or(message);
+        Self::Unreachable(body)
+    }
+
+    /// True for [`Self::Unreachable`]. Timeout and reset stay false.
+    #[must_use]
+    pub fn is_connect(&self) -> bool {
+        matches!(self, Self::Unreachable(_))
+    }
+
     /// Classify HTTP status plus body as [`ProbeError::NotFound`] when the
     /// host says the model or chat route is missing.
     ///
@@ -160,6 +191,23 @@ mod tests {
             Some(ProbeError::NotFound(msg)) => msg,
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn unreachable_strips_prefix_and_is_connect() {
+        let err = ProbeError::unreachable("failed to connect: tcp reset");
+        match &err {
+            ProbeError::Unreachable(msg) => assert_eq!(msg, "tcp reset"),
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        assert!(err.is_connect());
+        assert!(err.to_string().contains("failed to connect: tcp reset"));
+        let plain = ProbeError::unreachable("connection refused");
+        assert!(matches!(plain, ProbeError::Unreachable(msg) if msg == "connection refused"));
+        assert!(!ProbeError::Transient("failed to connect: tcp".into()).is_connect());
+        assert!(
+            !ProbeError::Transient("connection error: error trying to connect".into()).is_connect()
+        );
     }
 
     #[test]
