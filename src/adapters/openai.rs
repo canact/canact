@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.9.1.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.9.2.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -1281,7 +1281,7 @@ mod tests {
         assert_eq!(
             advertised_context_for_model(&models, "grok-4.6"),
             Some(500_000),
-            "wiremux 0.9.1 list_models must read context_window"
+            "wiremux 0.9.2 list_models must read context_window"
         );
     }
 
