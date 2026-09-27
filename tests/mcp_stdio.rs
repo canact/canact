@@ -560,9 +560,10 @@ fn mcp_openai_force_without_key_is_missing_key_error() {
     let text = called["result"]["content"][0]["text"]
         .as_str()
         .expect("text");
-    assert_eq!(
-        text,
-        "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
+    assert_eq!(text, "set api_key_env or OPENAI_API_KEY");
+    assert!(
+        !text.contains("OPENROUTER_API_KEY"),
+        "provider=openai must not name OpenRouter: {text}"
     );
 
     drop(stdin);
