@@ -203,7 +203,7 @@ impl KeyRoute {
     }
 }
 
-fn openrouter_default_ok(provider: &str) -> bool {
+pub fn openrouter_default_ok(provider: &str) -> bool {
     let p = provider.to_ascii_lowercase();
     p.is_empty() || p == "openrouter" || p == "openrouter.ai"
 }
@@ -427,7 +427,7 @@ pub fn missing_cloud_key_message(provider: &str, base_url: &str) -> &'static str
     }
 }
 
-fn is_openai_provider_label(provider: &str) -> bool {
+pub fn is_openai_provider_label(provider: &str) -> bool {
     matches!(
         provider.to_ascii_lowercase().as_str(),
         "openai" | "api.openai.com"

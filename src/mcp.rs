@@ -10,9 +10,10 @@ use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
     is_anthropic_provider_label, is_bedrock_provider_label, is_groq_provider_label,
-    is_openai_codex_provider_label, looks_cheap, present_base_url, refuse_cloud_without_key,
-    resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
-    should_load_xai_oauth, uses_xai_credentials, xai_oauth_access_token,
+    is_openai_codex_provider_label, is_openai_provider_label, looks_cheap, openrouter_default_ok,
+    present_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
+    xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -442,6 +443,12 @@ fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
             "set api_key_env or AWS_BEARER_TOKEN_BEDROCK for Amazon Bedrock (OPENAI_API_KEY is not sent)".to_owned()
         }
         _ if is_openai_codex_provider_label(provider) => {
+            "set api_key_env or OPENAI_API_KEY".to_owned()
+        }
+        _ if openrouter_default_ok(provider) && !provider.is_empty() => {
+            "set api_key_env, OPENROUTER_API_KEY, or OPENAI_API_KEY for OpenRouter".to_owned()
+        }
+        _ if is_openai_provider_label(provider) || provider.trim().is_empty() => {
             "set api_key_env or OPENAI_API_KEY".to_owned()
         }
         _ => "set api_key_env (or OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), or pass base_url for a local host"
@@ -1485,6 +1492,33 @@ mod tests {
             route_url("openai", true, false, false),
             "https://api.openai.com/v1",
             "MCP provider openai must not use OpenRouter when only OPENROUTER_API_KEY is set"
+        );
+        let openai_err = mcp_missing_key_error(None, "openai");
+        assert!(openai_err.contains("OPENAI_API_KEY"), "{openai_err}");
+        assert!(
+            !openai_err.contains("OPENROUTER_API_KEY"),
+            "provider=openai must not tell the host to set OPENROUTER_API_KEY: {openai_err}"
+        );
+        assert!(
+            !openai_err.contains("XAI_API_KEY") && !openai_err.contains("ANTHROPIC_API_KEY"),
+            "provider=openai must not list other clouds: {openai_err}"
+        );
+        let openrouter_err = mcp_missing_key_error(None, "openrouter");
+        assert!(
+            openrouter_err.contains("OPENROUTER_API_KEY")
+                && openrouter_err.contains("OPENAI_API_KEY"),
+            "{openrouter_err}"
+        );
+        assert!(
+            !openrouter_err.contains("XAI_API_KEY")
+                && !openrouter_err.contains("ANTHROPIC_API_KEY"),
+            "provider=openrouter must not list xAI or Anthropic: {openrouter_err}"
+        );
+        let empty_err = mcp_missing_key_error(None, "");
+        assert_eq!(empty_err, "set api_key_env or OPENAI_API_KEY");
+        assert!(
+            !empty_err.contains("XAI_API_KEY"),
+            "empty provider defaults to OpenAI and must not list other clouds: {empty_err}"
         );
         assert_eq!(
             route_url("api.openai.com", true, false, false),
