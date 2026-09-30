@@ -1,13 +1,14 @@
 //! CLI help / usage goldens for `canact` and `canact probe`.
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
 use canact::{
     CapabilityLevel, CapabilityProfile, PROBE_SUITE_VERSION, ProbeCache, ProbeResult, SuiteTier,
+    planned_probe_names,
 };
 
 fn isolated_home() -> &'static std::path::Path {
@@ -823,6 +824,117 @@ fn spawn_401(body: &[u8]) -> String {
         }
     });
     format!("http://{addr}/v1")
+}
+
+const CHAT_OK_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
+const CHAT_SSE_BODY: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+const MAX_HTTP_BYTES: usize = 8 * 1024 * 1024;
+
+fn spawn_chat_ok() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            thread::spawn(move || respond_chat_ok(stream));
+        }
+    });
+    format!("http://{addr}/v1")
+}
+
+fn respond_chat_ok(mut stream: TcpStream) {
+    let _ = stream.set_nodelay(true);
+    let raw = read_http_request(&mut stream);
+    let (content_type, body) = if request_is_stream(&raw) {
+        ("text/event-stream", CHAT_SSE_BODY)
+    } else {
+        ("application/json", CHAT_OK_BODY)
+    };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body.as_bytes());
+    let _ = stream.flush();
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    let header_end = loop {
+        if buf.len() > MAX_HTTP_BYTES {
+            return buf;
+        }
+        match stream.read(&mut tmp) {
+            Ok(0) => return buf,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return buf,
+        }
+        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break end;
+        }
+    };
+    let header_bytes = header_end + 4;
+    if header_is_chunked(&buf[..header_end]) {
+        while buf.len() < MAX_HTTP_BYTES && !buf.windows(5).any(|w| w == b"0\r\n\r\n") {
+            match stream.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        return buf;
+    }
+    let Some(len) = content_length(&buf[..header_end]) else {
+        return buf;
+    };
+    let need = header_bytes.saturating_add(len).min(MAX_HTTP_BYTES);
+    while buf.len() < need {
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+fn content_length(headers: &[u8]) -> Option<usize> {
+    let text = String::from_utf8_lossy(headers);
+    for line in text.split("\r\n") {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("content-length") {
+            return value.trim().parse().ok();
+        }
+    }
+    None
+}
+
+fn header_is_chunked(headers: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(headers);
+    text.split("\r\n").any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        name.eq_ignore_ascii_case("transfer-encoding")
+            && value.to_ascii_lowercase().contains("chunked")
+    })
+}
+
+fn request_is_stream(raw: &[u8]) -> bool {
+    let body = match raw.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(end) => &raw[end + 4..],
+        None => raw,
+    };
+    body.windows(13).any(|w| w == b"\"stream\":true")
+        || body.windows(14).any(|w| w == b"\"stream\": true")
 }
 
 #[test]
@@ -2559,6 +2671,65 @@ fn probe_progress_prints_names_on_stderr() {
     assert!(!stderr.contains("one_shot_tool_plan"), "{stderr}");
     assert!(!stderr.contains("cache hit"), "{stderr}");
     assert!(!stdout.contains("fromCache"), "{stdout}");
+}
+
+#[test]
+fn probe_progress_json_stdout_is_the_envelope() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_str = dir.path().join("empty.json");
+    let base = spawn_chat_ok();
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--cheap",
+            "--provider",
+            "ollama",
+            "--model",
+            "m",
+            "--base-url",
+            &base,
+            "--advertised-context",
+            "4096",
+            "--no-vision",
+            "--cache",
+            cache_str.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .env_remove("GROK_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .output()
+        .expect("spawn progress envelope");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let code = out.status.code();
+    assert!(
+        code == Some(0) || code == Some(2),
+        "exit {code:?}\nstdout={stdout}\nstderr={stderr}"
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("envelope json");
+    assert_eq!(value["fromCache"], false, "{value}");
+    assert_eq!(value["suite"], "policy", "{value}");
+    assert_eq!(value["model"], "m", "{value}");
+    assert_eq!(value["provider"], "ollama", "{value}");
+    assert!(value["probes"].is_object(), "{value}");
+    assert!(value["probes"].get("toolCalling").is_some(), "{value}");
+    assert!(value.get("baseUrl").is_none(), "{value}");
+    assert_eq!(value["toolSchema"], "builtin", "{value}");
+    let names = planned_probe_names(SuiteTier::Policy, false);
+    assert!(names.contains(&"tool_calling"), "{names:?}");
+    assert!(names.contains(&"context_faithfulness"), "{names:?}");
+    assert!(!names.contains(&"one_shot_tool_plan"), "{names:?}");
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert!(
+        lines.starts_with(names.as_slice()),
+        "stderr probe list:\n{stderr}"
+    );
+    assert!(!stderr.contains("cache hit"), "{stderr}");
+    assert!(!stderr.contains("one_shot_tool_plan"), "{stderr}");
 }
 
 #[test]
