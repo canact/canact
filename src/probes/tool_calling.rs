@@ -1,7 +1,7 @@
 //! Tool-calling capability probes: basic, complex, nested, and selection.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
+use crate::client::{ProbeClient, ProbeRequest, ProbeTool, ProbeToolCall};
 use crate::types::{CapabilityLevel, ProbeResult, classify};
 
 use super::{
@@ -417,104 +417,121 @@ fn score_nested_edit_call(call: &ProbeToolCall) -> (f32, String) {
 ///   path+heading+content (1.0), name-only or `edit_file` (0.5)
 /// - Final score: total_points / 3.0 (normalized to 0.0-1.0)
 pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
-    let tools = vec![
-        tool(
-            "read_file",
-            "Read the contents of a file at the given path.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The file path to read" }
-                },
-                "required": ["path"]
-            }),
-        ),
-        tool(
-            "edit_file",
-            "Edit a file using structured search-and-replace operations.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The file path to edit" },
-                    "old_text": { "type": "string", "description": "Text to find" },
-                    "new_text": { "type": "string", "description": "Replacement text" }
-                },
-                "required": ["path", "old_text", "new_text"]
-            }),
-        ),
-        tool(
-            "doc_set",
-            "Set a value in a JSON, YAML, or TOML file by selector path.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The file path" },
-                    "selector": { "type": "string", "description": "Dot-separated path to the key" },
-                    "value": { "description": "The value to set" }
-                },
-                "required": ["path", "selector", "value"]
-            }),
-        ),
-        tool(
-            "search",
-            "Search files for a regex pattern and return matching lines.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "The regex pattern to search for" },
-                    "directory": { "type": "string", "description": "Directory to search in" }
-                },
-                "required": ["pattern"]
-            }),
-        ),
-        tool(
-            "run_command",
-            "Execute a shell command and return its output.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string", "description": "The command to run" }
-                },
-                "required": ["command"]
-            }),
-        ),
-        tool(
-            "list_dir",
-            "List the contents of a directory.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The directory path to list" }
-                },
-                "required": ["path"]
-            }),
-        ),
-        tool(
-            "md_replace_section",
-            "Replace the content under a specific markdown heading in a file.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The markdown file path" },
-                    "heading": { "type": "string", "description": "The heading whose section to replace" },
-                    "content": { "type": "string", "description": "New content for the section" }
-                },
-                "required": ["path", "heading", "content"]
-            }),
-        ),
-        tool(
-            "write_file",
-            "Write or overwrite a file with the given content.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The file path to write" },
-                    "content": { "type": "string", "description": "The content to write" }
-                },
-                "required": ["path", "content"]
-            }),
-        ),
-    ];
+    probe_tool_selection_with(llm, None).await
+}
+
+/// Same probe as [`probe_tool_selection`] when `caller_tools` is `None`.
+///
+/// `Some` sends that list. Task scores still look for the builtin names,
+/// so a host list that omits those names can score Weak.
+pub async fn probe_tool_selection_with<C: ProbeClient>(
+    llm: &C,
+    caller_tools: Option<&[ProbeTool]>,
+) -> Result<ProbeResult, ProbeError> {
+    let builtin_tools;
+    let tools: &[ProbeTool] = if let Some(caller_tools) = caller_tools {
+        caller_tools
+    } else {
+        builtin_tools = vec![
+            tool(
+                "read_file",
+                "Read the contents of a file at the given path.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "The file path to read" }
+                    },
+                    "required": ["path"]
+                }),
+            ),
+            tool(
+                "edit_file",
+                "Edit a file using structured search-and-replace operations.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "The file path to edit" },
+                        "old_text": { "type": "string", "description": "Text to find" },
+                        "new_text": { "type": "string", "description": "Replacement text" }
+                    },
+                    "required": ["path", "old_text", "new_text"]
+                }),
+            ),
+            tool(
+                "doc_set",
+                "Set a value in a JSON, YAML, or TOML file by selector path.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "The file path" },
+                        "selector": { "type": "string", "description": "Dot-separated path to the key" },
+                        "value": { "description": "The value to set" }
+                    },
+                    "required": ["path", "selector", "value"]
+                }),
+            ),
+            tool(
+                "search",
+                "Search files for a regex pattern and return matching lines.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "The regex pattern to search for" },
+                        "directory": { "type": "string", "description": "Directory to search in" }
+                    },
+                    "required": ["pattern"]
+                }),
+            ),
+            tool(
+                "run_command",
+                "Execute a shell command and return its output.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "The command to run" }
+                    },
+                    "required": ["command"]
+                }),
+            ),
+            tool(
+                "list_dir",
+                "List the contents of a directory.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "The directory path to list" }
+                    },
+                    "required": ["path"]
+                }),
+            ),
+            tool(
+                "md_replace_section",
+                "Replace the content under a specific markdown heading in a file.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "The markdown file path" },
+                        "heading": { "type": "string", "description": "The heading whose section to replace" },
+                        "content": { "type": "string", "description": "New content for the section" }
+                    },
+                    "required": ["path", "heading", "content"]
+                }),
+            ),
+            tool(
+                "write_file",
+                "Write or overwrite a file with the given content.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "The file path to write" },
+                        "content": { "type": "string", "description": "The content to write" }
+                    },
+                    "required": ["path", "content"]
+                }),
+            ),
+        ];
+        builtin_tools.as_slice()
+    };
 
     let request = ProbeRequest {
         messages: vec![user_text(
@@ -524,7 +541,7 @@ pub async fn probe_tool_selection<C: ProbeClient>(llm: &C) -> Result<ProbeResult
                  Task 2: Find all files containing the word \"deprecated\" in the src/ directory\n\
                  Task 3: Replace the \"Installation\" section in README.md with new instructions",
         )],
-        tools,
+        tools: tools.to_vec(),
         model: llm.model_id().to_string(),
         temperature: Some(0.0),
         max_tokens: Some(512),
@@ -639,7 +656,7 @@ fn tool_selection_level(score: f32, used_generic: bool, all_precise: bool) -> Ca
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{ProbeFinish, ProbeResponse, ProbeToolCall};
+    use crate::client::{ProbeFinish, ProbeResponse, ProbeTool, ProbeToolCall};
     use crate::probes::test_support::*;
 
     fn call(id: &str, name: &str, arguments: serde_json::Value) -> ProbeToolCall {
@@ -1643,5 +1660,45 @@ mod tests {
         let result = probe_tool_selection(&llm).await.unwrap();
         assert_eq!(result.score, 0.0);
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn tool_selection_sends_the_caller_tools() {
+        let caller = vec![
+            ProbeTool {
+                name: "lookup_issue".into(),
+                description: "Look up one issue.".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+            ProbeTool {
+                name: "post_note".into(),
+                description: "Post a note.".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+        ];
+        let llm = crate::MockLlm::new("m", "ollama");
+        let _result = probe_tool_selection_with(&llm, Some(&caller))
+            .await
+            .expect("caller tool selection");
+        let recorded = llm.recorded_requests();
+        assert_eq!(recorded.len(), 1);
+        let names: Vec<&str> = recorded[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect();
+        assert_eq!(names, ["lookup_issue", "post_note"]);
+        for builtin in [
+            "read_file",
+            "edit_file",
+            "doc_set",
+            "search",
+            "run_command",
+            "list_dir",
+            "md_replace_section",
+            "write_file",
+        ] {
+            assert!(!names.contains(&builtin), "{names:?}");
+        }
     }
 }

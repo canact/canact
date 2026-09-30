@@ -5,12 +5,12 @@ use std::process::ExitCode;
 
 use canact::{
     CacheListRow, CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, McpServerOptions,
-    OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
-    claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
+    OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, ProbeTool,
+    SuiteTier, claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
     is_groq_provider_label, list_model_ids, looks_cheap, missing_cloud_key_message,
     missing_model_message, planned_probe_names, present_base_url, probe_endpoint_without_key,
-    redact_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
-    run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
+    probe_tools_digest, redact_base_url, refuse_cloud_without_key, resolve_api_key_from,
+    resolve_host_catalog, run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
     xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
@@ -157,6 +157,10 @@ struct ProbeArgs {
     /// Catalog prior: advertised context window in tokens
     #[arg(long, value_name = "N", value_parser = parse_advertised_context)]
     advertised_context: Option<u32>,
+
+    /// JSON file of caller tools. The file is a JSON array of objects with name, description, and parameters. Omitted means builtin probe tools.
+    #[arg(long)]
+    tools: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -244,6 +248,13 @@ fn cli_explicit_base_url(raw: Option<&str>) -> bool {
 }
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
+    let caller_tools = match load_caller_tools(args.tools.as_deref()) {
+        Ok(tools) => tools,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Err(1);
+        }
+    };
     if args.dry_run {
         return run_dry_run(&args);
     }
@@ -298,7 +309,8 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
     {
-        if vision_catalog_flag(&args).is_none()
+        if caller_tools.is_none()
+            && vision_catalog_flag(&args).is_none()
             && args.advertised_context.is_none()
             && let Some((profile, _skip_expensive, advertised)) = cache
                 .find_profile_unspecified_catalog_suite(model, &provider, suite)
@@ -308,7 +320,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                 &profile,
                 args.json,
                 args.verbose,
-                HostPolicyMeta::for_suite(true, true, suite, advertised),
+                probe_meta(true, suite, advertised, caller_tools.as_deref()),
             );
         }
         if let Some((profile, hit_suite, advertised)) = cached_probe(
@@ -318,12 +330,13 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             suite,
             vision,
             args.advertised_context,
+            caller_tools.as_deref(),
         ) {
             return emit_profile(
                 &profile,
                 args.json,
                 args.verbose,
-                HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
+                probe_meta(true, hit_suite, advertised, caller_tools.as_deref()),
             );
         }
     }
@@ -344,14 +357,21 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let advertised = hints.advertised_context_tokens;
     let vision = hints.supports_vision == Some(true);
     if !args.force
-        && let Some((profile, hit_suite, advertised)) =
-            cached_probe(&cache, &model, &provider, suite, vision, advertised)
+        && let Some((profile, hit_suite, advertised)) = cached_probe(
+            &cache,
+            &model,
+            &provider,
+            suite,
+            vision,
+            advertised,
+            caller_tools.as_deref(),
+        )
     {
         return emit_profile(
             &profile,
             args.json,
             args.verbose,
-            HostPolicyMeta::for_suite(true, true, hit_suite, advertised),
+            probe_meta(true, hit_suite, advertised, caller_tools.as_deref()),
         );
     }
     let catalog = CatalogPriors {
@@ -375,6 +395,9 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     let mut runner = ProbeRunner::new(client).suite(suite);
     if looks_cheap(&provider, &model, &base_url) {
         runner = runner.throttled();
+    }
+    if let Some(list) = caller_tools {
+        runner = runner.with_tools(list);
     }
 
     if !args.json {
@@ -829,16 +852,58 @@ fn cached_probe(
     suite: SuiteTier,
     vision: bool,
     advertised: Option<u32>,
+    tools: Option<&[ProbeTool]>,
 ) -> Option<(CapabilityProfile, SuiteTier, Option<u32>)> {
-    if let Some(profile) = cache.get_with_suite(model, provider, suite, vision, advertised) {
+    if let Some(profile) =
+        cache.get_with_suite_tools(model, provider, suite, vision, advertised, tools)
+    {
         return Some((profile.clone(), suite, advertised));
     }
-    if !matches!(suite, SuiteTier::Policy) || vision {
+    if tools.is_some() || !matches!(suite, SuiteTier::Policy) || vision {
         return None;
     }
     cache
         .find_profile_with_cost_and_advertised(model, provider, advertised)
         .map(|(profile, hit_suite)| (profile.clone(), hit_suite, advertised))
+}
+
+#[derive(serde::Deserialize)]
+struct CallerToolFile {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+fn load_caller_tools(path: Option<&std::path::Path>) -> Result<Option<Vec<ProbeTool>>, String> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to parse tools file {}: {err}", path.display()))?;
+    let rows: Vec<CallerToolFile> = serde_json::from_str(&raw)
+        .map_err(|err| format!("failed to parse tools file {}: {err}", path.display()))?;
+    Ok(Some(
+        rows.into_iter()
+            .map(|row| ProbeTool {
+                name: row.name,
+                description: row.description,
+                parameters: row.parameters,
+            })
+            .collect(),
+    ))
+}
+
+fn probe_meta(
+    from_cache: bool,
+    suite: SuiteTier,
+    advertised: Option<u32>,
+    tools: Option<&[ProbeTool]>,
+) -> HostPolicyMeta {
+    let meta = HostPolicyMeta::for_suite(true, from_cache, suite, advertised);
+    match tools {
+        Some(list) => meta.with_tool_digest(probe_tools_digest(list)),
+        None => meta,
+    }
 }
 
 fn resolve_suite(args: &ProbeArgs) -> Result<SuiteTier, String> {

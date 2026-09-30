@@ -6,7 +6,7 @@
 //! that can only emit 1-2 calls per turn require extra round-trips.
 
 use crate::ProbeError;
-use crate::client::{ProbeClient, ProbeRequest};
+use crate::client::{ProbeClient, ProbeRequest, ProbeTool};
 use crate::types::{ProbeResult, classify};
 
 use super::{
@@ -28,29 +28,64 @@ use super::{
 /// - `0.1` - named `read_file` but no usable path
 /// - `0.0` - no tool calls
 pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
-    let read_file = tool(
-        "read_file",
-        "Read the contents of a file.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "The file path to read" }
-            },
-            "required": ["path"]
-        }),
-    );
+    probe_parallel_tool_scale_with(llm, None).await
+}
 
-    let request = ProbeRequest {
-        messages: vec![user_text(
-            "Read ALL FIVE of these files in a SINGLE response by calling \
+/// Same probe as [`probe_parallel_tool_scale`] when `tools` is `None`.
+///
+/// `Some` sends that list. A call counts when its name is in the list.
+/// The 5 / 4 / 3 / 2 / 1 thresholds stay the same.
+pub async fn probe_parallel_tool_scale_with<C: ProbeClient>(
+    llm: &C,
+    tools: Option<&[ProbeTool]>,
+) -> Result<ProbeResult, ProbeError> {
+    let builtin_prompt = "Read ALL FIVE of these files in a SINGLE response by calling \
                  read_file five times:\n\
                  1. src/main.rs\n\
                  2. src/lib.rs\n\
                  3. Cargo.toml\n\
                  4. README.md\n\
-                 5. tests/integration.rs",
-        )],
-        tools: vec![read_file],
+                 5. tests/integration.rs";
+    let (request_tools, accepted, prompt, label) = if let Some(list) = tools {
+        let accepted: Vec<String> = list.iter().map(|tool| tool.name.clone()).collect();
+        let label = if accepted.is_empty() {
+            "tool".to_owned()
+        } else {
+            accepted.join(", ")
+        };
+        let prompt = format!(
+            "Read ALL FIVE of these files in a SINGLE response by calling \
+             {label} five times:\n\
+             1. src/main.rs\n\
+             2. src/lib.rs\n\
+             3. Cargo.toml\n\
+             4. README.md\n\
+             5. tests/integration.rs"
+        );
+        (list.to_vec(), accepted, prompt, label)
+    } else {
+        let read_file = tool(
+            "read_file",
+            "Read the contents of a file.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "The file path to read" }
+                },
+                "required": ["path"]
+            }),
+        );
+        (
+            vec![read_file],
+            vec!["read_file".to_owned()],
+            builtin_prompt.to_owned(),
+            "read_file".to_owned(),
+        )
+    };
+
+    let request = ProbeRequest {
+        messages: vec![user_text(prompt)],
+        tools: request_tools,
         model: llm.model_id().to_string(),
         temperature: Some(0.0),
         max_tokens: Some(512),
@@ -60,16 +95,17 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
     refuse_truncated_tool_call(&response)?;
     let calls = &response.tool_calls;
 
+    let name_ok = |name: &str| accepted.iter().any(|accepted_name| accepted_name == name);
     let valid_calls: Vec<&str> = calls
         .iter()
-        .filter(|c| {
-            c.name == "read_file" && nonempty_string_arg_any(&c.arguments, &["path", "file_path"])
+        .filter(|call| {
+            name_ok(&call.name) && nonempty_string_arg_any(&call.arguments, &["path", "file_path"])
         })
-        .filter_map(|c| {
-            c.arguments
+        .filter_map(|call| {
+            call.arguments
                 .get("path")
-                .or_else(|| c.arguments.get("file_path"))
-                .and_then(|v| v.as_str())
+                .or_else(|| call.arguments.get("file_path"))
+                .and_then(|value| value.as_str())
         })
         .collect();
 
@@ -78,14 +114,14 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
     unique_paths.dedup();
     let unique_count = unique_paths.len();
 
-    let named_read_file = calls.iter().any(|c| c.name == "read_file");
+    let named = calls.iter().any(|call| name_ok(&call.name));
     let score = match unique_count {
         5.. => 1.0,
         4 => 0.8,
         3 => 0.6,
         2 => 0.4,
         1 => 0.2,
-        _ if named_read_file => 0.1,
+        _ if named => 0.1,
         _ => 0.0,
     };
 
@@ -94,15 +130,15 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
             "no tool calls in one response (target 5 unique read_file)".to_string()
         } else {
             format!(
-                "{} tool call(s), 0 unique read_file paths (target 5)",
+                "{} tool call(s), 0 unique {label} paths (target 5)",
                 calls.len()
             )
         }
     } else if valid_calls.len() == unique_count {
-        format!("{unique_count} unique read_file calls in one response (target 5)")
+        format!("{unique_count} unique {label} calls in one response (target 5)")
     } else {
         format!(
-            "{unique_count} unique of {} read_file calls in one response (target 5)",
+            "{unique_count} unique of {} {label} calls in one response (target 5)",
             valid_calls.len()
         )
     };
@@ -120,7 +156,7 @@ pub async fn probe_parallel_tool_scale<C: ProbeClient>(llm: &C) -> Result<ProbeR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::ProbeToolCall;
+    use crate::client::{ProbeResponse, ProbeToolCall};
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
 
@@ -268,5 +304,73 @@ mod tests {
             result.details,
             "2 unique read_file calls in one response (target 5)"
         );
+    }
+
+    fn calls_named(name: &str, count: usize) -> ProbeResponse {
+        let paths = [
+            "src/main.rs",
+            "src/lib.rs",
+            "Cargo.toml",
+            "README.md",
+            "tests/integration.rs",
+        ];
+        let made = (0..count)
+            .map(|index| ProbeToolCall {
+                id: index.to_string(),
+                name: name.into(),
+                arguments: serde_json::json!({"path": paths[index]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            })
+            .collect();
+        multi_tool_call_response(made)
+    }
+
+    #[tokio::test]
+    async fn parallel_tool_scale_uses_caller_tool_names() {
+        let caller = vec![super::tool(
+            "fetch_blob",
+            "Fetch a blob by path.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }),
+        )];
+        let llm = RecordingMock::new(calls_named("fetch_blob", 5));
+        let result = probe_parallel_tool_scale_with(&llm, Some(&caller))
+            .await
+            .expect("caller scale");
+        assert_eq!(result.score, 1.0);
+        let recorded = llm.requests.lock().expect("lock").clone();
+        let prompt = request_user_text(&recorded[0]);
+        assert!(prompt.contains("fetch_blob"), "{prompt}");
+        assert_eq!(
+            recorded[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["fetch_blob"]
+        );
+        for (count, score) in [(4, 0.8_f32), (3, 0.6), (2, 0.4), (1, 0.2)] {
+            let llm = RecordingMock::new(calls_named("fetch_blob", count));
+            let result = probe_parallel_tool_scale_with(&llm, Some(&caller))
+                .await
+                .expect("caller scale");
+            assert_eq!(result.score, score, "caller count {count}");
+        }
+        for (count, score) in [(5, 1.0_f32), (4, 0.8), (3, 0.6), (2, 0.4), (1, 0.2)] {
+            let llm = MockLlm {
+                response: calls_named("read_file", count),
+            };
+            let result = probe_parallel_tool_scale(&llm)
+                .await
+                .expect("builtin scale");
+            assert_eq!(result.score, score, "builtin count {count}");
+        }
     }
 }

@@ -275,6 +275,7 @@ fn persist_cheap_run_is_not_returned_as_full() {
         suite: SuiteTier::Policy,
         vision: false,
         advertised_context_tokens: None,
+        tools: None,
     };
     let wrote = run.persist(&mut cache, &path).expect("persist");
     assert!(wrote);
@@ -300,6 +301,7 @@ fn persist_advertised_is_not_returned_as_uncapped() {
         suite: SuiteTier::Full,
         vision: false,
         advertised_context_tokens: Some(2000),
+        tools: None,
     };
     let wrote = run.persist(&mut cache, &path).expect("persist");
     assert!(wrote);
@@ -327,6 +329,7 @@ fn persist_does_not_write_when_cacheable_false() {
         suite: SuiteTier::Full,
         vision: false,
         advertised_context_tokens: None,
+        tools: None,
     };
     let wrote = run.persist(&mut cache, &path).expect("persist");
     assert!(!wrote, "persist must skip uncacheable runs");
@@ -556,6 +559,7 @@ fn uncacheable_run_envelope_cacheable_false() {
         suite: SuiteTier::Policy,
         vision: false,
         advertised_context_tokens: Some(40960),
+        tools: None,
     };
     let envelope = run.host_policy_envelope();
     assert_eq!(envelope["cacheable"], false, "{envelope}");

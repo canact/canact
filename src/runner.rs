@@ -8,7 +8,7 @@ use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::cache::ProbeCache;
-use crate::client::ProbeClient;
+use crate::client::{ProbeClient, ProbeTool};
 use crate::error::ProbeError;
 use crate::probes;
 use crate::types::{
@@ -79,18 +79,24 @@ pub struct ProbeRun {
     pub vision: bool,
     /// Catalog advertised context prior for this run, if any.
     pub advertised_context_tokens: Option<u32>,
+    /// Caller tool list for `tool_selection` and `parallel_tool_scale`.
+    /// `None` keeps the builtin probe tools.
+    pub tools: Option<Vec<ProbeTool>>,
 }
 
 impl ProbeRun {
     /// Host-policy JSON using this run's cacheable / cheap / advertised knobs.
     pub fn host_policy_envelope(&self) -> serde_json::Value {
-        self.profile
-            .host_policy_envelope_with(HostPolicyMeta::for_suite(
-                self.cacheable,
-                false,
-                self.suite,
-                self.advertised_context_tokens,
-            ))
+        let mut meta = HostPolicyMeta::for_suite(
+            self.cacheable,
+            false,
+            self.suite,
+            self.advertised_context_tokens,
+        );
+        if let Some(tools) = &self.tools {
+            meta = meta.with_tool_digest(crate::tool_digest::probe_tools_digest(tools));
+        }
+        self.profile.host_policy_envelope_with(meta)
     }
 
     /// Persist the profile when [`Self::cacheable`] is true.
@@ -102,11 +108,12 @@ impl ProbeRun {
             warn!("skipping probe cache persist: transient probe error");
             return Ok(false);
         }
-        cache.put_with_suite(
+        cache.put_with_suite_tools(
             self.profile.clone(),
             self.suite,
             self.vision,
             self.advertised_context_tokens,
+            self.tools.as_deref(),
         );
         cache.save(path)?;
         Ok(true)
@@ -119,6 +126,7 @@ pub struct ProbeRunner<C: ProbeClient> {
     concurrency: usize,
     suite: SuiteTier,
     last_run: Mutex<Option<ProbeRun>>,
+    tools: Option<Vec<ProbeTool>>,
 }
 
 impl<C: ProbeClient> ProbeRunner<C> {
@@ -138,6 +146,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             concurrency: PAID_CONCURRENCY,
             suite: SuiteTier::Full,
             last_run: Mutex::new(None),
+            tools: None,
         }
     }
 
@@ -154,6 +163,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             concurrency: FREE_CONCURRENCY,
             suite: SuiteTier::Policy,
             last_run: Mutex::new(None),
+            tools: None,
         }
     }
 
@@ -164,6 +174,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             concurrency: FREE_CONCURRENCY,
             suite: SuiteTier::Policy,
             last_run: self.last_run,
+            tools: self.tools,
         }
     }
 
@@ -174,6 +185,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             concurrency: PAID_CONCURRENCY,
             suite: SuiteTier::Full,
             last_run: self.last_run,
+            tools: self.tools,
         }
     }
 
@@ -184,6 +196,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             concurrency: self.concurrency,
             suite,
             last_run: self.last_run,
+            tools: self.tools,
         }
     }
 
@@ -194,6 +207,18 @@ impl<C: ProbeClient> ProbeRunner<C> {
             concurrency: FREE_CONCURRENCY,
             suite: self.suite,
             last_run: self.last_run,
+            tools: self.tools,
+        }
+    }
+
+    /// Use this caller tool list for `tool_selection` and `parallel_tool_scale`.
+    pub fn with_tools(self, tools: Vec<ProbeTool>) -> Self {
+        Self {
+            client: self.client,
+            concurrency: self.concurrency,
+            suite: self.suite,
+            last_run: self.last_run,
+            tools: Some(tools),
         }
     }
 
@@ -230,7 +255,8 @@ impl<C: ProbeClient> ProbeRunner<C> {
         let diff_fut = Self::gated(&sem, probes::probe_unified_diff(&self.client));
         let complex_fut = Self::gated(&sem, probes::probe_complex_tool_calling(&self.client));
         let nested_fut = Self::gated(&sem, probes::probe_nested_arguments(&self.client));
-        let tool_sel_fut = Self::gated(&sem, probes::probe_tool_selection(&self.client));
+        let caller_tools = self.tools.as_deref();
+        let tool_sel_fut = Self::gated(&sem, run_tool_selection(&self.client, caller_tools));
         let streaming_fut = Self::gated(&sem, probes::probe_streaming_tool_calls(&self.client));
         let code_syntax_fut = Self::gated_or_skip_named(
             !self.suite.run_diagnostics(),
@@ -260,7 +286,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             DIAGNOSTIC_SKIP,
             probes::probe_token_efficiency(&self.client),
         );
-        let par_scale_fut = Self::gated(&sem, probes::probe_parallel_tool_scale(&self.client));
+        let par_scale_fut = Self::gated(&sem, run_parallel_tool_scale(&self.client, caller_tools));
         let vision_flag = self.client.catalog().supports_vision;
         let vision_enabled = vision_flag == Some(true);
         let vision_fut = async {
@@ -431,6 +457,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
             suite: self.suite,
             vision: vision_enabled,
             advertised_context_tokens: self.client.catalog().advertised_context_tokens,
+            tools: self.tools.clone(),
         };
 
         {
@@ -470,6 +497,26 @@ impl<C: ProbeClient> ProbeRunner<C> {
         } else {
             Self::gated(sem, fut).await
         }
+    }
+}
+
+async fn run_tool_selection<C: ProbeClient>(
+    client: &C,
+    tools: Option<&[ProbeTool]>,
+) -> Result<ProbeResult, ProbeError> {
+    match tools {
+        None => probes::probe_tool_selection(client).await,
+        Some(list) => probes::probe_tool_selection_with(client, Some(list)).await,
+    }
+}
+
+async fn run_parallel_tool_scale<C: ProbeClient>(
+    client: &C,
+    tools: Option<&[ProbeTool]>,
+) -> Result<ProbeResult, ProbeError> {
+    match tools {
+        None => probes::probe_parallel_tool_scale(client).await,
+        Some(list) => probes::probe_parallel_tool_scale_with(client, Some(list)).await,
     }
 }
 

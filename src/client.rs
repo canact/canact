@@ -221,6 +221,7 @@ pub struct MockLlm {
     provider: String,
     error: Option<ProbeError>,
     catalog: CatalogPriors,
+    requests: std::sync::Mutex<Vec<ProbeRequest>>,
 }
 
 impl MockLlm {
@@ -231,7 +232,13 @@ impl MockLlm {
             provider: provider.into(),
             error: None,
             catalog: CatalogPriors::default(),
+            requests: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Requests passed to [`ProbeClient::chat`], in call order.
+    pub fn recorded_requests(&self) -> Vec<ProbeRequest> {
+        self.requests.lock().expect("mock llm request lock").clone()
     }
 
     /// Fail `chat` / `stream_chat` with this error.
@@ -272,6 +279,10 @@ impl ProbeClient for MockLlm {
         &self,
         req: ProbeRequest,
     ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
+        self.requests
+            .lock()
+            .expect("mock llm request lock")
+            .push(req.clone());
         let err = self.injected_error();
         let resp = if req.tools.is_empty() {
             ProbeResponse {
