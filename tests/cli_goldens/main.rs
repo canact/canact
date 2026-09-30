@@ -87,6 +87,13 @@ fn mcp_help_mentions_probe_model() {
 }
 
 #[test]
+fn probe_help_verbose_omits_counted_dimensions() {
+    let help = stdout_of(&["probe", "--help"]);
+    assert!(!help.contains("20 dimensions"), "{help}");
+    assert!(help.contains("one_shot_tool_plan"), "{help}");
+}
+
+#[test]
 fn mcp_help_lists_trust_flags() {
     let help = stdout_of(&["mcp", "--help"]);
     assert!(help.contains("--allow-cache"), "{help}");

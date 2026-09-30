@@ -123,7 +123,7 @@ on-disk `probes.json` file.
 
 | Field | Meaning |
 |-------|---------|
-| `maxTools` | Strong tool selection: no cap. Medium: 20. Weak: 10. |
+| `maxTools` | Strong is JSON `null` (no cap). Medium is 20. Weak or not completed is 10. Read `toolSelectionStatus` before treating 10 as measured Weak. |
 | `probeLadderEditFormat` | Search/replace, unified diff, or whole file |
 | `needsXmlFallback` | Native tools were Weak |
 | `needsJsonRepair` | Completed JSON score is Medium or weaker |

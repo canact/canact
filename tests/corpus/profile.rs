@@ -448,6 +448,13 @@ fn max_tools_10_for_weak() {
     );
     profile.tool_selection = make_probe("tool_selection", CapabilityLevel::Weak);
     assert_eq!(profile.max_tools(), Some(10));
+    let envelope = profile.host_policy_envelope();
+    assert_eq!(envelope["maxTools"], 10, "{envelope}");
+    assert_eq!(envelope["toolSelectionStatus"], "completed", "{envelope}");
+    assert_eq!(
+        envelope["probes"]["toolSelection"]["status"], "completed",
+        "{envelope}"
+    );
 }
 
 #[test]
@@ -468,6 +475,86 @@ fn max_tools_20_for_033_medium_tool_selection() {
         profile.max_tools(),
         Some(20),
         "generic-edit 0.33 Medium must cap at 20, not unlimited"
+    );
+}
+
+fn assert_max_tools_status(profile: &CapabilityProfile, status: &str) {
+    assert_eq!(profile.max_tools(), Some(10));
+    let envelope = profile.host_policy_envelope();
+    assert_eq!(envelope["maxTools"], 10, "{envelope}");
+    assert_eq!(envelope["toolSelectionStatus"], status, "{envelope}");
+    assert_eq!(
+        envelope["probes"]["toolSelection"]["status"], status,
+        "{envelope}"
+    );
+}
+
+#[test]
+fn max_tools_10_when_tool_selection_skipped() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.tool_selection = ProbeResult {
+        name: "tool_selection".to_owned(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Skipped: constructed".to_owned(),
+    };
+    assert_max_tools_status(&profile, "skipped");
+}
+
+#[test]
+fn max_tools_10_when_tool_selection_unprobed() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.tool_selection = ProbeResult {
+        name: "tool_selection".to_owned(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Not probed (cached before this probe existed)".to_owned(),
+    };
+    assert_max_tools_status(&profile, "unprobed");
+}
+
+#[test]
+fn max_tools_10_when_tool_selection_errors() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.tool_selection = ProbeResult {
+        name: "tool_selection".to_owned(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Probe failed: timeout".to_owned(),
+    };
+    assert_max_tools_status(&profile, "error");
+}
+
+#[test]
+fn max_tools_null_only_when_completed_strong() {
+    let profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    assert_eq!(profile.max_tools(), None);
+    let envelope = profile.host_policy_envelope();
+    assert!(envelope.get("maxTools").is_some(), "{envelope}");
+    assert!(envelope["maxTools"].is_null(), "{envelope}");
+    assert_eq!(envelope["toolSelectionStatus"], "completed", "{envelope}");
+    assert_eq!(
+        envelope["probes"]["toolSelection"]["status"], "completed",
+        "{envelope}"
     );
 }
 

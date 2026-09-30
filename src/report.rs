@@ -16,7 +16,10 @@ impl CapabilityProfile {
         let _ = writeln!(out, "=== Probe Results ===");
         let _ = writeln!(out, "Weak < 0.4   Medium >= 0.4   Strong >= 0.8");
         if !verbose {
-            let _ = writeln!(out, "(Showing core dimensions; use --verbose for all.)");
+            let _ = writeln!(
+                out,
+                "(Showing core dimensions; use --verbose for the rest.)"
+            );
         }
         let _ = writeln!(out);
         let dims: &[&str] = if verbose {
@@ -155,4 +158,36 @@ pub fn missing_model_message<S: AsRef<str>>(ids: &[S]) -> String {
     }
     msg.push(')');
     msg
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::types::{CapabilityLevel, CapabilityProfile, DIMENSION_NAMES, ProbeResult};
+
+    fn completed(name: &str) -> ProbeResult {
+        ProbeResult {
+            name: name.to_owned(),
+            score: 1.0,
+            max_score: 1.0,
+            level: CapabilityLevel::Strong,
+            details: "done".to_owned(),
+        }
+    }
+
+    #[test]
+    fn verbose_human_table_has_19_dimension_labels() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        for &name in DIMENSION_NAMES {
+            *profile
+                .dimension_result_mut(name)
+                .unwrap_or_else(|| panic!("missing {name}")) = completed(name);
+        }
+        let verbose = profile.format_human_table(true);
+        let score_lines = verbose.lines().filter(|line| line.contains(" / ")).count();
+        assert_eq!(score_lines, 19, "{verbose}");
+        assert!(!verbose.contains("One Shot Tool Plan"), "{verbose}");
+        let quiet = profile.format_human_table(false);
+        assert!(quiet.contains("use --verbose for the rest."), "{quiet}");
+        assert!(!quiet.contains("use --verbose for all."), "{quiet}");
+    }
 }

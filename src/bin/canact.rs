@@ -87,7 +87,7 @@ struct ProbeArgs {
     #[arg(long)]
     json: bool,
 
-    /// Print all 20 dimensions (human table)
+    /// Print every dimension in the human table. Omits one_shot_tool_plan.
     #[arg(long)]
     verbose: bool,
 
