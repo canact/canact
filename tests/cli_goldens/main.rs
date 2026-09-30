@@ -1781,12 +1781,8 @@ fn cache_list_profile(model: &str, provider: &str, probed_at: u64) -> Capability
     profile
 }
 
+#[cfg(not(windows))]
 fn default_cache_path_for_home(home: &std::path::Path) -> std::path::PathBuf {
-    #[cfg(windows)]
-    let root = {
-        let _ = home;
-        dirs::cache_dir().expect("cache dir")
-    };
     #[cfg(target_os = "macos")]
     let root = home.join("Library").join("Caches");
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -1796,15 +1792,35 @@ fn default_cache_path_for_home(home: &std::path::Path) -> std::path::PathBuf {
 
 #[test]
 fn cache_path_prints_default_without_creating_it() {
+    // A temp USERPROFILE has no AppData\Local, so known-folder lookup
+    // fails and the CLI uses the temp dir. Keep the real profile and
+    // compare with dirs::cache_dir(). Unix paths follow HOME.
+    #[cfg(windows)]
+    let expected = dirs::cache_dir()
+        .expect("cache dir")
+        .join("canact")
+        .join("probes.json");
+    #[cfg(not(windows))]
     let home = tempfile::tempdir().expect("home");
+    #[cfg(not(windows))]
     let expected = default_cache_path_for_home(home.path());
     let parent = expected.parent().expect("parent");
     let parent_before = parent.exists();
     let before = std::fs::metadata(&expected).ok();
-    let out = canact()
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .env_remove("XDG_CACHE_HOME")
+    let mut cmd = canact();
+    cmd.env_remove("XDG_CACHE_HOME");
+    #[cfg(windows)]
+    match std::env::var_os("USERPROFILE") {
+        Some(profile) => {
+            cmd.env("USERPROFILE", profile);
+        }
+        None => {
+            cmd.env_remove("USERPROFILE");
+        }
+    }
+    #[cfg(not(windows))]
+    cmd.env("HOME", home.path()).env("USERPROFILE", home.path());
+    let out = cmd
         .args(["cache", "path"])
         .output()
         .expect("spawn cache path");
