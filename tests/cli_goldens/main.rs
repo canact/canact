@@ -1994,3 +1994,133 @@ fn cache_list_provider_family() {
     assert!(!stdout.contains("127.0.0.1:1234"), "{stdout}");
     assert!(!stdout.contains("cache-list-port1234"), "{stdout}");
 }
+
+fn flatten_ws(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn no_login_api_key_help_names_env_and_process_list() {
+    let help = flatten_ws(&stdout_of(&["probe", "--help"]));
+    assert!(help.contains("--no-login"), "{help}");
+    for name in [
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "XAI_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ] {
+        assert!(help.contains(name), "{name} missing from {help}");
+    }
+    assert!(help.contains("shell history"), "{help}");
+    assert!(help.contains("process list"), "{help}");
+    let export = flatten_ws(&stdout_of(&["export", "--help"]));
+    assert!(!export.contains("--no-login"), "{export}");
+}
+
+#[test]
+fn no_login_ignores_planted_grok_auth() {
+    // Private HOME: the shared golden home is process-wide, and a
+    // planted auth file there would be visible to other probes.
+    let home = tempfile::tempdir().expect("home");
+    let grok_dir = home.path().join(".grok");
+    std::fs::create_dir_all(&grok_dir).expect("grok dir");
+    let canary = "canact-no-login-canary-not-a-token";
+    std::fs::write(
+        grok_dir.join("auth.json"),
+        format!(
+            r#"{{"https://auth.x.ai::planted-test-client":{{"key":"{canary}","refresh_token":"rt","expires_at":"2099-01-01T00:00:00Z"}}}}"#
+        ),
+    )
+    .expect("auth");
+    let out = canact()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env_remove("XAI_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .args([
+            "probe",
+            "--no-login",
+            "--provider",
+            "xai",
+            "--model",
+            "grok-test",
+        ])
+        .output()
+        .expect("spawn probe");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("set --api-key or XAI_API_KEY"), "{stderr}");
+    assert!(!stderr.contains("authentication error"), "{stderr}");
+    assert!(!stderr.contains(canary), "{stderr}");
+    assert!(!stdout.contains(canary), "{stdout}");
+}
+
+#[test]
+fn no_login_still_uses_env() {
+    let dummy = "sk-canact-nologin-dummy";
+    let closed = canact()
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .env("XAI_API_KEY", dummy)
+        .args([
+            "probe",
+            "--no-login",
+            "--provider",
+            "xai",
+            "--model",
+            "grok-test",
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+        ])
+        .output()
+        .expect("spawn closed port");
+    let stderr = String::from_utf8_lossy(&closed.stderr);
+    let stdout = String::from_utf8_lossy(&closed.stdout);
+    assert_ne!(
+        closed.status.code(),
+        Some(0),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(!stderr.contains("set --api-key or XAI_API_KEY"), "{stderr}");
+    assert!(stderr.contains("127.0.0.1"), "{stderr}");
+    assert!(!stderr.contains(dummy), "{stderr}");
+    assert!(!stdout.contains(dummy), "{stdout}");
+
+    let ignored = canact()
+        .env_remove("XAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .env("OPENAI_API_KEY", dummy)
+        .args([
+            "probe",
+            "--no-login",
+            "--provider",
+            "xai",
+            "--model",
+            "grok-test",
+        ])
+        .output()
+        .expect("spawn ignored openai key");
+    let stderr = String::from_utf8_lossy(&ignored.stderr);
+    let stdout = String::from_utf8_lossy(&ignored.stdout);
+    assert_eq!(
+        ignored.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("OPENAI_API_KEY is not sent"), "{stderr}");
+    assert!(!stderr.contains(dummy), "{stderr}");
+    assert!(!stdout.contains(dummy), "{stdout}");
+}
