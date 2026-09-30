@@ -95,6 +95,7 @@ fn mcp_probe_model_returns_host_policy_from_cache() {
 
     let mut child = canact_cmd()
         .arg("mcp")
+        .arg("--allow-cache")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -200,6 +201,7 @@ fn mcp_cached_weak_tools_is_not_error() {
 
     let mut child = canact_cmd()
         .arg("mcp")
+        .arg("--allow-cache")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -260,6 +262,7 @@ fn mcp_cached_weak_tools_is_not_error() {
 fn mcp_ndjson_initialize_gets_jsonrpc_reply() {
     let mut child = canact_cmd()
         .arg("mcp")
+        .arg("--allow-cache")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -319,6 +322,7 @@ fn mcp_policy_fallback_reports_all_row_suite() {
 
     let mut child = canact_cmd()
         .arg("mcp")
+        .arg("--allow-cache")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
         .stdin(Stdio::piped())
@@ -381,6 +385,7 @@ fn mcp_policy_only_row_omits_constraint_placement() {
 
     let mut child = canact_cmd()
         .arg("mcp")
+        .arg("--allow-cache")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
         .stdin(Stdio::piped())
@@ -446,6 +451,7 @@ fn mcp_full_does_not_return_cheap_cache() {
 
     let mut child = canact_cmd()
         .arg("mcp")
+        .arg("--allow-cache")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
         .stdin(Stdio::piped())
@@ -509,6 +515,7 @@ fn mcp_openai_force_without_key_is_missing_key_error() {
 
     let mut child = canact_cmd()
         .arg("mcp")
+        .arg("--allow-cache")
         .env_remove("OPENAI_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
         .env_remove("XAI_API_KEY")
@@ -564,6 +571,71 @@ fn mcp_openai_force_without_key_is_missing_key_error() {
     assert!(
         !text.contains("OPENROUTER_API_KEY"),
         "provider=openai must not name OpenRouter: {text}"
+    );
+
+    drop(stdin);
+    let _ = child.wait_timeout();
+}
+
+#[test]
+fn mcp_stdio_refuses_cache_outside_default_dir() {
+    let dir = tempfile::tempdir().expect("temp");
+    let cache_path = dir.path().join("not-created.json");
+    assert!(!cache_path.exists(), "precondition");
+
+    let mut child = canact_cmd()
+        .args(["mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn canact mcp");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "canact-test", "version": "0" }
+            }
+        }),
+    );
+    let _ = read_rpc(&mut stdout);
+
+    write_rpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "probe_model",
+                "arguments": {
+                    "model": "gpt-4o",
+                    "provider": "openai",
+                    "cache": cache_path.to_str().expect("utf8")
+                }
+            }
+        }),
+    );
+    let called = read_rpc(&mut stdout);
+    assert_eq!(called["result"]["isError"], true, "{called}");
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains("cache"),
+        "outside cache must be refused, got {text}"
+    );
+    assert!(
+        !cache_path.exists(),
+        "a refused cache path must not be created"
     );
 
     drop(stdin);

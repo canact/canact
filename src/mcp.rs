@@ -2,10 +2,11 @@
 //! the payload is canact host-policy JSON, not TTFT.
 
 use std::io::{BufRead, Read, Write};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::endpoint::mcp_tool_base_url_is_loopback;
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
@@ -18,8 +19,37 @@ use crate::{
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+const MCP_API_KEY_ENV_ALLOWLIST: &[&str] = &[
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "XAI_API_KEY",
+    "GROK_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "GROQ_API_KEY",
+    "AWS_BEARER_TOKEN_BEDROCK",
+];
+
+/// Trust flags for the stdio MCP server. The default is strict.
+#[derive(Clone, Debug, Default)]
+pub struct McpServerOptions {
+    /// Let the tool pass a cache path outside the default cache directory.
+    pub allow_cache: bool,
+    /// Let the tool pass a base URL that is not a loopback host.
+    pub allow_base_url: bool,
+    /// Env var the tool may read. The tool cannot name a different variable.
+    pub api_key_env: Option<String>,
+    /// Base URL for probes. The tool cannot replace it.
+    pub base_url: Option<String>,
+}
+
 /// Serve MCP over stdin/stdout until EOF. Returns a process exit code.
 pub fn run_mcp_stdio() -> u8 {
+    run_mcp_stdio_with(McpServerOptions::default())
+}
+
+/// Serve MCP over stdin/stdout with the human's trust flags.
+pub fn run_mcp_stdio_with(options: McpServerOptions) -> u8 {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut reader = stdin.lock();
@@ -42,7 +72,7 @@ pub fn run_mcp_stdio() -> u8 {
             "initialize" => initialize_result(),
             "ping" => json!({}),
             "tools/list" => tools_list(),
-            "tools/call" => match handle_tools_call(&params) {
+            "tools/call" => match handle_tools_call(&params, &options) {
                 Ok(v) => v,
                 Err(err) => {
                     if let Err(write_err) = write_message(&mut stdout, &error_response(id, err)) {
@@ -124,7 +154,7 @@ fn tools_list() -> Value {
     })
 }
 
-fn handle_tools_call(params: &Value) -> Result<Value, String> {
+fn handle_tools_call(params: &Value, policy: &McpServerOptions) -> Result<Value, String> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -140,7 +170,7 @@ fn handle_tools_call(params: &Value) -> Result<Value, String> {
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
-    let envelope = rt.block_on(probe_model_args(&args))?;
+    let envelope = rt.block_on(probe_model_args(&args, policy))?;
     let text = serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())?;
     Ok(json!({
         "content": [{ "type": "text", "text": text }],
@@ -148,57 +178,32 @@ fn handle_tools_call(params: &Value) -> Result<Value, String> {
     }))
 }
 
-async fn probe_model_args(args: &Value) -> Result<Value, String> {
+async fn probe_model_args(args: &Value, policy: &McpServerOptions) -> Result<Value, String> {
     let provider_given = args
         .get("provider")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
-    let api_key_env = trim_api_key_env(args.get("api_key_env").and_then(Value::as_str));
-    let named_key = mcp_named_or_route_key(api_key_env, provider_given);
-    let openai = std::env::var("OPENAI_API_KEY")
-        .ok()
-        .filter(|s| !s.is_empty());
-    let openrouter = std::env::var("OPENROUTER_API_KEY")
-        .ok()
-        .filter(|s| !s.is_empty());
-    let has_explicit_base = mcp_present_base_url(args).is_some();
-    let skip_oauth = api_key_env.is_some_and(|v| !v.is_empty());
-    let other_before_xai = openai.is_some() || openrouter.is_some() || named_key.is_some();
-    let xai = if skip_oauth {
-        std::env::var("XAI_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
-    } else {
-        xai_key_for_route(provider_given, other_before_xai, has_explicit_base)
-            .map_err(|msg| format!("authentication error: {msg}"))?
-    };
-    let other_cloud_keys =
-        openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
-    let anthropic = if skip_oauth {
-        None
-    } else {
-        anthropic_key_for_route(provider_given, other_cloud_keys, has_explicit_base)
-            .map_err(|msg| format!("authentication error: {msg}"))?
-    };
-    let route = mcp_resolve_key_route(
-        api_key_env,
-        named_key,
-        openai,
-        openrouter,
-        xai,
-        anthropic,
+    let tool_env = trim_api_key_env(args.get("api_key_env").and_then(Value::as_str));
+    let (effective_env, effective_url, tool_supplied) =
+        enforce_mcp_tool_policy(tool_env, mcp_present_base_url(args), policy)?;
+    let route = load_mcp_route(
         provider_given,
-    );
-    probe_model_with_route(args, route, api_key_env).await
+        effective_env.as_deref(),
+        tool_supplied,
+        !tool_supplied && effective_url.is_some(),
+        policy,
+    )
+    .map_err(|msg| format!("authentication error: {msg}"))?;
+    probe_model_with_route(args, route, tool_env, policy).await
 }
 
 async fn probe_model_with_route(
     args: &Value,
     first: KeyRoute,
     api_key_env: Option<&str>,
+    policy: &McpServerOptions,
 ) -> Result<Value, String> {
     let api_key_env = trim_api_key_env(api_key_env);
     let model = args
@@ -243,17 +248,9 @@ async fn probe_model_with_route(
     let vision_flag = present_json_bool(args, "vision")?;
     let vision = vision_flag.unwrap_or(false);
     let force = present_json_bool(args, "force")?.unwrap_or(false);
-    let cache_path = match args.get("cache").and_then(Value::as_str) {
-        None => default_cache_path(),
-        Some(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                default_cache_path()
-            } else {
-                expand_tilde(PathBuf::from(trimmed))
-            }
-        }
-    };
+    let (effective_env, effective_url, tool_supplied) =
+        enforce_mcp_tool_policy(api_key_env, mcp_present_base_url(args), policy)?;
+    let cache_path = opened_mcp_cache_path(&mcp_cache_path(args), policy)?;
     let mut cache = ProbeCache::load(&cache_path)
         .map_err(|e| format!("failed to load cache {}: {e}", cache_path.display()))?;
 
@@ -263,42 +260,15 @@ async fn probe_model_with_route(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
-    let explicit_base_url = mcp_present_base_url(args).map(str::to_owned);
     let (route, base_url, provider) =
-        finalize_key_route(provider_given, explicit_base_url, first, |provider| {
-            let named_key = mcp_named_or_route_key(api_key_env, provider);
-            let openai = std::env::var("OPENAI_API_KEY")
-                .ok()
-                .filter(|s| !s.is_empty());
-            let openrouter = std::env::var("OPENROUTER_API_KEY")
-                .ok()
-                .filter(|s| !s.is_empty());
-            let skip_oauth = api_key_env.is_some_and(|v| !v.is_empty());
-            let other_before_xai = openai.is_some() || openrouter.is_some() || named_key.is_some();
-            let xai = if skip_oauth {
-                std::env::var("XAI_API_KEY")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
-            } else {
-                xai_key_for_route(provider, other_before_xai, false)?
-            };
-            let other_cloud_keys =
-                openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
-            let anthropic = if skip_oauth {
-                None
-            } else {
-                anthropic_key_for_route(provider, other_cloud_keys, false)?
-            };
-            Ok(mcp_resolve_key_route(
-                api_key_env,
-                named_key,
-                openai,
-                openrouter,
-                xai,
-                anthropic,
+        finalize_key_route(provider_given, effective_url.clone(), first, |provider| {
+            load_mcp_route(
                 provider,
-            ))
+                effective_env.as_deref(),
+                tool_supplied,
+                !tool_supplied && effective_url.is_some(),
+                policy,
+            )
         })
         .map_err(|msg| format!("authentication error: {msg}"))?;
     let api_key = route.key.clone();
@@ -331,7 +301,11 @@ async fn probe_model_with_route(
         }
     }
     if refuse_cloud_without_key(api_key.as_deref(), &base_url) {
-        return Err(mcp_missing_key_error(api_key_env, &provider));
+        return Err(mcp_refusal_key_error(
+            effective_env.as_deref(),
+            &provider,
+            policy,
+        ));
     }
     let hints = resolve_host_catalog(
         advertised,
@@ -389,6 +363,258 @@ fn mcp_present_base_url(args: &Value) -> Option<&str> {
     present_base_url(args.get("base_url").and_then(Value::as_str))
 }
 
+fn api_key_env_allowed(name: &str) -> bool {
+    MCP_API_KEY_ENV_ALLOWLIST.contains(&name)
+}
+
+fn pinned_api_key_env(policy: &McpServerOptions) -> Option<&str> {
+    policy
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn pinned_base_url(policy: &McpServerOptions) -> Option<&str> {
+    policy
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn enforce_mcp_tool_policy(
+    tool_env: Option<&str>,
+    tool_url: Option<&str>,
+    policy: &McpServerOptions,
+) -> Result<(Option<String>, Option<String>, bool), String> {
+    let effective_env = permitted_api_key_env(tool_env, policy)?;
+    let (effective_url, tool_supplied) = resolve_effective_base_url(tool_url, policy)?;
+    Ok((effective_env, effective_url, tool_supplied))
+}
+
+fn permitted_api_key_env(
+    tool_name: Option<&str>,
+    policy: &McpServerOptions,
+) -> Result<Option<String>, String> {
+    let tool = trim_api_key_env(tool_name);
+    let pin = pinned_api_key_env(policy);
+    match (tool, pin) {
+        (Some(tool), Some(pin)) if tool != pin => {
+            Err("api_key_env is pinned by the server".to_owned())
+        }
+        (Some(name), Some(_)) | (None, Some(name)) => Ok(Some(name.to_owned())),
+        (Some(name), None) if api_key_env_allowed(name) => Ok(Some(name.to_owned())),
+        (Some(_), None) => Err("api_key_env name not allowed".to_owned()),
+        (None, None) => Ok(None),
+    }
+}
+
+fn resolve_effective_base_url(
+    tool_url: Option<&str>,
+    policy: &McpServerOptions,
+) -> Result<(Option<String>, bool), String> {
+    let tool = tool_url.map(str::trim).filter(|s| !s.is_empty());
+    let pin = pinned_base_url(policy);
+    match (tool, pin) {
+        (Some(tool), Some(pin)) if tool != pin => {
+            Err("base_url is pinned by the server".to_owned())
+        }
+        (_, Some(pin)) => Ok((Some(pin.to_owned()), false)),
+        (Some(tool), None) if policy.allow_base_url || mcp_tool_base_url_is_loopback(tool) => {
+            Ok((Some(tool.to_owned()), true))
+        }
+        (Some(_), None) => Err("base_url is not a loopback host".to_owned()),
+        (None, None) => Ok((None, false)),
+    }
+}
+
+fn load_mcp_route(
+    provider: &str,
+    api_key_env: Option<&str>,
+    tool_supplied_url: bool,
+    human_base_url: bool,
+    policy: &McpServerOptions,
+) -> Result<KeyRoute, String> {
+    let named_key = read_named_or_route_key(api_key_env, provider, policy);
+    // `should_load_*` still loads logins for a named anthropic/xai provider.
+    // Skip those helpers for a tool-supplied URL, including finalize.
+    // The env vars stay readable. Only the login helpers are skipped.
+    let skip_oauth = tool_supplied_url || api_key_env.is_some();
+    let openai = mcp_env_nonempty("OPENAI_API_KEY");
+    let openrouter = mcp_env_nonempty("OPENROUTER_API_KEY");
+    let other_before_xai = openai.is_some() || openrouter.is_some() || named_key.is_some();
+    let xai = if skip_oauth {
+        mcp_env_nonempty("XAI_API_KEY").or_else(|| mcp_env_nonempty("GROK_API_KEY"))
+    } else {
+        xai_key_for_route(provider, other_before_xai, human_base_url)?
+    };
+    let other_cloud_keys =
+        openai.is_some() || openrouter.is_some() || xai.is_some() || named_key.is_some();
+    let anthropic = if skip_oauth {
+        anthropic_env_key()
+    } else {
+        anthropic_key_for_route(provider, other_cloud_keys, human_base_url)?
+    };
+    Ok(mcp_resolve_key_route(
+        api_key_env,
+        named_key,
+        openai,
+        openrouter,
+        xai,
+        anthropic,
+        provider,
+    ))
+}
+
+fn mcp_env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|s| !s.is_empty())
+}
+
+fn mcp_refusal_key_error(
+    api_key_env: Option<&str>,
+    provider: &str,
+    policy: &McpServerOptions,
+) -> String {
+    if let Some(var) = trim_api_key_env(api_key_env)
+        && !api_key_env_allowed(var)
+        && pinned_api_key_env(policy) == Some(var)
+    {
+        return format!("{var} is unset or empty");
+    }
+    mcp_missing_key_error(api_key_env, provider)
+}
+
+fn mcp_cache_path(args: &Value) -> PathBuf {
+    match args.get("cache").and_then(Value::as_str) {
+        None => default_cache_path(),
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                default_cache_path()
+            } else {
+                expand_tilde(PathBuf::from(trimmed))
+            }
+        }
+    }
+}
+
+fn opened_mcp_cache_path(path: &Path, policy: &McpServerOptions) -> Result<PathBuf, String> {
+    if policy.allow_cache {
+        return Ok(path.to_path_buf());
+    }
+    let outside = "cache path is outside the default cache directory";
+    let Some(candidate) = resolve_opened_cache_path(path) else {
+        return Err(outside.to_owned());
+    };
+    let default_file = default_cache_path();
+    let Some(root) = default_file.parent() else {
+        return Err(outside.to_owned());
+    };
+    let Some(located_root) = resolve_opened_cache_path(root) else {
+        return Err(outside.to_owned());
+    };
+    if candidate.starts_with(&located_root) {
+        Ok(candidate)
+    } else {
+        Err(outside.to_owned())
+    }
+}
+
+#[cfg(test)]
+fn mcp_cache_path_within_default(path: &Path) -> bool {
+    opened_mcp_cache_path(path, &McpServerOptions::default()).is_ok()
+}
+
+/// `..` is applied after a directory symlink is followed. Collapsing
+/// `..` first would hide that link, and the open would still enter it.
+fn resolve_opened_cache_path(path: &Path) -> Option<PathBuf> {
+    let mut links = 0u8;
+    let opened = walk_opened_cache_path(path, &mut links)?;
+    let mut full = opened.existing;
+    for name in opened.pending {
+        full.push(name);
+    }
+    if full.as_os_str().is_empty() {
+        None
+    } else {
+        Some(full)
+    }
+}
+
+struct OpenedCachePath {
+    existing: PathBuf,
+    pending: Vec<std::ffi::OsString>,
+}
+
+fn walk_opened_cache_path(path: &Path, links: &mut u8) -> Option<OpenedCachePath> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let mut state = OpenedCachePath {
+        existing: PathBuf::new(),
+        pending: Vec::new(),
+    };
+    for comp in absolute.components() {
+        match comp {
+            Component::Prefix(_) | Component::RootDir => {
+                state.existing.push(comp);
+                state.pending.clear();
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if state.pending.pop().is_none() {
+                    state.existing.pop();
+                }
+            }
+            Component::Normal(name) => {
+                push_opened_cache_name(&mut state, name.to_os_string(), links)?;
+            }
+        }
+    }
+    Some(state)
+}
+
+fn push_opened_cache_name(
+    state: &mut OpenedCachePath,
+    name: std::ffi::OsString,
+    links: &mut u8,
+) -> Option<()> {
+    if !state.pending.is_empty() {
+        state.pending.push(name);
+        return Some(());
+    }
+    let next = state.existing.join(&name);
+    match std::fs::symlink_metadata(&next) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            *links = links.saturating_add(1);
+            if *links > 40 {
+                return None;
+            }
+            let target = std::fs::read_link(&next).ok()?;
+            let combined = if target.is_absolute() {
+                target
+            } else {
+                state.existing.join(target)
+            };
+            let followed = walk_opened_cache_path(&combined, links)?;
+            state.existing = followed.existing;
+            state.pending = followed.pending;
+            Some(())
+        }
+        Ok(_) => {
+            state.existing = next;
+            Some(())
+        }
+        Err(_) => {
+            state.pending.push(name);
+            Some(())
+        }
+    }
+}
+
 /// Injected-key MCP route. Tests pass values so they do not race on env.
 fn mcp_resolve_key_route(
     api_key_env: Option<&str>,
@@ -415,20 +641,31 @@ fn mcp_resolve_key_route(
 
 fn mcp_named_or_route_key(api_key_env: Option<&str>, provider: &str) -> Option<String> {
     match trim_api_key_env(api_key_env) {
-        Some(var) => std::env::var(var).ok().filter(|s| !s.is_empty()),
-        None if is_groq_provider_label(provider) => {
-            std::env::var("GROQ_API_KEY").ok().filter(|s| !s.is_empty())
-        }
-        None if is_bedrock_provider_label(provider) => std::env::var("AWS_BEARER_TOKEN_BEDROCK")
-            .ok()
-            .filter(|s| !s.is_empty()),
+        Some(var) if api_key_env_allowed(var) => mcp_env_nonempty(var),
+        Some(_) => None,
+        None if is_groq_provider_label(provider) => mcp_env_nonempty("GROQ_API_KEY"),
+        None if is_bedrock_provider_label(provider) => mcp_env_nonempty("AWS_BEARER_TOKEN_BEDROCK"),
         None => None,
+    }
+}
+
+fn read_named_or_route_key(
+    api_key_env: Option<&str>,
+    provider: &str,
+    policy: &McpServerOptions,
+) -> Option<String> {
+    match trim_api_key_env(api_key_env) {
+        Some(var) if api_key_env_allowed(var) => mcp_env_nonempty(var),
+        Some(var) if pinned_api_key_env(policy) == Some(var) => mcp_env_nonempty(var),
+        Some(_) => None,
+        None => mcp_named_or_route_key(None, provider),
     }
 }
 
 /// Named `api_key_env` does not fall back to OPENAI_API_KEY / XAI_API_KEY.
 fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
     match trim_api_key_env(api_key_env) {
+        Some(var) if !api_key_env_allowed(var) => "api_key_env name not allowed".to_owned(),
         Some(var) => format!("{var} is unset or empty"),
         _ if uses_xai_credentials(provider) => {
             "set api_key_env or XAI_API_KEY for xAI (OPENAI_API_KEY is not sent)".to_owned()
@@ -664,6 +901,13 @@ mod tests {
         }
     }
 
+    fn cache_ok() -> McpServerOptions {
+        McpServerOptions {
+            allow_cache: true,
+            ..McpServerOptions::default()
+        }
+    }
+
     struct IsolatedApiKeyEnv {
         _lock: MutexGuard<'static, ()>,
         openai: Option<OsString>,
@@ -765,7 +1009,7 @@ mod tests {
             "force": true,
             "cache": cache_path.to_str().expect("utf8"),
         });
-        let err = probe_model_with_route(&args, route, None)
+        let err = probe_model_with_route(&args, route, None, &cache_ok())
             .await
             .unwrap_err();
         assert_eq!(err, mcp_missing_key_error(None, "openai"));
@@ -797,10 +1041,10 @@ mod tests {
             "cache": cache_path.to_str().expect("utf8"),
             "api_key_env": "FOO_KEY",
         });
-        let err = probe_model_with_route(&args, route, Some("FOO_KEY"))
+        let err = probe_model_with_route(&args, route, Some("FOO_KEY"), &cache_ok())
             .await
             .unwrap_err();
-        assert_eq!(err, "FOO_KEY is unset or empty");
+        assert_eq!(err, "api_key_env name not allowed");
         let lookups = crate::adapters::openai::take_catalog_lookups();
         assert!(
             lookups.is_empty(),
@@ -809,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_named_api_key_env_unset_names_the_var() {
+    fn mcp_unknown_api_key_env_is_rejected() {
         let route = mcp_resolve_key_route(
             Some("FOO_KEY"),
             None,
@@ -824,7 +1068,7 @@ mod tests {
             "named api_key_env must not fall back to OPENAI_API_KEY / XAI_API_KEY"
         );
         let err = mcp_missing_key_error(Some("FOO_KEY"), "openai");
-        assert_eq!(err, "FOO_KEY is unset or empty");
+        assert_eq!(err, "api_key_env name not allowed");
         assert!(
             !err.contains("OPENAI_API_KEY") && !err.contains("XAI_API_KEY"),
             "named api_key_env error must not list fallback env vars: {err}"
@@ -957,7 +1201,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_padded_api_key_env_missing_key_names_trimmed_var() {
+    async fn mcp_padded_unknown_api_key_env_is_rejected() {
         let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
         let dir = tempfile::tempdir().expect("temp");
         let cache_path = dir.path().join("probes.json");
@@ -977,10 +1221,10 @@ mod tests {
             "cache": cache_path.to_str().expect("utf8"),
             "api_key_env": " FOO_KEY ",
         });
-        let err = probe_model_with_route(&args, route, Some(" FOO_KEY "))
+        let err = probe_model_with_route(&args, route, Some(" FOO_KEY "), &cache_ok())
             .await
             .unwrap_err();
-        assert_eq!(err, "FOO_KEY is unset or empty");
+        assert_eq!(err, "api_key_env name not allowed");
     }
 
     #[tokio::test]
@@ -990,7 +1234,7 @@ mod tests {
             "provider": "openai",
             "advertised_context": 0,
         });
-        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+        let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .unwrap_err();
         assert_eq!(err, "advertised_context must be >= 1");
@@ -1016,7 +1260,7 @@ mod tests {
                 "cache": cache_str,
                 "advertised_context": advertised,
             });
-            let err = probe_model_with_route(&args, mcp_empty_route(), None)
+            let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
                 .await
                 .unwrap_err();
             assert_eq!(
@@ -1044,7 +1288,7 @@ mod tests {
             "cache": cache_path.to_str().expect("utf8"),
             "advertised_context": " 4096 ",
         });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("padded advertised_context must hit ctx4096");
         assert_eq!(envelope["fromCache"], true, "{envelope}");
@@ -1068,7 +1312,7 @@ mod tests {
             "provider": "openai",
             "cache": cache_path.to_str().expect("utf8"),
         });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("omitted advertised_context is a cache hit");
         assert_eq!(envelope["fromCache"], true, "{envelope}");
@@ -1156,7 +1400,7 @@ mod tests {
             "cheap": true,
             "suite": "full",
         });
-        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+        let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .unwrap_err();
         assert!(
@@ -1175,7 +1419,7 @@ mod tests {
             "full": true,
             "suite": "policy",
         });
-        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+        let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .unwrap_err();
         assert!(
@@ -1193,7 +1437,7 @@ mod tests {
             "cache": cache_str,
             "suite": " full ",
         });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("padded suite must parse Full");
         assert_eq!(envelope["fromCache"], true, "{envelope}");
@@ -1210,7 +1454,7 @@ mod tests {
                 "cache": cache_str,
                 "suite": suite,
             });
-            let err = probe_model_with_route(&args, mcp_empty_route(), None)
+            let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
                 .await
                 .unwrap_err();
             assert!(
@@ -1238,7 +1482,7 @@ mod tests {
                 "cache": cache_str,
             });
             args[key] = value.clone();
-            let err = probe_model_with_route(&args, mcp_empty_route(), None)
+            let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
                 .await
                 .unwrap_err();
             assert!(
@@ -1258,7 +1502,7 @@ mod tests {
             "cheap": " true ",
             "suite": "full",
         });
-        let err = probe_model_with_route(&args, mcp_empty_route(), None)
+        let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .unwrap_err();
         assert!(
@@ -1275,7 +1519,7 @@ mod tests {
             "provider": "openai",
             "cache": cache_str,
         });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("omitted cheap is policy");
         assert_eq!(envelope["fromCache"], true, "{envelope}");
@@ -1301,7 +1545,7 @@ mod tests {
             "cheap": true,
             "full": true,
         });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("cheap+full with no suite is Full");
         assert_eq!(envelope["fromCache"], true, "{envelope}");
@@ -1326,7 +1570,7 @@ mod tests {
                 "provider": "openai",
                 "cache": cache_arg,
             });
-            let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+            let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
                 .await
                 .unwrap_or_else(|err| {
                     panic!("whitespace cache {cache_arg:?} must use default: {err}")
@@ -1347,7 +1591,7 @@ mod tests {
             "provider": "openai",
             "cache": cache_str,
         });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None)
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("omitted vision uses catalog cache");
         assert_eq!(envelope["fromCache"], true, "{envelope}");
@@ -1656,5 +1900,690 @@ mod tests {
             .join("canact")
             .join("probes.json");
         assert_eq!(default_cache_path(), expected);
+    }
+
+    struct FooKeyEnv {
+        prev: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl FooKeyEnv {
+        fn set(value: &str) -> Self {
+            static LOCK: Mutex<()> = Mutex::new(());
+            let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("FOO_KEY");
+            unsafe {
+                std::env::set_var("FOO_KEY", value);
+            }
+            Self { prev, _lock: lock }
+        }
+    }
+
+    impl Drop for FooKeyEnv {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("FOO_KEY", v),
+                    None => std::env::remove_var("FOO_KEY"),
+                }
+            }
+        }
+    }
+
+    struct LoginEnvGuard {
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl LoginEnvGuard {
+        fn clear() -> Self {
+            let keys = [
+                "XAI_API_KEY",
+                "GROK_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "OPENAI_API_KEY",
+                "OPENROUTER_API_KEY",
+            ];
+            let saved = keys
+                .into_iter()
+                .map(|key| {
+                    let prev = std::env::var_os(key);
+                    unsafe {
+                        std::env::remove_var(key);
+                    }
+                    (key, prev)
+                })
+                .collect();
+            Self { saved }
+        }
+    }
+
+    impl Drop for LoginEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                for (key, prev) in &self.saved {
+                    match prev {
+                        Some(v) => std::env::set_var(key, v),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    struct OauthShortCircuit;
+
+    impl OauthShortCircuit {
+        fn enable() -> Self {
+            crate::claude_code::oauth_test_hook::reset();
+            crate::claude_code::oauth_test_hook::SHORT_CIRCUIT
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for OauthShortCircuit {
+        fn drop(&mut self) {
+            crate::claude_code::oauth_test_hook::SHORT_CIRCUIT
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn oauth_counts() -> (usize, usize) {
+        (
+            crate::claude_code::oauth_test_hook::CLAUDE_ENTRIES
+                .load(std::sync::atomic::Ordering::SeqCst),
+            crate::claude_code::oauth_test_hook::XAI_ENTRIES
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    fn seed_model_cache(model: &str, provider: &str, tokens: u32) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed(model, provider);
+        profile.effective_context_tokens = Some(tokens);
+        cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+        cache.save(&cache_path).expect("save");
+        (dir, cache_path.to_str().expect("utf8").to_owned())
+    }
+
+    #[test]
+    fn mcp_rejects_unknown_api_key_env() {
+        let _foo = FooKeyEnv::set("canary-secret");
+        let named = mcp_named_or_route_key(Some("FOO_KEY"), "openai");
+        assert_ne!(
+            named.as_deref(),
+            Some("canary-secret"),
+            "unknown api_key_env must not be read"
+        );
+        let err = mcp_missing_key_error(Some("FOO_KEY"), "openai");
+        assert!(
+            err.contains("name not allowed"),
+            "unknown api_key_env must be rejected, got {err}"
+        );
+    }
+
+    #[test]
+    fn mcp_known_api_key_env_still_resolves() {
+        let _env = IsolatedApiKeyEnv::set_openai("sk-known-openai");
+        let named = mcp_named_or_route_key(Some("OPENAI_API_KEY"), "openai");
+        assert_eq!(named.as_deref(), Some("sk-known-openai"));
+        for name in [
+            "GROQ_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "OPENROUTER_API_KEY",
+            "XAI_API_KEY",
+            "GROK_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+        ] {
+            let err = mcp_missing_key_error(Some(name), "openai");
+            assert!(
+                !err.contains("name not allowed"),
+                "{name} must stay allowed, got {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_tool_base_url_skips_oauth() {
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let _home = IsolatedHome::new();
+        let _env = LoginEnvGuard::clear();
+        let _circuit = OauthShortCircuit::enable();
+
+        let (_dir, cache_str) = seed_model_cache("claude-test", "anthropic", 111);
+        let args = json!({
+            "model": "claude-test",
+            "provider": "anthropic",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "cache": cache_str,
+        });
+        let envelope = probe_model_args(&args, &cache_ok())
+            .await
+            .expect("named anthropic plus a loopback tool url");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(
+            oauth_counts(),
+            (0, 0),
+            "named anthropic plus a tool base_url must not read stored logins"
+        );
+
+        crate::claude_code::oauth_test_hook::reset();
+        let (_dir, cache_str) = seed_model_cache("grok-test", "api.x.ai", 222);
+        let args = json!({
+            "model": "grok-test",
+            "base_url": "https://api.x.ai/v1",
+            "cache": cache_str,
+        });
+        let public_ok = McpServerOptions {
+            allow_cache: true,
+            allow_base_url: true,
+            ..McpServerOptions::default()
+        };
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &public_ok)
+            .await
+            .expect("finalize tool url reaches the cache");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(
+            oauth_counts(),
+            (0, 0),
+            "finalize must not read stored logins for a tool base_url"
+        );
+        assert!(
+            crate::adapters::openai::take_catalog_lookups().is_empty(),
+            "oauth skip test must not call catalog"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_public_base_url_requires_server_flag() {
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let _env = LoginEnvGuard::clear();
+        for url in [
+            "https://api.openai.com/v1",
+            "http://127.0.0.1@evil.example/v1",
+            "http://localhost./v1",
+            "http://2130706433/v1",
+            "http://127.0.0.1.nip.io/v1",
+        ] {
+            let args = json!({
+                "model": "gpt-4o",
+                "provider": "openai",
+                "base_url": url,
+            });
+            let err = probe_model_with_route(
+                &args,
+                mcp_empty_route(),
+                None,
+                &McpServerOptions::default(),
+            )
+            .await
+            .expect_err(url);
+            assert!(
+                err.contains("base_url"),
+                "{url} must be refused as a tool base_url, got {err}"
+            );
+            assert!(
+                !err.contains("authentication error"),
+                "{url} must be refused before login, got {err}"
+            );
+        }
+        assert!(
+            crate::adapters::openai::take_catalog_lookups().is_empty(),
+            "refused base_url must not call catalog"
+        );
+
+        let (_dir, cache_str) = seed_model_cache("llama", "ollama", 333);
+        let args = json!({
+            "model": "llama",
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "cache": cache_str,
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
+            .await
+            .expect("loopback tool base_url stays allowed");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["effectiveContextTokens"], 333, "{envelope}");
+
+        let args = json!({
+            "model": "llama",
+            "provider": "ollama",
+            "base_url": "http://evil.example@127.0.0.1:11434/v1",
+            "cache": cache_str,
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
+            .await
+            .expect("userinfo before a loopback host stays allowed");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+    }
+
+    fn write_openai_cache(path: &std::path::Path, tokens: u32) -> Vec<u8> {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("gpt-4o", "openai");
+        profile.effective_context_tokens = Some(tokens);
+        cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+        cache.save(path).expect("save");
+        std::fs::read(path).expect("read")
+    }
+
+    fn isolated_default_cache_dir() -> std::path::PathBuf {
+        let dir = default_cache_path()
+            .parent()
+            .expect("cache dir")
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).expect("default dir");
+        dir
+    }
+
+    #[tokio::test]
+    async fn mcp_cache_outside_default_dir_is_refused() {
+        let _home = IsolatedHome::new();
+        let outside = tempfile::tempdir().expect("temp");
+        let outside_path = outside.path().join("probes.json");
+        let before = write_openai_cache(&outside_path, 444);
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": outside_path.to_str().expect("utf8"),
+        });
+        let err =
+            probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+                .await
+                .expect_err("outside cache");
+        assert!(
+            err.contains("cache"),
+            "outside cache must be refused, got {err}"
+        );
+        assert_eq!(std::fs::read(&outside_path).expect("still"), before);
+    }
+
+    #[tokio::test]
+    async fn mcp_cache_dotdot_escape_is_refused() {
+        let _home = IsolatedHome::new();
+        let default_dir = isolated_default_cache_dir();
+        let escape = default_dir.join("..").join("canact-escape-probes.json");
+        let before = write_openai_cache(&escape, 555);
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": escape.to_str().expect("utf8"),
+        });
+        let err =
+            probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+                .await
+                .expect_err("dotdot cache");
+        assert!(err.contains("cache"), "{err}");
+        assert_eq!(std::fs::read(&escape).expect("escape still"), before);
+    }
+
+    #[tokio::test]
+    async fn mcp_cache_inside_default_dir_is_allowed() {
+        let _home = IsolatedHome::new();
+        let inside = isolated_default_cache_dir().join("other.json");
+        write_openai_cache(&inside, 666);
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": inside.to_str().expect("utf8"),
+        });
+        let envelope =
+            probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+                .await
+                .expect("cache inside the default directory stays allowed");
+        assert_eq!(envelope["effectiveContextTokens"], 666, "{envelope}");
+    }
+
+    #[tokio::test]
+    async fn mcp_allow_cache_reads_outside_file() {
+        let _home = IsolatedHome::new();
+        let outside = tempfile::tempdir().expect("temp");
+        let outside_path = outside.path().join("probes.json");
+        let before = write_openai_cache(&outside_path, 444);
+        let allowed = McpServerOptions {
+            allow_cache: true,
+            ..McpServerOptions::default()
+        };
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": outside_path.to_str().expect("utf8"),
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &allowed)
+            .await
+            .expect("allow_cache reads an outside file");
+        assert_eq!(envelope["effectiveContextTokens"], 444, "{envelope}");
+        assert_eq!(std::fs::read(&outside_path).expect("unchanged"), before);
+    }
+
+    #[tokio::test]
+    async fn mcp_missing_dotdot_cache_is_not_created() {
+        let _home = IsolatedHome::new();
+        let missing = isolated_default_cache_dir()
+            .join("..")
+            .join("canact-not-created.json");
+        assert!(!missing.exists(), "precondition");
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": missing.to_str().expect("utf8"),
+        });
+        let err =
+            probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+                .await
+                .expect_err("missing dotdot cache");
+        assert!(err.contains("cache"), "{err}");
+        assert!(!missing.exists(), "refused cache path must not be created");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_cache_symlink_outside_default_dir_is_refused() {
+        let _home = IsolatedHome::new();
+        let outside = tempfile::tempdir().expect("temp");
+        let outside_path = outside.path().join("probes.json");
+        let before = write_openai_cache(&outside_path, 444);
+        let link = isolated_default_cache_dir().join("escape-link.json");
+        std::os::unix::fs::symlink(&outside_path, &link).expect("symlink");
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": link.to_str().expect("utf8"),
+        });
+        let err =
+            probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+                .await
+                .expect_err("symlink cache");
+        assert!(err.contains("cache"), "{err}");
+        assert_eq!(
+            std::fs::read(&outside_path).expect("symlink target"),
+            before
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_cache_symlink_ancestor_missing_leaf_is_refused() {
+        let _home = IsolatedHome::new();
+        let _env = LoginEnvGuard::clear();
+        let outside = tempfile::tempdir().expect("temp");
+        let link = isolated_default_cache_dir().join("escape-dir");
+        std::os::unix::fs::symlink(outside.path(), &link).expect("symlink");
+        let missing = link.join("not-created.json");
+        assert!(!missing.exists(), "precondition");
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": missing.to_str().expect("utf8"),
+        });
+        let err =
+            probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+                .await
+                .expect_err("symlink ancestor");
+        assert!(
+            err.contains("cache path is outside the default cache directory"),
+            "{err}"
+        );
+        assert!(
+            !outside.path().join("not-created.json").exists(),
+            "refused cache path must not be created"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_cache_broken_symlink_ancestor_is_refused() {
+        let _home = IsolatedHome::new();
+        let dir = isolated_default_cache_dir();
+        let missing_target = dir.join("..").join("canact-broken-target");
+        assert!(!missing_target.exists(), "precondition");
+        let link = dir.join("broken-link");
+        std::os::unix::fs::symlink(&missing_target, &link).expect("symlink");
+        let missing = link.join("not-created.json");
+        assert!(
+            !mcp_cache_path_within_default(&missing),
+            "a broken symlink ancestor is outside the default cache directory"
+        );
+    }
+
+    #[test]
+    fn mcp_missing_file_inside_default_dir_is_allowed() {
+        let _home = IsolatedHome::new();
+        let missing = isolated_default_cache_dir().join("brand-new.json");
+        assert!(!missing.exists(), "precondition");
+        assert!(
+            mcp_cache_path_within_default(&missing),
+            "a new file inside the default cache directory stays allowed"
+        );
+    }
+
+    #[test]
+    fn mcp_dotdot_through_real_directory_stays_inside() {
+        let _home = IsolatedHome::new();
+        let sub = isolated_default_cache_dir().join("subdir");
+        std::fs::create_dir_all(&sub).expect("subdir");
+        let path = sub.join("..").join("brand-new.json");
+        assert!(
+            mcp_cache_path_within_default(&path),
+            "a .. through a real directory stays inside the default cache directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_cache_dotdot_through_symlink_dir_is_refused() {
+        let _home = IsolatedHome::new();
+        let outside = tempfile::tempdir().expect("temp");
+        let link = isolated_default_cache_dir().join("escape-dir");
+        std::os::unix::fs::symlink(outside.path(), &link).expect("symlink");
+        let tricky = link.join("..").join("escaped.json");
+        assert!(
+            !mcp_cache_path_within_default(&tricky),
+            "a .. after a directory symlink leaves the default cache directory"
+        );
+        let rel_outside = isolated_default_cache_dir()
+            .join("..")
+            .join("relative-outside");
+        std::fs::create_dir_all(&rel_outside).expect("relative outside");
+        let rel_link = isolated_default_cache_dir().join("rel-link");
+        std::os::unix::fs::symlink("../relative-outside", &rel_link).expect("relative symlink");
+        let rel_tricky = rel_link.join("..").join("escaped.json");
+        assert!(
+            !mcp_cache_path_within_default(&rel_tricky),
+            "a .. after a relative directory symlink leaves the default cache directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_cache_dotdot_through_symlink_dir_is_not_created() {
+        let _home = IsolatedHome::new();
+        let _env = LoginEnvGuard::clear();
+        let outside = tempfile::tempdir().expect("temp");
+        let dir = isolated_default_cache_dir();
+        let link = dir.join("escape-dir");
+        std::os::unix::fs::symlink(outside.path(), &link).expect("symlink");
+        let tricky = link.join("..").join("escaped.json");
+        let landed = dir.parent().expect("parent").join("escaped.json");
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "cache": tricky.to_str().expect("utf8"),
+        });
+        let err =
+            probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+                .await
+                .expect_err("dotdot through symlink");
+        assert!(
+            err.contains("cache path is outside the default cache directory"),
+            "{err}"
+        );
+        assert!(!landed.exists(), "opened path must stay uncreated");
+        assert!(
+            !dir.join("escaped.json").exists(),
+            "lexical path must stay uncreated"
+        );
+        assert!(
+            !outside.path().join("escaped.json").exists(),
+            "symlink target must stay uncreated"
+        );
+    }
+
+    #[test]
+    fn mcp_pinned_env_outside_allowlist_is_read() {
+        let _foo = FooKeyEnv::set("canary-pinned");
+        let policy = McpServerOptions {
+            api_key_env: Some(" FOO_KEY ".into()),
+            ..McpServerOptions::default()
+        };
+        let name = permitted_api_key_env(None, &policy).expect("pin");
+        assert_eq!(name.as_deref(), Some("FOO_KEY"));
+        let key = read_named_or_route_key(name.as_deref(), "openai", &policy);
+        assert_eq!(key.as_deref(), Some("canary-pinned"));
+        let mismatch = permitted_api_key_env(Some("OPENAI_API_KEY"), &policy).unwrap_err();
+        assert_eq!(mismatch, "api_key_env is pinned by the server");
+        let same = permitted_api_key_env(Some("FOO_KEY"), &policy).expect("echo pin");
+        assert_eq!(same.as_deref(), Some("FOO_KEY"));
+    }
+
+    #[tokio::test]
+    async fn mcp_pinned_unknown_env_unset_names_the_var() {
+        let _home = IsolatedHome::new();
+        let _foo = FooKeyEnv::set("");
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let _circuit = OauthShortCircuit::enable();
+        let dir = tempfile::tempdir().expect("temp");
+        let cache_path = dir.path().join("probes.json");
+        let policy = McpServerOptions {
+            allow_cache: true,
+            api_key_env: Some("FOO_KEY".into()),
+            ..McpServerOptions::default()
+        };
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "force": true,
+            "cache": cache_path.to_str().expect("utf8"),
+        });
+        let err = probe_model_args(&args, &policy).await.unwrap_err();
+        assert_eq!(err, "FOO_KEY is unset or empty");
+        assert!(!err.contains("name not allowed"), "{err}");
+        assert_eq!(oauth_counts(), (0, 0), "{err}");
+        assert!(crate::adapters::openai::take_catalog_lookups().is_empty());
+    }
+
+    #[test]
+    fn mcp_backslash_authority_is_not_a_loopback_tool_url() {
+        let err = resolve_effective_base_url(
+            Some("http://evil.com\\@127.0.0.1/v1"),
+            &McpServerOptions::default(),
+        )
+        .expect_err("backslash authority");
+        assert!(
+            err.contains("base_url"),
+            "dial host must be refused, got {err}"
+        );
+        assert!(
+            !err.contains("authentication error"),
+            "refusal must happen before login, got {err}"
+        );
+    }
+
+    #[test]
+    fn mcp_tool_url_still_reads_anthropic_env_key() {
+        let _home = IsolatedHome::new();
+        let _env = LoginEnvGuard::clear();
+        let _circuit = OauthShortCircuit::enable();
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-from-env");
+        }
+        let route = load_mcp_route("anthropic", None, true, false, &McpServerOptions::default())
+            .expect("route");
+        assert_eq!(route.key.as_deref(), Some("sk-ant-from-env"));
+        assert!(route.from_anthropic);
+        assert_eq!(
+            oauth_counts(),
+            (0, 0),
+            "a tool base_url must not read a stored Claude login"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_pinned_base_url_rejects_a_different_tool_url() {
+        let policy = McpServerOptions {
+            base_url: Some("http://127.0.0.1:11434/v1".into()),
+            ..McpServerOptions::default()
+        };
+        let args = json!({
+            "model": "llama",
+            "provider": "ollama",
+            "base_url": "https://api.openai.com/v1",
+        });
+        let err = probe_model_with_route(&args, mcp_empty_route(), None, &policy)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "base_url is pinned by the server");
+    }
+
+    #[tokio::test]
+    async fn mcp_same_trimmed_base_url_is_not_a_conflict() {
+        let policy = McpServerOptions {
+            allow_cache: true,
+            base_url: Some(" http://127.0.0.1:11434/v1 ".into()),
+            ..McpServerOptions::default()
+        };
+        let (_dir, cache_str) = seed_model_cache("llama", "ollama", 333);
+        let args = json!({
+            "model": "llama",
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "cache": cache_str,
+        });
+        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &policy)
+            .await
+            .expect("same trimmed url");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+    }
+
+    #[test]
+    fn mcp_human_pin_public_url_is_not_a_tool_url() {
+        let policy = McpServerOptions {
+            base_url: Some("https://api.openai.com/v1".into()),
+            ..McpServerOptions::default()
+        };
+        let (url, tool_supplied) = resolve_effective_base_url(None, &policy).expect("pin");
+        assert_eq!(url.as_deref(), Some("https://api.openai.com/v1"));
+        assert!(!tool_supplied);
+    }
+
+    #[tokio::test]
+    async fn mcp_human_pinned_anthropic_url_still_reads_login() {
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let _home = IsolatedHome::new();
+        let _env = LoginEnvGuard::clear();
+        let _circuit = OauthShortCircuit::enable();
+        let (_dir, cache_str) = seed_model_cache("claude-test", "anthropic", 111);
+        let policy = McpServerOptions {
+            allow_cache: true,
+            base_url: Some("https://api.anthropic.com/v1".into()),
+            ..McpServerOptions::default()
+        };
+        let args = json!({
+            "model": "claude-test",
+            "provider": "anthropic",
+            "cache": cache_str,
+        });
+        let envelope = probe_model_args(&args, &policy)
+            .await
+            .expect("a server-pinned url may still read a stored login");
+        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(
+            oauth_counts(),
+            (1, 0),
+            "named anthropic with a server-pinned url still consults Claude login"
+        );
     }
 }

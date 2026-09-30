@@ -24,7 +24,7 @@ futures = { version = "0.3", optional = true }
 [features]
 default = []
 runtime = ["dep:tokio", "dep:futures", "dep:tracing"]
-cli = ["runtime", "dep:clap", "openai", "dep:dirs"]
+cli = ["runtime", "dep:clap", "openai", "dep:dirs", "dep:url"]
 openai = ["dep:wiremux", "dep:wiremux-auth"]
 
 [dependencies.clap]
@@ -34,6 +34,10 @@ features = ["derive"]
 
 [dependencies.dirs]
 version = "7"
+optional = true
+
+[dependencies.url]
+version = "=2.5.8"
 optional = true
 
 [dependencies.wiremux]

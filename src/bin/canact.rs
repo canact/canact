@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, OpenAiCompatClient,
-    PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
+    CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, McpServerOptions,
+    OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
     claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
     is_groq_provider_label, list_model_ids, looks_cheap, missing_cloud_key_message,
     missing_model_message, present_base_url, refuse_cloud_without_key, resolve_api_key_from,
-    resolve_host_catalog, run_mcp_stdio, should_load_claude_code_login, should_load_xai_oauth,
+    resolve_host_catalog, run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
     xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
@@ -35,7 +35,26 @@ enum Command {
     /// Plumbing table from cached probes (pass / degraded / fail / skipped, no rank)
     Matrix(MatrixArgs),
     /// Serve MCP stdio (`probe_model` returns host-policy JSON, not TTFT)
-    Mcp,
+    Mcp(McpArgs),
+}
+
+#[derive(clap::Args)]
+struct McpArgs {
+    /// Env var the tool may read. The tool cannot name a different variable.
+    #[arg(long)]
+    api_key_env: Option<String>,
+
+    /// Base URL for probes. The tool cannot replace it.
+    #[arg(long)]
+    base_url: Option<String>,
+
+    /// Let the tool pass a base URL that is not a loopback host.
+    #[arg(long)]
+    allow_base_url: bool,
+
+    /// Let the tool pass a cache path outside the default cache directory.
+    #[arg(long)]
+    allow_cache: bool,
 }
 
 #[derive(clap::Args)]
@@ -160,7 +179,12 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
-        Command::Mcp => ExitCode::from(run_mcp_stdio()),
+        Command::Mcp(args) => ExitCode::from(run_mcp_stdio_with(McpServerOptions {
+            allow_cache: args.allow_cache,
+            allow_base_url: args.allow_base_url,
+            api_key_env: args.api_key_env,
+            base_url: args.base_url,
+        })),
     }
 }
 
