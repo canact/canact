@@ -29,6 +29,10 @@ impl ClaudeCodeKeychainIsolation {
 /// `Ok(None)` means no login. `Err` is a failed refresh (Auth), not a
 /// missing-key.
 pub fn claude_code_access_token() -> Result<Option<String>, String> {
+    #[cfg(test)]
+    if oauth_test_hook::enter_claude() {
+        return Ok(None);
+    }
     oauth_access_token("anthropic-oauth")
 }
 
@@ -38,6 +42,10 @@ pub fn claude_code_access_token() -> Result<Option<String>, String> {
 /// an expired oat. Same `Ok(None)` vs `Err` split as
 /// [`claude_code_access_token`].
 pub fn xai_oauth_access_token() -> Result<Option<String>, String> {
+    #[cfg(test)]
+    if oauth_test_hook::enter_xai() {
+        return Ok(None);
+    }
     oauth_access_token("xai-oauth")
 }
 
@@ -55,6 +63,30 @@ fn classify_oauth_result(
                 Err(msg)
             }
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod oauth_test_hook {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    pub(crate) static CLAUDE_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static XAI_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static SHORT_CIRCUIT: AtomicBool = AtomicBool::new(false);
+
+    pub(crate) fn reset() {
+        CLAUDE_ENTRIES.store(0, Ordering::SeqCst);
+        XAI_ENTRIES.store(0, Ordering::SeqCst);
+    }
+
+    pub(crate) fn enter_claude() -> bool {
+        CLAUDE_ENTRIES.fetch_add(1, Ordering::SeqCst);
+        SHORT_CIRCUIT.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn enter_xai() -> bool {
+        XAI_ENTRIES.fetch_add(1, Ordering::SeqCst);
+        SHORT_CIRCUIT.load(Ordering::SeqCst)
     }
 }
 

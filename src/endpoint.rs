@@ -565,9 +565,92 @@ fn host_without_port(hostport: &str) -> &str {
     hostport
 }
 
+/// True when an MCP tool `base_url` names a loopback host.
+///
+/// The dialed host comes from the `url` crate, the same parser the HTTP
+/// client uses. That host and the authority text must both be `localhost`,
+/// `127.0.0.1`, `0.0.0.0`, or `::1`. Rewritten forms stay refused. A
+/// loopback URL that redirects is not checked again.
+///
+/// Compiled only with `cli`: the stdio server is the only caller, and the
+/// default lib build would otherwise flag this as dead code.
+#[cfg(feature = "cli")]
+pub(crate) fn mcp_tool_base_url_is_loopback(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url.trim()) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(dialed) = parsed.host_str() else {
+        return false;
+    };
+    dialed_name_is_loopback(dialed) && literal_authority_is_loopback(url)
+}
+
+#[cfg(feature = "cli")]
+fn dialed_name_is_loopback(host: &str) -> bool {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    is_mcp_loopback_host(bare)
+}
+
+#[cfg(feature = "cli")]
+fn literal_authority_is_loopback(url: &str) -> bool {
+    let hostport = url_host_port_hint(url);
+    if let Some((host, port)) = hostport.rsplit_once(':')
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && is_mcp_loopback_host(host)
+    {
+        return true;
+    }
+    is_mcp_loopback_host(&hostport)
+}
+
+#[cfg(feature = "cli")]
+fn is_mcp_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn mcp_tool_base_url_loopback_matrix() {
+        let allowed = [
+            "http://127.0.0.1:11434/v1",
+            "http://localhost/v1",
+            "http://LOCALHOST:9/v1",
+            "http://0.0.0.0:1/v1",
+            "http://[::1]:11434/v1",
+            "http://[::1]/v1",
+            "http://evil.example@127.0.0.1:11434/v1",
+            "http://user:pass@127.0.0.1:11434/v1",
+        ];
+        for url in allowed {
+            assert!(mcp_tool_base_url_is_loopback(url), "{url}");
+        }
+        let refused = [
+            "https://api.openai.com/v1",
+            "http://127.0.0.1@evil.example/v1",
+            "http://localhost./v1",
+            "http://2130706433/v1",
+            "http://2130706433:80/v1",
+            "http://127.0.0.1.nip.io/v1",
+            "http://0177.0.0.1/v1",
+            "http://[::ffff:127.0.0.1]/v1",
+            "http://evil.com\\@127.0.0.1/v1",
+            "http://127.0.0.1\\@evil.com/v1",
+        ];
+        for url in refused {
+            assert!(!mcp_tool_base_url_is_loopback(url), "{url}");
+        }
+    }
 
     #[test]
     fn openrouter_provider_uses_openrouter_key_when_xai_also_set() {

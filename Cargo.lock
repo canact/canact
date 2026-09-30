@@ -330,6 +330,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "url",
  "wiremux",
  "wiremux-auth",
 ]

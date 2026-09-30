@@ -89,7 +89,7 @@ pub use claude_code::{
 #[cfg(feature = "cli")]
 mod mcp;
 #[cfg(feature = "cli")]
-pub use mcp::run_mcp_stdio;
+pub use mcp::{McpServerOptions, run_mcp_stdio, run_mcp_stdio_with};
 
 #[cfg(test)]
 mod tests {

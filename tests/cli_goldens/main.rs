@@ -87,6 +87,14 @@ fn mcp_help_mentions_probe_model() {
 }
 
 #[test]
+fn mcp_help_lists_trust_flags() {
+    let help = stdout_of(&["mcp", "--help"]);
+    assert!(help.contains("--allow-cache"), "{help}");
+    assert!(help.contains("--allow-base-url"), "{help}");
+    assert!(help.contains("--api-key-env"), "{help}");
+}
+
+#[test]
 fn probe_advertised_context_zero_is_refused() {
     let out = canact()
         .args([
