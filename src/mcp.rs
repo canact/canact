@@ -10,11 +10,11 @@ use crate::endpoint::mcp_tool_base_url_is_loopback;
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token, finalize_key_route,
-    is_anthropic_provider_label, is_bedrock_provider_label, is_groq_provider_label,
-    is_openai_codex_provider_label, is_openai_provider_label, looks_cheap, openrouter_default_ok,
-    present_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
-    should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
-    xai_oauth_access_token,
+    invalid_explicit_base_url, is_anthropic_provider_label, is_bedrock_provider_label,
+    is_groq_provider_label, is_openai_codex_provider_label, is_openai_provider_label, looks_cheap,
+    openrouter_default_ok, present_base_url, refuse_cloud_without_key, resolve_api_key_from,
+    resolve_host_catalog, should_load_claude_code_login, should_load_xai_oauth,
+    uses_xai_credentials, xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -193,6 +193,7 @@ fn handle_tools_call(params: &Value, policy: &McpServerOptions) -> Result<Value,
 
 async fn probe_model_args(args: &Value, policy: &McpServerOptions) -> Result<Value, String> {
     parse_mcp_tools(args.get("tools"))?;
+    reject_invalid_explicit_base_urls(args, policy)?;
     let provider_given = args
         .get("provider")
         .and_then(Value::as_str)
@@ -263,6 +264,7 @@ async fn probe_model_with_route(
     let vision_flag = present_json_bool(args, "vision")?;
     let vision = vision_flag.unwrap_or(false);
     let force = present_json_bool(args, "force")?.unwrap_or(false);
+    reject_invalid_explicit_base_urls(args, policy)?;
     let (effective_env, effective_url, tool_supplied) =
         enforce_mcp_tool_policy(api_key_env, mcp_present_base_url(args), policy)?;
     let cache_path = opened_mcp_cache_path(&mcp_cache_path(args), policy)?;
@@ -435,6 +437,22 @@ fn trim_api_key_env(raw: Option<&str>) -> Option<&str> {
 
 fn mcp_present_base_url(args: &Value) -> Option<&str> {
     present_base_url(args.get("base_url").and_then(Value::as_str))
+}
+
+fn reject_invalid_explicit_base_urls(
+    args: &Value,
+    policy: &McpServerOptions,
+) -> Result<(), String> {
+    let tool_raw = args.get("base_url").and_then(Value::as_str);
+    if let Some(msg) = invalid_explicit_base_url(tool_raw) {
+        return Err(msg);
+    }
+    if present_base_url(tool_raw).is_none()
+        && let Some(msg) = invalid_explicit_base_url(policy.base_url.as_deref())
+    {
+        return Err(msg);
+    }
+    Ok(())
 }
 
 fn api_key_env_allowed(name: &str) -> bool {

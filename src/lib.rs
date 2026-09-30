@@ -15,14 +15,14 @@ pub use cache::{
 pub use endpoint::{
     ANTHROPIC_BASE_URL, BEDROCK_BASE_URL, GROK_BUILD_BASE_URL, GROQ_BASE_URL, KeyRoute,
     LMSTUDIO_BASE_URL, OLLAMA_BASE_URL, VLLM_BASE_URL, XAI_BASE_URL, cloud_endpoint_requires_key,
-    default_compat_base_url, finalize_key_route, is_anthropic_cloud_host,
-    is_anthropic_provider_label, is_bedrock_cloud_host, is_bedrock_provider_label,
-    is_grok_build_cloud_host, is_grok_build_messages_provider_label, is_grok_build_provider_label,
-    is_groq_cloud_host, is_groq_provider_label, is_ollama_compat_base,
-    is_openai_codex_provider_label, is_openai_provider_label, is_xai_provider_label,
-    local_provider_base_url, looks_cheap, missing_cloud_key_message, openrouter_default_ok,
-    present_base_url, probe_endpoint_without_key, provider_from_base_url, redact_base_url,
-    refuse_cloud_without_key, resolve_api_key_from, should_load_claude_code_login,
+    default_compat_base_url, finalize_key_route, invalid_explicit_base_url,
+    is_anthropic_cloud_host, is_anthropic_provider_label, is_bedrock_cloud_host,
+    is_bedrock_provider_label, is_grok_build_cloud_host, is_grok_build_messages_provider_label,
+    is_grok_build_provider_label, is_groq_cloud_host, is_groq_provider_label,
+    is_ollama_compat_base, is_openai_codex_provider_label, is_openai_provider_label,
+    is_xai_provider_label, local_provider_base_url, looks_cheap, missing_cloud_key_message,
+    openrouter_default_ok, present_base_url, probe_endpoint_without_key, provider_from_base_url,
+    redact_base_url, refuse_cloud_without_key, resolve_api_key_from, should_load_claude_code_login,
     should_load_xai_oauth, uses_xai_credentials,
 };
 pub use error::ProbeError;
