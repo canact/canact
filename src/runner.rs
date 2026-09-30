@@ -23,7 +23,8 @@ pub const FREE_CONCURRENCY: usize = 3;
 
 const VISION_SKIP_NOT_REQUESTED: &str = "Skipped: vision not requested";
 const VISION_SKIP_FLAG: &str = "Skipped: --no-vision";
-const XML_SKIP: &str = "Not tested (native tool calling is Strong; XML fallback unused)";
+const XML_INFERRED: &str =
+    "Inferred Strong because native tool calling is Strong; XML fallback unused";
 const PROMOTED_SKIP: &str = "Skipped: policy suite (use --suite=full or --suite=all)";
 const DIAGNOSTIC_SKIP: &str = "Skipped: diagnostic suite (use --suite=all)";
 const ONE_SHOT_SKIP: &str = "Skipped: one_shot_tool_plan is not a host-policy signal";
@@ -413,7 +414,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
                 score: 1.0,
                 max_score: 1.0,
                 level: CapabilityLevel::Strong,
-                details: XML_SKIP.to_string(),
+                details: XML_INFERRED.to_string(),
             }
         } else {
             take_probe(
