@@ -20,8 +20,9 @@ pub struct ClineModelInfo {
     /// Cline output-token budget. Omitted until a measured cap exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
-    /// Vision probe Medium or higher.
-    pub supports_images: bool,
+    /// Vision probe Medium or higher. Omitted when vision was not measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_images: Option<bool>,
     /// canact does not measure prompt cache. Always false.
     pub supports_prompt_cache: bool,
 }
@@ -32,7 +33,10 @@ impl ClineModelInfo {
         Self {
             context_window: overlay_context_tokens(profile, advertised),
             max_tokens: profile.max_output_tokens,
-            supports_images: profile.supports_vision(),
+            supports_images: profile
+                .vision
+                .measured_level()
+                .map(|level| level >= crate::types::CapabilityLevel::Medium),
             supports_prompt_cache: false,
         }
     }
@@ -66,7 +70,7 @@ mod tests {
         let info = ClineModelInfo::from_profile(&p, Some(128_000));
         assert_eq!(info.context_window, Some(128_000));
         assert_eq!(info.max_tokens, None);
-        assert!(!info.supports_images);
+        assert_eq!(info.supports_images, Some(false));
         assert!(!info.supports_prompt_cache);
     }
 
@@ -107,7 +111,21 @@ mod tests {
             CapabilityLevel::Strong,
         );
         let info = ClineModelInfo::from_profile(&p, None);
-        assert!(info.supports_images);
+        assert_eq!(info.supports_images, Some(true));
+    }
+
+    #[test]
+    fn cline_export_omits_supports_images_when_vision_was_not_measured() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+            CapabilityLevel::Weak,
+        );
+        p.vision.details = "Skipped: vision not requested".to_owned();
+        let info = ClineModelInfo::from_profile(&p, Some(131_072));
+        assert_eq!(info.supports_images, None);
+        let value = serde_json::to_value(&info).expect("json");
+        assert!(value.get("supportsImages").is_none(), "{value}");
     }
 
     #[test]
