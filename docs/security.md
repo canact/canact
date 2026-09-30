@@ -6,5 +6,6 @@ for how to report a vulnerability.
 Private reports go through
 [GitHub Security Advisories](https://github.com/canact/canact/security/advisories).
 Release archives include Cosign `.sigstore.json` and SLSA
-`.intoto.jsonl` assets. Git release tags are GPG-signed
+`.intoto.jsonl` assets. The Release workflow also uploads a CycloneDX SBOM,
+`canact-sbom.cdx.json`. Git release tags are GPG-signed
 annotated tags (`git verify-tag vX.Y.Z`).

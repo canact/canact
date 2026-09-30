@@ -211,6 +211,77 @@ class WorkflowTriggerTests(unittest.TestCase):
             self.assertIn(needle, push, needle)
             self.assertIn(needle, pr, needle)
 
+    def test_scheduled_jobs_report_failures(self) -> None:
+        cases = (
+            (
+                "security.yml",
+                "CodeQL red",
+                "JOB_RESULTS: codeql=${{ needs.codeql.result }}",
+            ),
+            (
+                "scorecard.yml",
+                "Scorecard red",
+                "JOB_RESULTS: scorecard=${{ needs.scorecard.result }}",
+            ),
+            (
+                "link-check.yml",
+                "Link check red",
+                "JOB_RESULTS: check=${{ needs.check.result }}",
+            ),
+        )
+        reporter_if = (
+            "if: always() && (github.event_name == 'schedule' "
+            "|| github.event_name == 'workflow_dispatch')"
+        )
+        for name, prefix, job_results in cases:
+            text = (WORKFLOWS / name).read_text(encoding="utf-8")
+            reporter = text[text.index("report-failure") :]
+            self.assertIn("scripts/report-scheduled-failure.py", reporter, name)
+            self.assertIn(prefix, reporter, name)
+            self.assertIn(job_results, reporter, name)
+            self.assertIn("issues: write", reporter, name)
+            self.assertIn("vars.NIGHTLY_FAILURE_ASSIGNEE || 'SebTardif'", reporter, name)
+            self.assertIn(reporter_if, reporter, name)
+            self.assertIn("--label nightly-failure", reporter, name)
+            self.assertIn("--label ready", reporter, name)
+            self.assertNotIn("pull_request", reporter.split("steps:")[0], name)
+        security = (WORKFLOWS / "security.yml").read_text(encoding="utf-8")
+        security_reporter = security[security.index("report-failure") :]
+        self.assertNotIn("dependency-review", security_reporter)
+        stale = (WORKFLOWS / "stale.yml").read_text(encoding="utf-8")
+        exempt = stale[stale.index("exempt-issue-labels") :]
+        self.assertIn("nightly-failure", exempt)
+
+    def test_release_sbom_and_nonfatal_provenance(self) -> None:
+        rel = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        sbom = rel[rel.index("\n  sbom:") : rel.index("\n  provenance:")]
+        self.assertIn("cargo install cargo-cyclonedx --version 0.5.9 --locked", sbom)
+        self.assertIn("canact-sbom.cdx.json", sbom)
+        self.assertIn("publisher/scripts/stage-cyclonedx-sbom.sh", sbom)
+        self.assertIn("path: publisher", sbom)
+        self.assertIn("path: source", sbom)
+        self.assertIn("ref: ${{ needs.plan.outputs.tag }}", sbom)
+        self.assertIn('toolchain: "1.95"', sbom)
+        self.assertNotIn("continue-on-error", sbom)
+        provenance = rel[rel.index("\n  provenance:") : rel.index("\n  publish-homebrew-formula:")]
+        self.assertGreaterEqual(provenance.count("continue-on-error: true"), 3)
+        attest = provenance[provenance.index("Attest build provenance") : provenance.index("Install Cosign")]
+        self.assertIn("continue-on-error: true", attest)
+        sign = provenance[provenance.index("Sign and upload") :]
+        self.assertIn("continue-on-error: true", sign)
+        announce = rel[rel.index("\n  announce:") :]
+        self.assertIn("- sbom", announce)
+        self.assertIn("needs.provenance.result == 'failure'", announce)
+        self.assertIn(
+            "needs.sbom.result == 'skipped' || needs.sbom.result == 'success'",
+            announce,
+        )
+        self.assertNotIn("needs.sbom.result == 'failure'", announce)
+        sign_release = (WORKFLOWS / "sign-release.yml").read_text(encoding="utf-8")
+        self.assertNotIn("continue-on-error", sign_release)
+        self.assertIn("Attest build provenance", sign_release)
+        self.assertIn("scripts/attach-release-signatures.sh", sign_release)
+
 
 if __name__ == "__main__":
     unittest.main()
