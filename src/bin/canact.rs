@@ -156,11 +156,15 @@ struct ProbeArgs {
 
 #[derive(clap::Args)]
 struct ExportArgs {
-    /// Write `.aider.model.settings.yml` and `.aider.model.metadata.json`
+    /// Write the Aider repo files and `cline.modelinfo.json`. Stdout stays empty. Overlay windows are the advertised context.
+    #[arg(long, conflicts_with_all = ["aider", "cline"])]
+    all: bool,
+
+    /// Write `.aider.model.settings.yml` and `.aider.model.metadata.json`. Aider loads both from the repo.
     #[arg(long, conflicts_with = "cline")]
     aider: bool,
 
-    /// Write `cline.modelinfo.json`
+    /// Write `cline.modelinfo.json`. Paste this file into Cline. Cline does not load it from the repo.
     #[arg(long)]
     cline: bool,
 
@@ -386,8 +390,8 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
 }
 
 fn run_export(args: ExportArgs) -> Result<(), u8> {
-    if !args.aider && !args.cline {
-        eprintln!("error: specify --aider or --cline");
+    if !args.all && !args.aider && !args.cline {
+        eprintln!("error: specify --aider or --cline, or pass --all");
         return Err(1);
     }
     let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
@@ -419,12 +423,6 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         1u8
     })?;
     let advertised = args.advertised_context.or(cached_advertised);
-    let overlay = if args.aider {
-        HostOverlay::aider(&profile, advertised)
-    } else {
-        HostOverlay::cline(&profile, advertised)
-    };
-    let files = overlay.files();
     let dir = resolve_user_path(args.dir.clone(), PathBuf::from("."));
     if dir.exists() && !dir.is_dir() {
         eprintln!(
@@ -433,21 +431,40 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         );
         return Err(1);
     }
-    match overlay.write_to(&dir) {
+    let mut stdout_body = None;
+    if args.all || args.aider {
+        let overlay = HostOverlay::aider(&profile, advertised);
+        if !args.all {
+            stdout_body = overlay.files().into_iter().next().map(|file| file.body);
+        }
+        write_one_overlay(&overlay, &dir)?;
+    }
+    if args.all || args.cline {
+        let overlay = HostOverlay::cline(&profile, advertised);
+        if !args.all && stdout_body.is_none() {
+            stdout_body = overlay.files().into_iter().next().map(|file| file.body);
+        }
+        write_one_overlay(&overlay, &dir)?;
+    }
+    if let Some(body) = stdout_body {
+        print!("{body}");
+    }
+    Ok(())
+}
+
+fn write_one_overlay(overlay: &HostOverlay, dir: &std::path::Path) -> Result<(), u8> {
+    match overlay.write_to(dir) {
         Ok(paths) => {
             for path in paths {
                 eprintln!("wrote {}", path.display());
             }
+            Ok(())
         }
         Err(err) => {
             eprintln!("error: failed to write overlays: {err}");
-            return Err(1);
+            Err(1)
         }
     }
-    if let Some(first) = files.first() {
-        print!("{}", first.body);
-    }
-    Ok(())
 }
 
 fn run_cache(args: CacheArgs) -> Result<(), u8> {

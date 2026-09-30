@@ -105,9 +105,12 @@ After a cached probe:
 
 ```bash
 canact export --aider --model llama3.2:3b --provider ollama --dir /tmp/overlays
+canact export --all --model llama3.2:3b --provider ollama --dir /tmp/overlays
 canact matrix --provider ollama
 canact matrix
 ```
+
+`canact export --aider` writes `.aider.model.settings.yml` and `.aider.model.metadata.json` into `--dir` (the current directory when `--dir` is omitted). Aider loads those two files from the repo. `canact export --cline` writes `cline.modelinfo.json` in that same directory. Paste that file into Cline. Cline does not load it from the repo. `canact export --all` writes all three files and leaves stdout empty. Each `wrote` line is on stderr. Overlay windows are the advertised context stored on the cache row, or the value passed to `--advertised-context`.
 
 `canact matrix` prints a plumbing table (pass / degraded / fail /
 skipped) from the cache. `--provider` is optional; omit it to include

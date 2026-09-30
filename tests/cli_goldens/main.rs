@@ -74,7 +74,11 @@ fn export_help_lists_aider_and_cline() {
     let help = stdout_of(&["export", "--help"]);
     assert!(help.contains("--aider"), "{help}");
     assert!(help.contains("--cline"), "{help}");
+    assert!(help.contains("--all"), "{help}");
     assert!(help.contains("--dir"), "{help}");
+    assert!(help.contains("advertised context"), "{help}");
+    assert!(help.contains("from the repo"), "{help}");
+    assert!(help.contains("Paste this file into Cline"), "{help}");
 }
 
 #[test]
@@ -1009,6 +1013,126 @@ fn export_aider_writes_cwd_when_dir_omitted() {
         "metadata missing; stderr={stderr}"
     );
     assert!(stderr.contains("wrote"), "stderr={stderr}");
+    assert!(
+        stdout.contains("- name: "),
+        "single-target export prints the first file body\nstdout={stdout}"
+    );
+}
+
+#[test]
+fn export_all_writes_aider_and_cline() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
+    let recommended = profile
+        .recommended_context_tokens(Some(128_000))
+        .expect("measured floor");
+    assert_ne!(recommended, 128_000);
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(profile, false, false, Some(128_000));
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .current_dir(dir.path())
+        .args([
+            "export",
+            "--all",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    let wrote: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("wrote "))
+        .collect();
+    assert_eq!(wrote.len(), 3, "stderr={stderr}");
+    assert!(
+        wrote[0].ends_with(".aider.model.settings.yml"),
+        "stderr={stderr}"
+    );
+    assert!(
+        wrote[1].ends_with(".aider.model.metadata.json"),
+        "stderr={stderr}"
+    );
+    assert!(
+        wrote[2].ends_with("cline.modelinfo.json"),
+        "stderr={stderr}"
+    );
+    for name in [
+        ".aider.model.settings.yml",
+        ".aider.model.metadata.json",
+        "cline.modelinfo.json",
+    ] {
+        let body = std::fs::read_to_string(dir.path().join(name)).expect(name);
+        assert!(!body.trim().is_empty(), "{name} was empty");
+    }
+    let cline: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("cline.modelinfo.json")).expect("cline"),
+    )
+    .expect("cline json");
+    assert_eq!(cline["contextWindow"], 128_000, "{cline}");
+    assert_ne!(cline["contextWindow"], recommended, "{cline}");
+    assert!(cline.get("maxTokens").is_none(), "{cline}");
+    let metadata: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(".aider.model.metadata.json")).expect("metadata"),
+    )
+    .expect("metadata json");
+    let entry = &metadata["test/weak-tools"];
+    assert!(entry.get("max_output_tokens").is_none(), "{metadata}");
+    assert_eq!(entry["max_input_tokens"], 128_000, "{metadata}");
+}
+
+#[test]
+fn export_all_conflicts_with_aider() {
+    for extra in ["--aider", "--cline"] {
+        let out = canact()
+            .args([
+                "export",
+                "--all",
+                extra,
+                "--model",
+                "weak-tools",
+                "--provider",
+                "test",
+            ])
+            .output()
+            .expect("spawn export");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "export --all {extra} stdout={}\nstderr={stderr}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert!(stderr.contains("--all"), "{stderr}");
+        assert!(stderr.contains(extra), "{stderr}");
+    }
+
+    let out = canact()
+        .args(["export", "--model", "weak-tools", "--provider", "test"])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={}\nstderr={stderr}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(stderr.contains("specify --aider or --cline"), "{stderr}");
+    assert!(stderr.contains("--all"), "{stderr}");
 }
 
 #[test]
