@@ -2560,3 +2560,31 @@ fn probe_progress_prints_names_on_stderr() {
     assert!(!stderr.contains("cache hit"), "{stderr}");
     assert!(!stdout.contains("fromCache"), "{stdout}");
 }
+
+#[test]
+fn bad_tools_file_exits_before_connect() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("tools.json");
+    std::fs::write(&path, "{}").expect("write tools");
+    let out = canact()
+        .args([
+            "probe",
+            "--tools",
+            path.to_str().expect("utf8"),
+            "--provider",
+            "ollama",
+            "--model",
+            "x",
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+        ])
+        .output()
+        .expect("spawn");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("parse"), "{stderr}");
+    assert!(!stderr.contains("set --api-key"), "{stderr}");
+    assert!(!stderr.contains("authentication error"), "{stderr}");
+    assert!(!stderr.contains("connection"), "{stderr}");
+    assert!(!stderr.contains("os error"), "{stderr}");
+}

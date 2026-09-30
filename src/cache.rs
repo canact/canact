@@ -455,8 +455,9 @@ impl ProbeCache {
     ) -> Option<(&CapabilityProfile, Option<u32>)> {
         self.profiles
             .iter()
-            .filter(|(_, entry)| {
-                Self::is_valid(entry)
+            .filter(|(key, entry)| {
+                !has_tools_suffix(key)
+                    && Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
                     && models_equivalent(
                         &entry.profile.model_id,
@@ -529,8 +530,9 @@ impl ProbeCache {
         }
         self.profiles
             .iter()
-            .filter(|(_, entry)| {
-                Self::is_valid(entry)
+            .filter(|(key, entry)| {
+                !has_tools_suffix(key)
+                    && Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
                     && models_equivalent(
                         &entry.profile.model_id,
@@ -588,7 +590,8 @@ impl ProbeCache {
                         &entry.profile.provider,
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
-                    && key.rsplit('|').nth(2) == Some(want_cost)
+                    && !has_tools_suffix(key)
+                    && strip_tools_suffix(key).rsplit('|').nth(2) == Some(want_cost)
             })
             .max_by_key(|(_, entry)| {
                 (
@@ -621,7 +624,8 @@ impl ProbeCache {
         self.profiles
             .iter()
             .filter(|(key, entry)| {
-                Self::is_valid(entry)
+                !has_tools_suffix(key)
+                    && Self::is_valid(entry)
                     && entry.probe_suite_version == PROBE_SUITE_VERSION
                     && models_equivalent(
                         &entry.profile.model_id,
@@ -735,6 +739,7 @@ impl ProbeCache {
                         &entry.profile.provider,
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
+                    && !has_tools_suffix(stored_key)
                     && key_knobs_match_suite(
                         stored_key,
                         suite_from_skip(skip_expensive),
@@ -788,6 +793,7 @@ impl ProbeCache {
                         &entry.profile.provider,
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
+                    && !has_tools_suffix(stored_key)
                     && key_knobs_match_suite(stored_key, suite, vision, advertised)
             })
             .max_by_key(|(_, entry)| entry.cached_at)
@@ -839,6 +845,7 @@ impl ProbeCache {
                         &entry.profile.provider,
                     )
                     && providers_equivalent(&entry.profile.provider, provider)
+                    && !has_tools_suffix(stored_key)
                     && key_knobs_match_suite(
                         stored_key,
                         suite_from_skip(skip_expensive),
@@ -920,7 +927,7 @@ impl ProbeCache {
         let filter = provider.map(str::trim).filter(|s| !s.is_empty());
         let mut best: HashMap<String, (u8, u64, MatrixEntry<'_>)> = HashMap::new();
         for (key, entry) in &self.profiles {
-            if !Self::is_valid(entry) {
+            if !Self::is_valid(entry) || has_tools_suffix(key) {
                 continue;
             }
             if entry.probe_suite_version != PROBE_SUITE_VERSION {
@@ -1051,6 +1058,121 @@ impl ProbeCache {
         self.profiles.insert(key, entry);
     }
 
+    /// Same as [`Self::get_with_suite`] when `tools` is `None`.
+    ///
+    /// `Some` reads only the row whose key ends with that list's digest.
+    #[cfg(feature = "runtime")]
+    pub fn get_with_suite_tools(
+        &self,
+        model_id: &str,
+        provider: &str,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+        tools: Option<&[crate::client::ProbeTool]>,
+    ) -> Option<&CapabilityProfile> {
+        let Some(tools) = tools else {
+            return self.get_with_suite(model_id, provider, suite, vision, advertised);
+        };
+        self.get_custom_suite_tools(
+            model_id,
+            provider,
+            DEFAULT_PROBE_EFFORT,
+            PROBE_SUITE_VERSION,
+            suite,
+            vision,
+            advertised,
+            tools,
+        )
+    }
+
+    #[cfg(feature = "runtime")]
+    #[allow(clippy::too_many_arguments)]
+    fn get_custom_suite_tools(
+        &self,
+        model_id: &str,
+        provider: &str,
+        reasoning_effort: &str,
+        suite_version: u32,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+        tools: &[crate::client::ProbeTool],
+    ) -> Option<&CapabilityProfile> {
+        let key = Self::cache_key_with_suite_tools(
+            model_id,
+            provider,
+            reasoning_effort,
+            suite_version,
+            suite,
+            vision,
+            advertised,
+            Some(tools),
+        );
+        if let Some(profile) = self.profiles.get(&key).and_then(|entry| {
+            if Self::is_valid(entry) {
+                Some(&entry.profile)
+            } else {
+                None
+            }
+        }) {
+            return Some(profile);
+        }
+        let suffix = tools_suffix_segment(&key);
+        self.profiles
+            .iter()
+            .filter(|(stored_key, entry)| {
+                Self::is_valid(entry)
+                    && entry.probe_suite_version == suite_version
+                    && entry.reasoning_effort == reasoning_effort
+                    && models_equivalent(
+                        &entry.profile.model_id,
+                        model_id,
+                        provider,
+                        &entry.profile.provider,
+                    )
+                    && providers_equivalent(&entry.profile.provider, provider)
+                    && key_knobs_match_suite(stored_key, suite, vision, advertised)
+                    && tools_suffix_segment(stored_key) == suffix
+            })
+            .max_by_key(|(_, entry)| entry.cached_at)
+            .map(|(_, entry)| &entry.profile)
+    }
+
+    /// Same as [`Self::put_with_suite`] when `tools` is `None`.
+    #[cfg(feature = "runtime")]
+    pub fn put_with_suite_tools(
+        &mut self,
+        profile: CapabilityProfile,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+        tools: Option<&[crate::client::ProbeTool]>,
+    ) {
+        let Some(tools) = tools else {
+            self.put_with_suite(profile, suite, vision, advertised);
+            return;
+        };
+        let key = Self::cache_key_with_suite_tools(
+            &profile.model_id,
+            &profile.provider,
+            DEFAULT_PROBE_EFFORT,
+            PROBE_SUITE_VERSION,
+            suite,
+            vision,
+            advertised,
+            Some(tools),
+        );
+        let entry = CacheEntry {
+            cached_at: unix_now(),
+            profile,
+            reasoning_effort: DEFAULT_PROBE_EFFORT.to_owned(),
+            probe_suite_version: PROBE_SUITE_VERSION,
+            grader_versions: current_grader_map(),
+        };
+        self.profiles.insert(key, entry);
+    }
+
     /// Fix stale probe scores from before the "does not support tools"
     /// scoring fix. Tool-related probes that failed because the provider
     /// returned "does not support tools" were incorrectly scored as Medium
@@ -1143,6 +1265,39 @@ impl ProbeCache {
             None => "ctxnone".to_owned(),
         };
         format!("{model_id}|{provider}|{reasoning_effort}|v{suite_version}|{cost}|{vis}|{ctx}")
+    }
+
+    /// Same as [`Self::cache_key_with_suite`] when `tools` is `None`.
+    ///
+    /// `Some` appends `|tools` plus the lowercase digest of that list.
+    #[cfg(feature = "runtime")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn cache_key_with_suite_tools(
+        model_id: &str,
+        provider: &str,
+        reasoning_effort: &str,
+        suite_version: u32,
+        suite: SuiteTier,
+        vision: bool,
+        advertised: Option<u32>,
+        tools: Option<&[crate::client::ProbeTool]>,
+    ) -> String {
+        let base = Self::cache_key_with_suite(
+            model_id,
+            provider,
+            reasoning_effort,
+            suite_version,
+            suite,
+            vision,
+            advertised,
+        );
+        match tools {
+            None => base,
+            Some(list) => {
+                let hex = crate::tool_digest::probe_tools_digest_hex(list);
+                format!("{base}|tools{hex}")
+            }
+        }
     }
 
     /// Check whether a cache entry is still valid (less than 30 days old).
@@ -1242,8 +1397,37 @@ fn suite_from_skip(skip_expensive: bool) -> SuiteTier {
     }
 }
 
+fn strip_tools_suffix(key: &str) -> &str {
+    let Some((head, last)) = key.rsplit_once('|') else {
+        return key;
+    };
+    let Some(hex) = last.strip_prefix("tools") else {
+        return key;
+    };
+    if !hex.is_empty() && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        head
+    } else {
+        key
+    }
+}
+
+fn has_tools_suffix(key: &str) -> bool {
+    strip_tools_suffix(key).len() != key.len()
+}
+
+#[cfg(feature = "runtime")]
+fn tools_suffix_segment(key: &str) -> Option<&str> {
+    let peeled = strip_tools_suffix(key);
+    if peeled.len() == key.len() {
+        None
+    } else {
+        Some(&key[peeled.len() + 1..])
+    }
+}
+
 fn key_suite(key: &str) -> SuiteTier {
-    key.rsplit('|')
+    strip_tools_suffix(key)
+        .rsplit('|')
         .nth(2)
         .and_then(SuiteTier::parse)
         .unwrap_or(SuiteTier::Full)
@@ -1259,6 +1443,7 @@ fn key_knobs_match_suite(
     vision: bool,
     advertised: Option<u32>,
 ) -> bool {
+    let key = strip_tools_suffix(key);
     let mut parts = key.rsplit('|');
     let ctx = parts.next().unwrap_or("");
     let vis = parts.next().unwrap_or("");
@@ -1315,7 +1500,7 @@ fn apply_grader_freshness(entry: &mut CacheEntry) -> bool {
 }
 
 fn key_advertised(key: &str) -> Option<u32> {
-    let ctx = key.rsplit('|').next().unwrap_or("");
+    let ctx = strip_tools_suffix(key).rsplit('|').next().unwrap_or("");
     ctx.strip_prefix("ctx")
         .filter(|s| *s != "none")
         .and_then(|s| s.parse().ok())
@@ -1412,5 +1597,183 @@ mod tests {
             Some(PROBE_SUITE_VERSION - 1)
         );
         assert!(cache.find_profile("llama3.2:3b", "ollama").is_none());
+    }
+}
+
+#[cfg(all(test, feature = "runtime"))]
+mod caller_tool_cache_tests {
+    use super::{ProbeCache, has_tools_suffix, key_advertised, key_suite, strip_tools_suffix};
+    use crate::tool_digest::{DigestTool, tools_digest, tools_digest_hex};
+    use crate::{CapabilityProfile, HostPolicyMeta, PROBE_SUITE_VERSION, ProbeTool, SuiteTier};
+
+    fn sample_tool(name: &str) -> ProbeTool {
+        ProbeTool {
+            name: name.to_owned(),
+            description: format!("{name} tool"),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    fn digest_rows(tools: &[ProbeTool]) -> Vec<DigestTool<'_>> {
+        tools
+            .iter()
+            .map(|tool| DigestTool {
+                name: tool.name.as_str(),
+                description: tool.description.as_str(),
+                parameters: &tool.parameters,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn builtin_tools_keep_the_current_cache_key() {
+        let plain = ProbeCache::cache_key_with_suite(
+            "m",
+            "ollama",
+            "unset",
+            PROBE_SUITE_VERSION,
+            SuiteTier::Policy,
+            false,
+            Some(4096),
+        );
+        let with_none = ProbeCache::cache_key_with_suite_tools(
+            "m",
+            "ollama",
+            "unset",
+            PROBE_SUITE_VERSION,
+            SuiteTier::Policy,
+            false,
+            Some(4096),
+            None,
+        );
+        assert_eq!(with_none, plain);
+        assert!(!with_none.contains("|tools"));
+        assert!(!has_tools_suffix(&plain));
+        assert_eq!(
+            strip_tools_suffix("m|ollama|unset|v97|policy|novision|ctxnone"),
+            "m|ollama|unset|v97|policy|novision|ctxnone"
+        );
+        assert_eq!(
+            strip_tools_suffix("m|ollama|unset|v97|policy|novision|ctx4096"),
+            "m|ollama|unset|v97|policy|novision|ctx4096"
+        );
+        assert_eq!(PROBE_SUITE_VERSION, 97);
+
+        let mut cache = ProbeCache::default();
+        cache.put_with_suite(
+            CapabilityProfile::unprobed("m", "ollama"),
+            SuiteTier::Policy,
+            false,
+            Some(4096),
+        );
+        assert!(
+            cache
+                .get_with_suite("m", "ollama", SuiteTier::Policy, false, Some(4096))
+                .is_some()
+        );
+        assert!(
+            cache
+                .get_with_suite_tools("m", "ollama", SuiteTier::Policy, false, Some(4096), None)
+                .is_some()
+        );
+
+        let envelope = CapabilityProfile::unprobed("m", "ollama").host_policy_envelope_with(
+            HostPolicyMeta::for_suite(true, false, SuiteTier::Policy, Some(4096)),
+        );
+        assert_eq!(envelope["toolSchema"], "builtin");
+    }
+
+    #[test]
+    fn custom_tools_change_the_cache_key() {
+        let list = vec![sample_tool("alpha")];
+        let other = vec![sample_tool("beta")];
+        let plain = ProbeCache::cache_key_with_suite(
+            "m",
+            "p",
+            "unset",
+            PROBE_SUITE_VERSION,
+            SuiteTier::Policy,
+            false,
+            Some(4096),
+        );
+        let custom = ProbeCache::cache_key_with_suite_tools(
+            "m",
+            "p",
+            "unset",
+            PROBE_SUITE_VERSION,
+            SuiteTier::Policy,
+            false,
+            Some(4096),
+            Some(&list),
+        );
+        let custom_other = ProbeCache::cache_key_with_suite_tools(
+            "m",
+            "p",
+            "unset",
+            PROBE_SUITE_VERSION,
+            SuiteTier::Policy,
+            false,
+            Some(4096),
+            Some(&other),
+        );
+        let rows = digest_rows(&list);
+        let hex = tools_digest_hex(&rows);
+        assert_ne!(custom, plain);
+        assert_ne!(custom, custom_other);
+        assert_eq!(custom, format!("{plain}|tools{hex}"));
+        assert!(custom.contains("|policy|novision|ctx4096|tools"));
+        assert_eq!(key_suite(&custom), SuiteTier::Policy);
+        assert_eq!(key_advertised(&custom), Some(4096));
+        assert_eq!(
+            strip_tools_suffix(&custom).rsplit('|').nth(2),
+            Some("policy")
+        );
+
+        let mut cache = ProbeCache::default();
+        cache.put_with_suite_tools(
+            CapabilityProfile::unprobed("m", "p"),
+            SuiteTier::Policy,
+            false,
+            Some(4096),
+            Some(&list),
+        );
+        assert!(
+            cache
+                .get_with_suite_tools("m", "p", SuiteTier::Policy, false, Some(4096), Some(&list))
+                .is_some()
+        );
+        assert!(
+            cache
+                .get_with_suite("m", "p", SuiteTier::Policy, false, Some(4096))
+                .is_none()
+        );
+        assert!(
+            cache
+                .get_with_suite_tools("m", "p", SuiteTier::Policy, false, Some(4096), Some(&other))
+                .is_none()
+        );
+        assert!(cache.find_profile("m", "p").is_none());
+        assert!(
+            cache
+                .find_profile_unspecified_catalog_suite("m", "p", SuiteTier::Policy)
+                .is_none()
+        );
+        assert!(
+            cache
+                .find_profile_with_cost_and_advertised("m", "p", Some(4096))
+                .is_none()
+        );
+
+        let envelope = CapabilityProfile::unprobed("m", "p").host_policy_envelope_with(
+            HostPolicyMeta::for_suite(true, false, SuiteTier::Policy, Some(4096))
+                .with_tool_digest(tools_digest(&rows)),
+        );
+        assert_eq!(envelope["toolSchema"], hex);
     }
 }

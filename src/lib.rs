@@ -5,6 +5,7 @@ mod endpoint;
 mod error;
 mod matrix;
 mod report;
+mod tool_digest;
 mod types;
 
 pub use cache::{
@@ -56,6 +57,8 @@ pub use runner::{
 };
 #[cfg(feature = "runtime")]
 pub use text::strip_think_blocks;
+#[cfg(feature = "runtime")]
+pub use tool_digest::probe_tools_digest;
 
 #[cfg(feature = "runtime")]
 pub use probes::{OVERSIZE_MAX_TOKENS, parse_max_output_cap};

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::endpoint::mcp_tool_base_url_is_loopback;
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
-    ProbeRunner, SuiteTier, claude_code_access_token, finalize_key_route,
+    ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token, finalize_key_route,
     is_anthropic_provider_label, is_bedrock_provider_label, is_groq_provider_label,
     is_openai_codex_provider_label, is_openai_provider_label, looks_cheap, openrouter_default_ok,
     present_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
@@ -146,7 +146,20 @@ fn tools_list() -> Value {
                         "description": "true runs vision; false skips it. Omit to use the host catalog."
                     },
                     "force": { "type": "boolean" },
-                    "advertised_context": { "type": "integer", "minimum": 1 }
+                    "advertised_context": { "type": "integer", "minimum": 1 },
+                    "tools": {
+                        "type": "array",
+                        "description": "Caller tools. Each item has name, description, and parameters. Omit for builtin probe tools.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string" },
+                                "description": { "type": "string" },
+                                "parameters": { "description": "JSON Schema for the tool arguments" }
+                            },
+                            "required": ["name", "description", "parameters"]
+                        }
+                    }
                 },
                 "required": ["model"]
             }
@@ -179,6 +192,7 @@ fn handle_tools_call(params: &Value, policy: &McpServerOptions) -> Result<Value,
 }
 
 async fn probe_model_args(args: &Value, policy: &McpServerOptions) -> Result<Value, String> {
+    parse_mcp_tools(args.get("tools"))?;
     let provider_given = args
         .get("provider")
         .and_then(Value::as_str)
@@ -205,6 +219,7 @@ async fn probe_model_with_route(
     api_key_env: Option<&str>,
     policy: &McpServerOptions,
 ) -> Result<Value, String> {
+    let caller_tools = parse_mcp_tools(args.get("tools"))?;
     let api_key_env = trim_api_key_env(api_key_env);
     let model = args
         .get("model")
@@ -273,31 +288,41 @@ async fn probe_model_with_route(
         .map_err(|msg| format!("authentication error: {msg}"))?;
     let api_key = route.key.clone();
     if !force {
-        if let Some(profile) = cache.get_with_suite(&model, &provider, suite, vision, advertised) {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                true, true, suite, advertised,
+        if let Some(profile) = cache.get_with_suite_tools(
+            &model,
+            &provider,
+            suite,
+            vision,
+            advertised,
+            caller_tools.as_deref(),
+        ) {
+            return Ok(profile.host_policy_envelope_with(mcp_host_meta(
+                suite,
+                advertised,
+                caller_tools.as_deref(),
             )));
         }
-        if advertised.is_none()
+        if caller_tools.is_none()
+            && advertised.is_none()
             && vision_flag.is_none()
             && let Some((profile, _cheap_row, stored_advertised)) =
                 cache.find_profile_unspecified_catalog_suite(&model, &provider, suite)
         {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                true,
-                true,
+            return Ok(profile.host_policy_envelope_with(mcp_host_meta(
                 suite,
                 stored_advertised,
+                None,
             )));
         }
-        if matches!(suite, SuiteTier::Policy)
+        if caller_tools.is_none()
+            && matches!(suite, SuiteTier::Policy)
             && !vision
             && let Some((profile, hit_suite)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
         {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                true, true, hit_suite, advertised,
-            )));
+            return Ok(
+                profile.host_policy_envelope_with(mcp_host_meta(hit_suite, advertised, None))
+            );
         }
     }
     if refuse_cloud_without_key(api_key.as_deref(), &base_url) {
@@ -318,19 +343,29 @@ async fn probe_model_with_route(
     let advertised = hints.advertised_context_tokens;
     let vision = hints.supports_vision == Some(true);
     if !force {
-        if let Some(profile) = cache.get_with_suite(&model, &provider, suite, vision, advertised) {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                true, true, suite, advertised,
+        if let Some(profile) = cache.get_with_suite_tools(
+            &model,
+            &provider,
+            suite,
+            vision,
+            advertised,
+            caller_tools.as_deref(),
+        ) {
+            return Ok(profile.host_policy_envelope_with(mcp_host_meta(
+                suite,
+                advertised,
+                caller_tools.as_deref(),
             )));
         }
-        if matches!(suite, SuiteTier::Policy)
+        if caller_tools.is_none()
+            && matches!(suite, SuiteTier::Policy)
             && !vision
             && let Some((profile, hit_suite)) =
                 cache.find_profile_with_cost_and_advertised(&model, &provider, advertised)
         {
-            return Ok(profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
-                true, true, hit_suite, advertised,
-            )));
+            return Ok(
+                profile.host_policy_envelope_with(mcp_host_meta(hit_suite, advertised, None))
+            );
         }
     }
     let catalog = CatalogPriors {
@@ -345,6 +380,9 @@ async fn probe_model_with_route(
     if throttle {
         runner = runner.throttled();
     }
+    if let Some(list) = caller_tools {
+        runner = runner.with_tools(list);
+    }
     let run = runner.run_detailed().await.map_err(|e| match e {
         ProbeError::Auth(msg) => format!("authentication error: {msg}"),
         other => other.to_string(),
@@ -353,6 +391,42 @@ async fn probe_model_with_route(
         eprintln!("warning: failed to save probe cache: {err}");
     }
     Ok(run.host_policy_envelope())
+}
+
+#[derive(serde::Deserialize)]
+struct McpCallerTool {
+    name: String,
+    description: String,
+    parameters: Value,
+}
+
+fn parse_mcp_tools(raw: Option<&Value>) -> Result<Option<Vec<ProbeTool>>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let rows: Vec<McpCallerTool> = serde_json::from_value(raw.clone())
+        .map_err(|err| format!("failed to parse tools: {err}"))?;
+    Ok(Some(
+        rows.into_iter()
+            .map(|row| ProbeTool {
+                name: row.name,
+                description: row.description,
+                parameters: row.parameters,
+            })
+            .collect(),
+    ))
+}
+
+fn mcp_host_meta(
+    suite: SuiteTier,
+    advertised: Option<u32>,
+    tools: Option<&[ProbeTool]>,
+) -> HostPolicyMeta {
+    let meta = HostPolicyMeta::for_suite(true, true, suite, advertised);
+    match tools {
+        Some(list) => meta.with_tool_digest(crate::tool_digest::probe_tools_digest(list)),
+        None => meta,
+    }
 }
 
 fn trim_api_key_env(raw: Option<&str>) -> Option<&str> {
@@ -1808,6 +1882,53 @@ mod tests {
         assert_eq!(list["tools"][0]["name"], "probe_model");
         assert!(desc.contains("host-policy"), "{desc}");
         assert!(desc.contains("Not TTFT"), "{desc}");
+    }
+
+    #[test]
+    fn mcp_tools_argument_is_optional_and_parses_the_array() {
+        let schema = &tools_list()["tools"][0]["inputSchema"];
+        assert_eq!(schema["required"], json!(["model"]));
+        let tools = &schema["properties"]["tools"];
+        assert_eq!(tools["type"], "array");
+        assert_eq!(
+            tools["items"]["required"],
+            json!(["name", "description", "parameters"])
+        );
+
+        assert!(parse_mcp_tools(None).expect("omit").is_none());
+        let missing =
+            parse_mcp_tools(Some(&json!([{"name": "lookup_issue"}]))).expect_err("fields");
+        assert!(missing.contains("parse"), "{missing}");
+        let object = parse_mcp_tools(Some(&json!({}))).expect_err("object");
+        assert!(object.contains("parse"), "{object}");
+
+        let raw = json!([{
+            "name": "lookup_issue",
+            "description": "Look up one issue.",
+            "parameters": {"type": "object"}
+        }]);
+        let parsed = parse_mcp_tools(Some(&raw)).expect("array").expect("some");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "lookup_issue");
+        assert_eq!(parsed[0].description, "Look up one issue.");
+    }
+
+    #[tokio::test]
+    async fn mcp_bad_tools_object_errors_before_connect() {
+        let args = json!({
+            "model": "x",
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:1/v1",
+            "tools": {}
+        });
+        let err = probe_model_args(&args, &McpServerOptions::default())
+            .await
+            .expect_err("object is not a tool list");
+        assert!(err.contains("parse"), "{err}");
+        assert!(!err.contains("authentication error"), "{err}");
+        assert!(!err.contains("connection"), "{err}");
+        assert!(!err.contains("os error"), "{err}");
+        assert!(!err.contains("set --api-key"), "{err}");
     }
 
     #[test]

@@ -33,12 +33,13 @@ pub use multi_turn_memory::probe_multi_turn_memory;
 pub use multi_turn_task_sequencing::probe_multi_turn_task_sequencing;
 #[allow(unused_imports)] // serde/cache field stays; runner never calls this probe
 pub use one_shot_tool_plan::probe_one_shot_tool_plan;
-pub use parallel_tool_scale::probe_parallel_tool_scale;
+pub use parallel_tool_scale::{probe_parallel_tool_scale, probe_parallel_tool_scale_with};
 pub use streaming_tool_calls::probe_streaming_tool_calls;
 pub use system_message_adherence::probe_system_message_adherence;
 pub use token_efficiency::probe_token_efficiency;
 pub use tool_calling::{
     probe_complex_tool_calling, probe_nested_arguments, probe_tool_calling, probe_tool_selection,
+    probe_tool_selection_with,
 };
 pub use vision::probe_vision;
 pub use xml_fallback::probe_xml_tool_calling;

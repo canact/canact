@@ -189,6 +189,8 @@ pub struct HostPolicyMeta {
     pub advertised_context_tokens: Option<u32>,
     /// Suite tier that produced this envelope.
     pub suite: SuiteTier,
+    /// Digest of a caller tool list. `None` is the builtin probe tools.
+    pub tool_digest: Option<[u8; 32]>,
 }
 
 impl Default for HostPolicyMeta {
@@ -199,6 +201,7 @@ impl Default for HostPolicyMeta {
             skip_expensive: false,
             advertised_context_tokens: None,
             suite: SuiteTier::Full,
+            tool_digest: None,
         }
     }
 }
@@ -217,7 +220,14 @@ impl HostPolicyMeta {
             skip_expensive: suite.skip_expensive(),
             advertised_context_tokens,
             suite,
+            tool_digest: None,
         }
+    }
+
+    /// Attach the digest of a caller tool list.
+    pub fn with_tool_digest(mut self, digest: [u8; 32]) -> Self {
+        self.tool_digest = Some(digest);
+        self
     }
 }
 
@@ -655,6 +665,10 @@ impl CapabilityProfile {
             .dimension_result("tool_selection")
             .map(probe_envelope_status)
             .unwrap_or("unprobed");
+        let tool_schema = match meta.tool_digest {
+            Some(digest) => crate::tool_digest::hex32(&digest),
+            None => "builtin".to_owned(),
+        };
         let mut value = serde_json::json!({
             "model": self.model_id,
             "provider": self.provider,
@@ -664,6 +678,7 @@ impl CapabilityProfile {
             "supportsVision": self.supports_vision(),
             "maxTools": self.max_tools(),
             "toolSelectionStatus": tool_selection_status,
+            "toolSchema": tool_schema,
             "needsXmlFallback": self.needs_xml_fallback(),
             "needsJsonRepair": self.needs_json_repair(),
             "useStreamingForToolCalls": self.use_streaming_for_tool_calls(),
@@ -912,6 +927,7 @@ mod recommended_context_tests {
         ));
         assert_eq!(value["fromCache"], false, "{value}");
         assert_eq!(value["suite"], "policy", "{value}");
+        assert_eq!(value["toolSchema"], "builtin", "{value}");
         assert_eq!(value["recommendedContextTokens"], 4096, "{value}");
         assert_eq!(value["advertisedContextTokens"], 40960, "{value}");
         assert_eq!(value["probedContextFloor"], 4096, "{value}");
