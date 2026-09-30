@@ -524,7 +524,8 @@ impl CapabilityProfile {
 
     /// Recommended maximum number of tools to send to the model.
     ///
-    /// Strong: no limit. Medium: 20. Weak: 10.
+    /// Strong: no limit. Medium: 20. Weak: 10. A stored Medium that
+    /// did not complete still returns 10.
     pub fn max_tools(&self) -> Option<usize> {
         match completed_level(&self.tool_selection) {
             CapabilityLevel::Strong => None,
@@ -650,6 +651,10 @@ impl CapabilityProfile {
                 }
             }
         }
+        let tool_selection_status = self
+            .dimension_result("tool_selection")
+            .map(probe_envelope_status)
+            .unwrap_or("unprobed");
         let mut value = serde_json::json!({
             "model": self.model_id,
             "provider": self.provider,
@@ -658,6 +663,7 @@ impl CapabilityProfile {
             "canUseTools": self.can_use_tools(),
             "supportsVision": self.supports_vision(),
             "maxTools": self.max_tools(),
+            "toolSelectionStatus": tool_selection_status,
             "needsXmlFallback": self.needs_xml_fallback(),
             "needsJsonRepair": self.needs_json_repair(),
             "useStreamingForToolCalls": self.use_streaming_for_tool_calls(),
