@@ -815,15 +815,12 @@ fn default_cache_path() -> PathBuf {
 
 fn parse_advertised_context(raw: &str) -> Result<u32, String> {
     let trimmed = raw.trim();
-    let n: u32 = trimmed.parse().map_err(|_| {
-        format!(
-            "invalid value '{raw}' for '--advertised-context <N>': invalid digit found in string"
-        )
-    })?;
+    // Clap already prefixes "invalid value '…' for '--advertised-context <N>'".
+    let n: u32 = trimmed
+        .parse()
+        .map_err(|_| "invalid digit found in string".to_owned())?;
     if n < 1 {
-        return Err(format!(
-            "invalid value '{raw}' for '--advertised-context <N>': {n} is not in 1.."
-        ));
+        return Err(format!("{n} must be at least 1"));
     }
     Ok(n)
 }
@@ -1020,6 +1017,21 @@ mod tests {
     }
     use canact::{looks_cheap, resolve_api_key_from, should_load_xai_oauth};
     use std::path::PathBuf;
+
+    #[test]
+    fn advertised_context_parser_omits_the_flag_prefix() {
+        let err = super::parse_advertised_context("0").expect_err("zero");
+        assert_eq!(err, "0 must be at least 1");
+        let err = super::parse_advertised_context("-1").expect_err("negative");
+        assert_eq!(err, "invalid digit found in string");
+        assert!(!err.contains("--advertised-context"), "{err}");
+        let err = super::parse_advertised_context("abc").expect_err("text");
+        assert_eq!(err, "invalid digit found in string");
+        assert_eq!(
+            super::parse_advertised_context(" 4096 ").expect("pad"),
+            4096
+        );
+    }
 
     #[test]
     fn whitespace_only_base_url_does_not_skip_oauth() {
