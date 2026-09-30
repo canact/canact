@@ -2047,8 +2047,10 @@ mod tests {
         }
     }
 
+    // One probe future each. A single async test that awaited both overflowed
+    // the Windows libtest stack.
     #[tokio::test]
-    async fn mcp_tool_base_url_skips_oauth() {
+    async fn mcp_named_anthropic_tool_url_skips_oauth() {
         let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
         let _home = IsolatedHome::new();
         let _env = LoginEnvGuard::clear();
@@ -2070,8 +2072,19 @@ mod tests {
             (0, 0),
             "named anthropic plus a tool base_url must not read stored logins"
         );
+        assert!(
+            crate::adapters::openai::take_catalog_lookups().is_empty(),
+            "oauth skip test must not call catalog"
+        );
+    }
 
-        crate::claude_code::oauth_test_hook::reset();
+    #[tokio::test]
+    async fn mcp_finalize_tool_url_skips_oauth() {
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let _home = IsolatedHome::new();
+        let _env = LoginEnvGuard::clear();
+        let _circuit = OauthShortCircuit::enable();
+
         let (_dir, cache_str) = seed_model_cache("grok-test", "api.x.ai", 222);
         let args = json!({
             "model": "grok-test",
@@ -2098,10 +2111,39 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn mcp_public_base_url_requires_server_flag() {
+    async fn refused_tool_base_url(url: &str) -> String {
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "base_url": url,
+        });
+        probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
+            .await
+            .expect_err(url)
+    }
+
+    async fn cached_tool_base_url(url: &str, cache_str: &str, what: &str) -> Value {
+        let args = json!({
+            "model": "llama",
+            "provider": "ollama",
+            "base_url": url,
+            "cache": cache_str,
+        });
+        probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
+            .await
+            .expect(what)
+    }
+
+    #[test]
+    fn mcp_public_base_url_requires_server_flag() {
+        // Sequential block_on keeps each probe future on its own. One async
+        // fn with these awaits overflowed the Windows libtest stack.
         let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
         let _env = LoginEnvGuard::clear();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
         for url in [
             "https://api.openai.com/v1",
             "http://127.0.0.1@evil.example/v1",
@@ -2109,19 +2151,7 @@ mod tests {
             "http://2130706433/v1",
             "http://127.0.0.1.nip.io/v1",
         ] {
-            let args = json!({
-                "model": "gpt-4o",
-                "provider": "openai",
-                "base_url": url,
-            });
-            let err = probe_model_with_route(
-                &args,
-                mcp_empty_route(),
-                None,
-                &McpServerOptions::default(),
-            )
-            .await
-            .expect_err(url);
+            let err = rt.block_on(refused_tool_base_url(url));
             assert!(
                 err.contains("base_url"),
                 "{url} must be refused as a tool base_url, got {err}"
@@ -2137,27 +2167,19 @@ mod tests {
         );
 
         let (_dir, cache_str) = seed_model_cache("llama", "ollama", 333);
-        let args = json!({
-            "model": "llama",
-            "provider": "ollama",
-            "base_url": "http://127.0.0.1:11434/v1",
-            "cache": cache_str,
-        });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
-            .await
-            .expect("loopback tool base_url stays allowed");
+        let envelope = rt.block_on(cached_tool_base_url(
+            "http://127.0.0.1:11434/v1",
+            &cache_str,
+            "loopback tool base_url stays allowed",
+        ));
         assert_eq!(envelope["fromCache"], true, "{envelope}");
         assert_eq!(envelope["effectiveContextTokens"], 333, "{envelope}");
 
-        let args = json!({
-            "model": "llama",
-            "provider": "ollama",
-            "base_url": "http://evil.example@127.0.0.1:11434/v1",
-            "cache": cache_str,
-        });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
-            .await
-            .expect("userinfo before a loopback host stays allowed");
+        let envelope = rt.block_on(cached_tool_base_url(
+            "http://evil.example@127.0.0.1:11434/v1",
+            &cache_str,
+            "userinfo before a loopback host stays allowed",
+        ));
         assert_eq!(envelope["fromCache"], true, "{envelope}");
     }
 
