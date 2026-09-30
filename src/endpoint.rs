@@ -487,18 +487,22 @@ fn host_before_port(hostport: &str) -> &str {
         let Some(port) = after.strip_prefix(':') else {
             return "";
         };
-        if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
+        if tcp_port(port) {
             return host;
         }
         return "";
     }
-    if let Some((host, port)) = hostport.rsplit_once(':')
-        && !port.is_empty()
-        && port.bytes().all(|b| b.is_ascii_digit())
-    {
-        return host;
+    if let Some((host, port)) = hostport.rsplit_once(':') {
+        if !host.is_empty() && tcp_port(port) {
+            return host;
+        }
+        return "";
     }
     hostport
+}
+
+fn tcp_port(port: &str) -> bool {
+    matches!(port.parse::<u16>(), Ok(n) if n > 0)
 }
 
 /// After an explicit base URL is known, re-resolve the key when
@@ -1637,7 +1641,27 @@ mod tests {
             Some(msg)
         );
         assert_eq!(
+            invalid_explicit_base_url(Some("http://127.0.0.1:abc/v1")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://127.0.0.1:99999/v1")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://127.0.0.1:0/v1")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
             invalid_explicit_base_url(Some("http://127.0.0.1:9/v1")),
+            None
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://[::1]:99999/v1")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://[::1]:11434/v1")),
             None
         );
         assert_eq!(
