@@ -105,9 +105,13 @@ struct ProbeArgs {
     #[arg(long)]
     base_url: Option<String>,
 
-    /// API key (else OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY)
+    /// API key (else OPENAI_API_KEY / OPENROUTER_API_KEY / XAI_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY). The value is visible in shell history and the process list; prefer an env var.
     #[arg(long)]
     api_key: Option<String>,
+
+    /// Skip stored Grok and Claude Code logins. Env vars and --api-key still apply.
+    #[arg(long)]
+    no_login: bool,
 
     /// Catalog prior: advertise vision support
     #[arg(long, conflicts_with = "no_vision")]
@@ -242,6 +246,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         args.api_key.clone(),
         &provider_hint,
         cli_explicit_base_url(args.base_url.as_deref()),
+        args.no_login,
     ) {
         Ok(route) => route,
         Err(msg) => {
@@ -251,7 +256,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     };
     let (route, base_url, provider) =
         match finalize_key_route(&provider_hint, args.base_url.clone(), first, |provider| {
-            resolve_api_key(args.api_key.clone(), provider, false)
+            resolve_api_key(args.api_key.clone(), provider, false, args.no_login)
         }) {
             Ok(resolved) => resolved,
             Err(msg) => {
@@ -592,6 +597,7 @@ fn resolve_api_key(
     cli: Option<String>,
     provider: &str,
     explicit_base_url: bool,
+    no_login: bool,
 ) -> Result<canact::KeyRoute, String> {
     if is_groq_provider_label(provider) {
         let groq = std::env::var("GROQ_API_KEY").ok().filter(|s| !s.is_empty());
@@ -633,7 +639,9 @@ fn resolve_api_key(
         || cli.as_ref().is_some_and(|s| !s.is_empty());
     let xai = match xai_env {
         Some(key) => Some(key),
-        None if should_load_xai_oauth(provider, other_before_xai_oauth, explicit_base_url) => {
+        None if !no_login
+            && should_load_xai_oauth(provider, other_before_xai_oauth, explicit_base_url) =>
+        {
             xai_oauth_access_token()?
         }
         None => None,
@@ -651,7 +659,9 @@ fn resolve_api_key(
                 .filter(|s| !s.is_empty())
         }) {
         Some(key) => Some(key),
-        None if should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) => {
+        None if !no_login
+            && should_load_claude_code_login(provider, other_cloud_keys, explicit_base_url) =>
+        {
             claude_code_access_token()?
         }
         None => None,

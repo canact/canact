@@ -66,9 +66,26 @@ canact probe --provider ollama --model llama3.2:3b --cheap --json
 adds diagnostics (`code_syntax`, token efficiency, system
 message, memory).
 
-Cloud hosts need a key before any HTTP call (`OPENAI_API_KEY`,
-`OPENROUTER_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
-`--api-key`). Auth, a missing model, and connect failures abort the
+Cloud hosts need a key before any HTTP call. The first match in
+this table wins. `--api-key` is visible in shell history and the
+process list; prefer an env var. `canact probe --no-login` skips
+stored Grok and Claude Code logins. Env vars still apply.
+
+| Provider label | Default URL when `--base-url` is omitted | What is tried, first match wins | Stored login |
+| --- | --- | --- | --- |
+| empty | `https://api.openai.com/v1`, unless a key selects the xAI, Anthropic, or OpenRouter host | `--api-key`, else `OPENAI_API_KEY`, else `XAI_API_KEY` then `GROK_API_KEY` then Grok login, else `ANTHROPIC_AUTH_TOKEN` then `ANTHROPIC_API_KEY` then Claude Code login, else `OPENROUTER_API_KEY` | Grok login, then Claude Code, when no env key and no `--api-key`. `--no-login` skips only those two helpers. |
+| `xai`, `grok`, `api.x.ai`, `x.ai` | `https://api.x.ai/v1` | `--api-key`, else `XAI_API_KEY`, else `GROK_API_KEY`, else Grok login. Ignores `OPENAI_API_KEY`. | `~/.grok/auth.json`. A named xAI provider still loads it when `OPENAI_API_KEY` is set. |
+| `grok-build`, `xai-grok-build`, `cli-chat-proxy.grok.com`, and the `-messages` pair | `https://cli-chat-proxy.grok.com/v1` | Same xAI pack | Same Grok login |
+| `claude`, `anthropic`, `api.anthropic.com` | `https://api.anthropic.com/v1` | `--api-key`, else `ANTHROPIC_AUTH_TOKEN`, else `ANTHROPIC_API_KEY`, else Claude Code. Ignores OpenAI and xAI. | Claude Code login |
+| `openrouter`, `openrouter.ai` | `https://openrouter.ai/api/v1` | `--api-key`, else `OPENAI_API_KEY`, else `OPENROUTER_API_KEY`. No stored login. | none |
+| `groq`, `api.groq.com` | `https://api.groq.com/openai/v1` | `--api-key`, else `GROQ_API_KEY`. No stored login. | none |
+| `amazon-bedrock`, `bedrock` | `https://bedrock-runtime.us-east-1.amazonaws.com` | `--api-key`, else `AWS_BEARER_TOKEN_BEDROCK`. No stored login. | none |
+| `openai-codex`, `codex` | `https://api.openai.com/v1` | `--api-key`, else `OPENAI_API_KEY`. No stored login. | none |
+| `ollama`, `localhost`, `127.0.0.1`, `::1`, `0.0.0.0` | `http://127.0.0.1:11434/v1` (this constant, not an environment variable) | none | none |
+| `lmstudio` | `http://127.0.0.1:1234/v1` | none | none |
+| `vllm` | `http://127.0.0.1:8000/v1` | none | none |
+
+Auth, a missing model, and connect failures abort the
 suite. Timeouts and 429/5xx stay session-local and are not cached.
 
 `--json` prints the host-policy envelope. That object is not the
