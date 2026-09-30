@@ -2248,3 +2248,315 @@ fn no_login_still_uses_env() {
     assert!(!stderr.contains(dummy), "{stderr}");
     assert!(!stdout.contains(dummy), "{stdout}");
 }
+
+fn dry_run_cmd(args: &[&str]) -> std::process::Output {
+    canact()
+        .args(args)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .env_remove("GROK_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .env_remove("GROQ_API_KEY")
+        .env_remove("AWS_BEARER_TOKEN_BEDROCK")
+        .output()
+        .unwrap_or_else(|err| panic!("spawn canact {args:?}: {err}"))
+}
+
+#[test]
+fn dry_run_closed_port_does_not_connect() {
+    let out = dry_run_cmd(&[
+        "probe",
+        "--provider",
+        "ollama",
+        "--base-url",
+        "http://127.0.0.1:1/v1",
+        "--dry-run",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("tool_calling"), "{stdout}");
+    assert!(stdout.contains("policy"), "{stdout}");
+    assert!(stdout.contains("provider: ollama"), "{stdout}");
+    assert!(
+        stdout.contains("baseUrl: http://127.0.0.1:1/v1"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("one_shot_tool_plan"), "{stdout}");
+    assert!(!stdout.contains("vision"), "{stdout}");
+}
+
+#[test]
+fn dry_run_does_not_read_planted_auth() {
+    let home = tempfile::tempdir().expect("home");
+    let grok_dir = home.path().join(".grok");
+    std::fs::create_dir_all(&grok_dir).expect("grok dir");
+    let canary = "canact-dry-run-canary-not-a-token";
+    std::fs::write(
+        grok_dir.join("auth.json"),
+        format!(
+            r#"{{"https://auth.x.ai::planted-test-client":{{"key":"{canary}","refresh_token":"rt","expires_at":"2099-01-01T00:00:00Z"}}}}"#
+        ),
+    )
+    .expect("auth");
+    let out = canact()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env_remove("XAI_API_KEY")
+        .env_remove("GROK_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .args(["probe", "--dry-run", "--provider", "xai"])
+        .output()
+        .expect("spawn dry-run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("provider: xai"), "{stdout}");
+    assert!(stdout.contains("suite: policy"), "{stdout}");
+    assert!(stdout.contains("https://api.x.ai/v1"), "{stdout}");
+    assert!(!stdout.contains(canary), "{stdout}");
+    assert!(!stderr.contains(canary), "{stderr}");
+    assert!(!stderr.contains("authentication error"), "{stderr}");
+    assert!(!stderr.contains("set --api-key or XAI_API_KEY"), "{stderr}");
+}
+
+#[test]
+fn dry_run_json_is_only_the_plan() {
+    let out = dry_run_cmd(&["probe", "--json", "--dry-run", "--provider", "ollama"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json");
+    let obj = value.as_object().expect("object");
+    let keys: std::collections::BTreeSet<_> = obj.keys().cloned().collect();
+    assert_eq!(
+        keys,
+        ["baseUrl", "probes", "provider", "suite"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+    assert_eq!(value["provider"], "ollama", "{value}");
+    assert_eq!(value["suite"], "policy", "{value}");
+    assert!(value["baseUrl"].is_string(), "{value}");
+    let probes = value["probes"].as_array().expect("probes");
+    assert!(probes.iter().any(|name| name == "tool_calling"), "{value}");
+    assert!(!probes.iter().any(|name| name == "vision"), "{value}");
+    assert!(obj.get("maxTools").is_none(), "{value}");
+
+    let vision = dry_run_cmd(&[
+        "probe",
+        "--json",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--vision",
+    ]);
+    let vision_stdout = String::from_utf8_lossy(&vision.stdout);
+    let vision_stderr = String::from_utf8_lossy(&vision.stderr);
+    assert!(
+        vision.status.success(),
+        "stdout={vision_stdout}\nstderr={vision_stderr}"
+    );
+    let vision_value: serde_json::Value = serde_json::from_str(vision_stdout.trim()).expect("json");
+    let vision_probes = vision_value["probes"].as_array().expect("probes");
+    assert!(
+        vision_probes.iter().any(|name| name == "vision"),
+        "{vision_value}"
+    );
+}
+
+#[test]
+fn dry_run_suite_all_lists_diagnostics() {
+    let all = dry_run_cmd(&["probe", "--dry-run", "--provider", "ollama", "--suite=all"]);
+    let stdout = String::from_utf8_lossy(&all.stdout);
+    let stderr = String::from_utf8_lossy(&all.stderr);
+    assert!(all.status.success(), "stdout={stdout}\nstderr={stderr}");
+    for name in [
+        "token_efficiency",
+        "system_message_adherence",
+        "code_syntax",
+        "max_tokens_compliance",
+        "multi_turn_memory",
+    ] {
+        assert!(stdout.contains(name), "{name} missing from {stdout}");
+    }
+
+    let cheap = dry_run_cmd(&["probe", "--dry-run", "--provider", "ollama", "--cheap"]);
+    let cheap_stdout = String::from_utf8_lossy(&cheap.stdout);
+    let cheap_stderr = String::from_utf8_lossy(&cheap.stderr);
+    assert!(
+        cheap.status.success(),
+        "stdout={cheap_stdout}\nstderr={cheap_stderr}"
+    );
+    assert!(cheap_stdout.contains("tool_calling"), "{cheap_stdout}");
+    assert!(cheap_stdout.contains("tool_selection"), "{cheap_stdout}");
+    for name in [
+        "token_efficiency",
+        "system_message_adherence",
+        "multi_turn_task_sequencing",
+        "one_shot_tool_plan",
+    ] {
+        assert!(
+            !cheap_stdout.contains(name),
+            "{name} leaked into {cheap_stdout}"
+        );
+    }
+}
+
+#[test]
+fn dry_run_redacts_userinfo() {
+    let secret = "canact-dry-run-secret";
+    let url = format!("http://user:{secret}@127.0.0.1:1/v1");
+    let out = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--base-url",
+        &url,
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        stdout.contains("baseUrl: http://127.0.0.1:1/v1"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains(secret), "{stdout}");
+    assert!(!stderr.contains(secret), "{stderr}");
+
+    let json = dry_run_cmd(&[
+        "probe",
+        "--json",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--base-url",
+        &url,
+    ]);
+    let json_stdout = String::from_utf8_lossy(&json.stdout);
+    let json_stderr = String::from_utf8_lossy(&json.stderr);
+    assert!(
+        json.status.success(),
+        "stdout={json_stdout}\nstderr={json_stderr}"
+    );
+    assert!(
+        json_stdout.contains("http://127.0.0.1:1/v1"),
+        "{json_stdout}"
+    );
+    assert!(!json_stdout.contains(secret), "{json_stdout}");
+    assert!(!json_stderr.contains(secret), "{json_stderr}");
+}
+
+#[test]
+fn probe_cache_hit_prints_cache_hit_on_stderr() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_knobs(
+        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+        true,
+        false,
+        None,
+    );
+    cache.save(&cache_path).expect("save cache");
+    let cache_str = cache_path.to_str().expect("utf8");
+    let human = canact()
+        .args([
+            "probe",
+            "--cheap",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_str,
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn human cache hit");
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(human.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("Cached (probedAt="), "{stdout}");
+    assert!(stderr.contains("cache hit"), "{stderr}");
+    assert!(!stderr.contains("tool_calling"), "{stderr}");
+
+    let json = canact()
+        .args([
+            "probe",
+            "--json",
+            "--cheap",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_str,
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .output()
+        .expect("spawn json cache hit");
+    let json_stdout = String::from_utf8_lossy(&json.stdout);
+    let json_stderr = String::from_utf8_lossy(&json.stderr);
+    assert!(
+        json.status.success(),
+        "stdout={json_stdout}\nstderr={json_stderr}"
+    );
+    let value: serde_json::Value = serde_json::from_str(json_stdout.trim()).expect("json");
+    assert_eq!(value["fromCache"], true, "{value}");
+    assert!(json_stderr.contains("cache hit"), "{json_stderr}");
+    assert!(!json_stderr.contains("tool_calling"), "{json_stderr}");
+}
+
+#[test]
+fn probe_progress_prints_names_on_stderr() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_str = dir.path().join("empty.json");
+    let out = canact()
+        .args([
+            "probe",
+            "--json",
+            "--provider",
+            "ollama",
+            "--model",
+            "m",
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+            "--advertised-context",
+            "4096",
+            "--no-vision",
+            "--cache",
+            cache_str.to_str().expect("utf8"),
+        ])
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .env_remove("GROK_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .output()
+        .expect("spawn progress");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "closed port must fail after the plan; stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("tool_calling"), "{stderr}");
+    assert!(stderr.contains("context_faithfulness"), "{stderr}");
+    assert!(!stderr.contains("one_shot_tool_plan"), "{stderr}");
+    assert!(!stderr.contains("cache hit"), "{stderr}");
+    assert!(!stdout.contains("fromCache"), "{stdout}");
+}

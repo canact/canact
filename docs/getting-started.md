@@ -47,6 +47,9 @@ Cloud hosts need a key before any HTTP call. The first match in
 this table wins. `--api-key` is visible in shell history and the
 process list; prefer an env var. `canact probe --no-login` skips
 stored Grok and Claude Code logins. Env vars still apply.
+`canact probe --dry-run` prints the provider, redacted base URL,
+suite, and probe names, then exits. It does not read a login, the
+cache, or the network.
 
 | Provider label | Default URL when `--base-url` is omitted | What is tried, first match wins | Stored login |
 | --- | --- | --- | --- |

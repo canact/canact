@@ -8,8 +8,9 @@ use canact::{
     OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
     claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
     is_groq_provider_label, list_model_ids, looks_cheap, missing_cloud_key_message,
-    missing_model_message, present_base_url, refuse_cloud_without_key, resolve_api_key_from,
-    resolve_host_catalog, run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
+    missing_model_message, planned_probe_names, present_base_url, probe_endpoint_without_key,
+    redact_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
     xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
@@ -125,6 +126,10 @@ struct ProbeArgs {
     #[arg(long)]
     json: bool,
 
+    /// Print the provider, base URL, suite, and probe names, then exit. Skips login, cache, and HTTP.
+    #[arg(long)]
+    dry_run: bool,
+
     /// Print every dimension in the human table. Omits one_shot_tool_plan.
     #[arg(long)]
     verbose: bool,
@@ -239,6 +244,9 @@ fn cli_explicit_base_url(raw: Option<&str>) -> bool {
 }
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
+    if args.dry_run {
+        return run_dry_run(&args);
+    }
     let provider_hint = args
         .provider
         .as_deref()
@@ -372,6 +380,9 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     if !args.json {
         println!("Probing {model} ({provider})...");
         println!();
+    }
+    for name in planned_probe_names(suite, vision) {
+        eprintln!("{name}");
     }
 
     let run = match runner.run_detailed().await {
@@ -566,12 +577,66 @@ fn emit_run(run: &ProbeRun, json: bool, verbose: bool) -> Result<(), u8> {
     )
 }
 
+fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
+    let suite = match resolve_suite(args) {
+        Ok(suite) => suite,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return Err(1);
+        }
+    };
+    let provider_hint = args
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    let (provider, base_url) = probe_endpoint_without_key(provider_hint, args.base_url.as_deref());
+    let base_url = redact_base_url(&base_url);
+    let probes = planned_probe_names(suite, args.vision);
+    if args.json {
+        let plan = serde_json::json!({
+            "provider": provider,
+            "baseUrl": base_url,
+            "suite": suite.as_str(),
+            "probes": probes,
+        });
+        match serde_json::to_string_pretty(&plan) {
+            Ok(text) => {
+                println!("{text}");
+                Ok(())
+            }
+            Err(err) => {
+                eprintln!("error: failed to serialize probe JSON: {err}");
+                Err(1)
+            }
+        }
+    } else {
+        let ladder = if suite.skip_expensive() {
+            "4096"
+        } else {
+            "4096, 8192, 16384"
+        };
+        println!("provider: {provider}");
+        println!("baseUrl: {base_url}");
+        println!("suite: {}", suite.as_str());
+        println!("context ladder: {ladder}");
+        println!("xml_tool_calling runs unless native tool_calling is Strong");
+        println!("probe_max_output_tokens is measured and is not listed below");
+        for name in probes {
+            println!("{name}");
+        }
+        Ok(())
+    }
+}
+
 fn emit_profile(
     profile: &CapabilityProfile,
     json: bool,
     verbose: bool,
     meta: HostPolicyMeta,
 ) -> Result<(), u8> {
+    eprintln!("cache hit");
     emit_envelope(
         profile,
         json,

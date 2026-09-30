@@ -490,6 +490,50 @@ pub fn provider_from_base_url(base_url: &str) -> String {
     }
 }
 
+/// Provider and base URL for a plan that does not read a key.
+///
+/// An explicit provider is kept. An omitted provider is the URL host.
+/// A bare Ollama listen URL still gains `/v1`.
+pub fn probe_endpoint_without_key(
+    provider_given: &str,
+    explicit_base_url: Option<&str>,
+) -> (String, String) {
+    let explicit = present_base_url(explicit_base_url).map(str::to_owned);
+    let base_url = normalize_ollama_compat_base(
+        &explicit.unwrap_or_else(|| default_compat_base_url(provider_given, false)),
+    );
+    let provider = if provider_given.is_empty() {
+        provider_from_base_url(&base_url)
+    } else {
+        provider_given.to_owned()
+    };
+    (provider, base_url)
+}
+
+/// Drop userinfo before a base URL is printed.
+///
+/// The cut is the authority's last `@`. Scheme and path stay.
+pub fn redact_base_url(url: &str) -> String {
+    let trimmed = url.trim();
+    let (scheme, after_scheme) = match trimmed.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, trimmed),
+    };
+    let split_at = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..split_at];
+    let rest = &after_scheme[split_at..];
+    let hostport = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority);
+    match scheme {
+        Some(scheme) => format!("{scheme}://{hostport}{rest}"),
+        None => format!("{hostport}{rest}"),
+    }
+}
+
 pub fn looks_cheap(provider: &str, model: &str, base_url: &str) -> bool {
     let provider = provider.to_ascii_lowercase();
     let host = url_host_hint(base_url);
@@ -1507,5 +1551,31 @@ mod tests {
             false,
             present_base_url(Some("http://127.0.0.1:11434")).is_some()
         ));
+    }
+
+    #[test]
+    fn redact_base_url_drops_userinfo() {
+        assert_eq!(
+            redact_base_url("http://user:canact-dry-run-secret@127.0.0.1:1/v1"),
+            "http://127.0.0.1:1/v1"
+        );
+        assert_eq!(
+            redact_base_url("http://127.0.0.1:1/v1"),
+            "http://127.0.0.1:1/v1"
+        );
+        assert_eq!(
+            redact_base_url("http://user:pass@[::1]:9/v1"),
+            "http://[::1]:9/v1"
+        );
+    }
+
+    #[test]
+    fn probe_endpoint_without_key_keeps_named_provider() {
+        let (provider, base) = probe_endpoint_without_key("ollama", Some("http://127.0.0.1:1/v1"));
+        assert_eq!(provider, "ollama");
+        assert_eq!(base, "http://127.0.0.1:1/v1");
+        let (provider, base) = probe_endpoint_without_key("xai", None);
+        assert_eq!(provider, "xai");
+        assert_eq!(base, XAI_BASE_URL);
     }
 }
