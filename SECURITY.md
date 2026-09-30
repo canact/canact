@@ -25,6 +25,7 @@ login store; they are not written to `probes.json`.
 | Supply chain | cargo-deny, Dependabot, CodeQL, Scorecard, FOSSA |
 | Private reports | GitHub Security Advisories, not public issues |
 | Release archives | Cosign `.sigstore.json` plus SLSA `.intoto.jsonl` on the GitHub Release |
+| Release SBOM | `canact-sbom.cdx.json` (CycloneDX JSON) uploaded by the Release workflow |
 | Git release tags | GPG-signed annotated tags (`git verify-tag vX.Y.Z`) |
 
 ## Verifying a GitHub Release archive
@@ -33,6 +34,9 @@ GitHub Release archives include two extra files next to each asset:
 
 - `ASSET.sigstore.json` is a Cosign keyless signature bundle
 - `ASSET.intoto.jsonl` is SLSA build provenance from GitHub Attestations
+
+The Release workflow also uploads `canact-sbom.cdx.json`, a CycloneDX
+JSON SBOM of the tagged source built with the `cli` feature.
 
 Download the archive and both files, then:
 

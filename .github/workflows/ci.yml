@@ -87,6 +87,8 @@ jobs:
       - run: python3 scripts/test_rerun_cancelled_pr_checks.py
       - run: python3 scripts/test_publish_crates.py
       - run: python3 scripts/test_sign_git_tag.py
+      - run: python3 scripts/test_report_scheduled_failure.py
+      - run: python3 scripts/test_stage_cyclonedx_sbom.py
 
   test:
     name: Test (${{ matrix.os }})
