@@ -27,10 +27,13 @@ After a real `canact probe` has written a cache file:
 
 ```bash
 bash examples/probe-from-cache.sh \
-  "${XDG_CACHE_HOME:-$HOME/.cache}/canact/probes.json" \
+  "$(canact cache path)" \
   qwen2.5-coder \
   ollama
 ```
+
+`canact cache path` prints the file this install uses. A clone can use
+`cargo run --locked --features cli -- cache path`.
 
 That path is a cache hit only. It still needs a matching model and
 provider in the file. A miss tries the network.

@@ -320,6 +320,21 @@ pub struct MatrixEntry<'a> {
     pub suite: SuiteTier,
 }
 
+/// One `canact cache list` row. Older suite versions stay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheListRow {
+    /// `profile.model_id`.
+    pub model_id: String,
+    /// Stored provider label, not the family name.
+    pub provider: String,
+    /// Suite tier from the cache key (`policy`, `full`, or `all`).
+    pub suite: SuiteTier,
+    /// `profile.probed_at`, not `cached_at`.
+    pub probed_at: u64,
+    /// `probe_suite_version` is not [`PROBE_SUITE_VERSION`].
+    pub stale: bool,
+}
+
 impl ProbeCache {
     /// Load cache from disk. Returns an empty cache if the file does not exist,
     /// is empty (or only whitespace), or is `{}`.
@@ -954,6 +969,38 @@ impl ProbeCache {
                 .model_id
                 .cmp(&b.profile.model_id)
                 .then_with(|| a.profile.provider.cmp(&b.profile.provider))
+        });
+        rows
+    }
+
+    /// Rows [`Self::load`] kept, including an older suite version and
+    /// rows past the 30-day export TTL.
+    ///
+    /// `provider` uses the same family match as export. `None` or
+    /// whitespace lists every row.
+    pub fn list_rows(&self, provider: Option<&str>) -> Vec<CacheListRow> {
+        let filter = provider.map(str::trim).filter(|s| !s.is_empty());
+        let mut rows: Vec<CacheListRow> = self
+            .profiles
+            .iter()
+            .filter(|(_, entry)| match filter {
+                Some(want) => providers_equivalent(&entry.profile.provider, want),
+                None => true,
+            })
+            .map(|(key, entry)| CacheListRow {
+                model_id: entry.profile.model_id.clone(),
+                provider: entry.profile.provider.clone(),
+                suite: key_suite(key),
+                probed_at: entry.profile.probed_at,
+                stale: entry.probe_suite_version != PROBE_SUITE_VERSION,
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            a.model_id
+                .cmp(&b.model_id)
+                .then_with(|| a.provider.cmp(&b.provider))
+                .then_with(|| a.suite.as_str().cmp(b.suite.as_str()))
+                .then_with(|| a.probed_at.cmp(&b.probed_at))
         });
         rows
     }

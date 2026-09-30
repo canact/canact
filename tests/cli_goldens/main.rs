@@ -1774,3 +1774,207 @@ fn matrix_without_provider_skips_stale_and_keeps_current() {
     assert_eq!(rows.len(), 1, "{value}");
     assert_eq!(rows[0]["model"], "grok-4-fast-non-reasoning", "{value}");
 }
+
+fn cache_list_profile(model: &str, provider: &str, probed_at: u64) -> CapabilityProfile {
+    let mut profile = CapabilityProfile::unprobed(model, provider);
+    profile.probed_at = probed_at;
+    profile
+}
+
+fn default_cache_path_for_home(home: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    let root = {
+        let _ = home;
+        dirs::cache_dir().expect("cache dir")
+    };
+    #[cfg(target_os = "macos")]
+    let root = home.join("Library").join("Caches");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let root = home.join(".cache");
+    root.join("canact").join("probes.json")
+}
+
+#[test]
+fn cache_path_prints_default_without_creating_it() {
+    let home = tempfile::tempdir().expect("home");
+    let expected = default_cache_path_for_home(home.path());
+    let parent = expected.parent().expect("parent");
+    let parent_before = parent.exists();
+    let before = std::fs::metadata(&expected).ok();
+    let out = canact()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env_remove("XDG_CACHE_HOME")
+        .args(["cache", "path"])
+        .output()
+        .expect("spawn cache path");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let line = stdout.trim_end_matches(['\r', '\n']);
+    assert!(!line.contains('\n'), "{stdout}");
+    let suffix = format!("canact{}probes.json", std::path::MAIN_SEPARATOR);
+    assert!(
+        line.ends_with(&suffix) || line.ends_with("canact/probes.json"),
+        "{line}"
+    );
+    assert_eq!(line, expected.to_str().expect("utf8 path"), "{stdout}");
+    match (before, std::fs::metadata(&expected).ok()) {
+        (None, None) => {}
+        (Some(before), Some(after)) => {
+            assert_eq!(before.len(), after.len());
+            assert_eq!(before.modified().ok(), after.modified().ok());
+        }
+        (before, after) => {
+            panic!("cache file existence changed: before={before:?} after={after:?}")
+        }
+    }
+    if !parent_before {
+        assert!(!parent.exists(), "cache path created {}", parent.display());
+    }
+}
+
+#[test]
+fn cache_path_expands_tilde() {
+    let home = tempfile::tempdir().expect("home");
+    let expected = home.path().join("canact-cache-path-test.json");
+    let out = canact()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .args(["cache", "path", "--cache", "~/canact-cache-path-test.json"])
+        .output()
+        .expect("spawn cache path");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let line = stdout.trim_end_matches(['\r', '\n']);
+    assert_eq!(line, expected.to_str().expect("utf8 path"), "{stdout}");
+    assert!(!expected.exists(), "tilde path was created");
+}
+
+#[test]
+fn cache_list_missing_file_exits_0() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("missing-probes.json");
+    let missing_text = missing.to_str().expect("utf8");
+    let out = canact()
+        .args(["cache", "list", "--cache", missing_text])
+        .output()
+        .expect("spawn cache list");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stderr={stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("no cache file:"), "{stderr}");
+    assert!(stderr.contains(missing_text), "{stderr}");
+}
+
+#[test]
+fn cache_list_prints_current_and_marks_stale() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put_with_settings(
+        cache_list_profile("cache-list-current", "ollama", 1_700_000_000),
+        "unset",
+        PROBE_SUITE_VERSION,
+        false,
+        false,
+        None,
+    );
+    cache.put_with_settings(
+        cache_list_profile("cache-list-old", "ollama", 1_600_000_000),
+        "unset",
+        PROBE_SUITE_VERSION - 1,
+        false,
+        false,
+        None,
+    );
+    for entry in cache.profiles.values_mut() {
+        if entry.profile.model_id == "cache-list-old" {
+            entry.cached_at = 1;
+        }
+    }
+    cache.save(&cache_path).expect("save");
+    let loaded = ProbeCache::load(&cache_path).expect("load");
+    let old = loaded
+        .profiles
+        .values()
+        .find(|entry| entry.profile.model_id == "cache-list-old")
+        .expect("old row");
+    assert_eq!(old.profile.probed_at, 1_600_000_000);
+    assert_ne!(old.cached_at, old.profile.probed_at);
+
+    let out = canact()
+        .args([
+            "cache",
+            "list",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn cache list");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let current = stdout
+        .lines()
+        .find(|line| line.starts_with("cache-list-current\t"))
+        .unwrap_or_else(|| panic!("missing current row: {stdout}"));
+    let stale = stdout
+        .lines()
+        .find(|line| line.starts_with("cache-list-old\t"))
+        .unwrap_or_else(|| panic!("missing old row: {stdout}"));
+    let current_fields: Vec<&str> = current.split('\t').collect();
+    let stale_fields: Vec<&str> = stale.split('\t').collect();
+    assert_eq!(
+        current_fields,
+        ["cache-list-current", "ollama", "full", "1700000000"]
+    );
+    assert_eq!(
+        stale_fields,
+        ["cache-list-old", "ollama", "full", "1600000000", "stale"]
+    );
+    assert!(!current.contains("stale"), "{current}");
+}
+
+#[test]
+fn cache_list_provider_family() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(cache_list_profile(
+        "cache-list-loopback",
+        "localhost:11434",
+        1_700_000_001,
+    ));
+    cache.put(cache_list_profile(
+        "cache-list-port1234",
+        "127.0.0.1:1234",
+        1_700_000_002,
+    ));
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .args([
+            "cache",
+            "list",
+            "--provider",
+            "ollama",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn cache list");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    let line = stdout
+        .lines()
+        .find(|line| line.starts_with("cache-list-loopback\t"))
+        .unwrap_or_else(|| panic!("missing loopback row: {stdout}"));
+    let fields: Vec<&str> = line.split('\t').collect();
+    assert_eq!(fields[1], "localhost:11434", "{line}");
+    assert_eq!(fields[3], "1700000001", "{line}");
+    assert!(!stdout.contains("127.0.0.1:1234"), "{stdout}");
+    assert!(!stdout.contains("cache-list-port1234"), "{stdout}");
+}

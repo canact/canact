@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, McpServerOptions,
+    CacheListRow, CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, McpServerOptions,
     OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, SuiteTier,
     claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
     is_groq_provider_label, list_model_ids, looks_cheap, missing_cloud_key_message,
@@ -34,8 +34,42 @@ enum Command {
     Export(ExportArgs),
     /// Plumbing table from cached probes (pass / degraded / fail / skipped, no rank)
     Matrix(MatrixArgs),
+    /// Print the cache path or list cached models
+    Cache(CacheArgs),
     /// Serve MCP stdio (`probe_model` returns host-policy JSON, not TTFT)
     Mcp(McpArgs),
+}
+
+#[derive(clap::Args)]
+struct CacheArgs {
+    #[command(subcommand)]
+    command: CacheCommand,
+}
+
+#[derive(Subcommand)]
+enum CacheCommand {
+    /// Print the cache file path. Does not create the file.
+    Path(CachePathArgs),
+    /// List cached probes, including an older suite version.
+    List(CacheListArgs),
+}
+
+#[derive(clap::Args)]
+struct CachePathArgs {
+    /// Probe cache file [default: platform cache dir / canact / probes.json]
+    #[arg(long)]
+    cache: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct CacheListArgs {
+    /// Provider whose cached models are listed (omit for every provider)
+    #[arg(long)]
+    provider: Option<String>,
+
+    /// Probe cache file [default: platform cache dir / canact / probes.json]
+    #[arg(long)]
+    cache: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -176,6 +210,10 @@ fn main() -> ExitCode {
             Err(code) => ExitCode::from(code),
         },
         Command::Matrix(args) => match run_matrix(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
+        Command::Cache(args) => match run_cache(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
@@ -405,6 +443,47 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         print!("{}", first.body);
     }
     Ok(())
+}
+
+fn run_cache(args: CacheArgs) -> Result<(), u8> {
+    match args.command {
+        CacheCommand::Path(args) => {
+            let path = resolve_user_path(args.cache, default_cache_path());
+            println!("{}", path.display());
+            Ok(())
+        }
+        CacheCommand::List(args) => run_cache_list(args),
+    }
+}
+
+fn run_cache_list(args: CacheListArgs) -> Result<(), u8> {
+    let path = resolve_user_path(args.cache, default_cache_path());
+    if !path.exists() {
+        eprintln!("no cache file: {}", path.display());
+        return Ok(());
+    }
+    let cache = ProbeCache::load(&path).map_err(|err| {
+        eprintln!("error: failed to load cache {}: {err}", path.display());
+        1u8
+    })?;
+    for row in cache.list_rows(args.provider.as_deref()) {
+        println!("{}", format_cache_list_line(&row));
+    }
+    Ok(())
+}
+
+fn format_cache_list_line(row: &CacheListRow) -> String {
+    let mut line = format!(
+        "{}\t{}\t{}\t{}",
+        row.model_id,
+        row.provider,
+        row.suite.as_str(),
+        row.probed_at
+    );
+    if row.stale {
+        line.push_str("\tstale");
+    }
+    line
 }
 
 fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
