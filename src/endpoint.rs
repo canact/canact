@@ -445,6 +445,62 @@ pub fn present_base_url(raw: Option<&str>) -> Option<&str> {
     raw.map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// `Some(message)` when a present base URL is not http(s) with a host.
+///
+/// Missing, empty, and whitespace-only return `None` (the provider default).
+pub fn invalid_explicit_base_url(raw: Option<&str>) -> Option<String> {
+    let url = present_base_url(raw)?;
+    if explicit_base_url_is_http_with_host(url) {
+        None
+    } else {
+        Some("invalid base URL (need http or https with a host)".to_owned())
+    }
+}
+
+/// `http` or `https` with a host. Authority cut matches [`redact_base_url`].
+fn explicit_base_url_is_http_with_host(url: &str) -> bool {
+    let Some((scheme, after_scheme)) = url.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    let end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..end];
+    let hostport = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority);
+    !host_before_port(hostport).is_empty()
+}
+
+fn host_before_port(hostport: &str) -> &str {
+    if let Some(rest) = hostport.strip_prefix('[') {
+        let Some((host, after)) = rest.split_once(']') else {
+            return "";
+        };
+        if after.is_empty() {
+            return host;
+        }
+        let Some(port) = after.strip_prefix(':') else {
+            return "";
+        };
+        if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
+            return host;
+        }
+        return "";
+    }
+    if let Some((host, port)) = hostport.rsplit_once(':')
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+    {
+        return host;
+    }
+    hostport
+}
+
 /// After an explicit base URL is known, re-resolve the key when
 /// the user omitted `--provider` / MCP `provider`.
 pub fn finalize_key_route(
@@ -1551,6 +1607,47 @@ mod tests {
             false,
             present_base_url(Some("http://127.0.0.1:11434")).is_some()
         ));
+    }
+
+    #[test]
+    fn invalid_explicit_base_url_rejects_non_http_host() {
+        assert_eq!(invalid_explicit_base_url(None), None);
+        assert_eq!(invalid_explicit_base_url(Some("")), None);
+        assert_eq!(invalid_explicit_base_url(Some("  ")), None);
+        assert_eq!(invalid_explicit_base_url(Some(" \t ")), None);
+        let msg = "invalid base URL (need http or https with a host)";
+        assert_eq!(
+            invalid_explicit_base_url(Some("not a url")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("ftp://example.com/v1")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("https://")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://user:pass@")).as_deref(),
+            Some(msg)
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://127.0.0.1:9/v1")),
+            None
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("https://api.openai.com/v1")),
+            None
+        );
+        assert_eq!(
+            invalid_explicit_base_url(Some("http://user:pass@127.0.0.1:9/v1")),
+            None
+        );
     }
 
     #[test]

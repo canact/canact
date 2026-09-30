@@ -6,12 +6,12 @@ use std::process::ExitCode;
 use canact::{
     CacheListRow, CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, McpServerOptions,
     OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, ProbeTool,
-    SuiteTier, claude_code_access_token, finalize_key_route, is_bedrock_provider_label,
-    is_groq_provider_label, list_model_ids, looks_cheap, missing_cloud_key_message,
-    missing_model_message, planned_probe_names, present_base_url, probe_endpoint_without_key,
-    probe_tools_digest, redact_base_url, refuse_cloud_without_key, resolve_api_key_from,
-    resolve_host_catalog, run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
-    xai_oauth_access_token,
+    SuiteTier, claude_code_access_token, finalize_key_route, invalid_explicit_base_url,
+    is_bedrock_provider_label, is_groq_provider_label, list_model_ids, looks_cheap,
+    missing_cloud_key_message, missing_model_message, planned_probe_names, present_base_url,
+    probe_endpoint_without_key, probe_tools_digest, redact_base_url, refuse_cloud_without_key,
+    resolve_api_key_from, resolve_host_catalog, run_mcp_stdio_with, should_load_claude_code_login,
+    should_load_xai_oauth, xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -257,6 +257,10 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     };
     if args.dry_run {
         return run_dry_run(&args);
+    }
+    if let Some(msg) = invalid_explicit_base_url(args.base_url.as_deref()) {
+        eprintln!("error: {msg}");
+        return Err(1);
     }
     let provider_hint = args
         .provider
@@ -614,6 +618,10 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("");
+    if let Some(msg) = invalid_explicit_base_url(args.base_url.as_deref()) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
     let (provider, base_url) = probe_endpoint_without_key(provider_hint, args.base_url.as_deref());
     let base_url = redact_base_url(&base_url);
     let probes = planned_probe_names(suite, args.vision);
