@@ -884,11 +884,19 @@ fn load_caller_tools(path: Option<&std::path::Path>) -> Result<Option<Vec<ProbeT
     // would be reported as the wrong type.
     let value: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|err| format!("failed to parse tools file {}: {err}", path.display()))?;
-    if !value.is_array() {
+    let Some(items) = value.as_array() else {
         return Err(format!(
             "failed to parse tools file {}: expected a JSON array of tools",
             path.display()
         ));
+    };
+    for (index, item) in items.iter().enumerate() {
+        if !item.is_object() {
+            return Err(format!(
+                "failed to parse tools file {}: item {index} must be an object with name, description, and parameters",
+                path.display()
+            ));
+        }
     }
     let rows: Vec<CallerToolFile> = serde_json::from_value(value)
         .map_err(|err| format!("failed to parse tools file {}: {err}", path.display()))?;
@@ -985,6 +993,19 @@ mod tests {
         std::fs::write(&path, "{}\n").expect("write");
         let err = super::load_caller_tools(Some(&path)).expect_err("object");
         assert!(err.contains("expected a JSON array of tools"), "{err}");
+    }
+
+    #[test]
+    fn tools_array_string_asks_for_an_object() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(&path, "[\"read_file\"]\n").expect("write");
+        let err = super::load_caller_tools(Some(&path)).expect_err("string item");
+        assert!(
+            err.contains("item 0 must be an object with name, description, and parameters"),
+            "{err}"
+        );
+        assert!(!err.contains("CallerToolFile"), "{err}");
     }
 
     #[test]
