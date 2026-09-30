@@ -27,7 +27,6 @@ cargo install canact --locked --features cli
 ```
 
 Prebuilt archives ship on GitHub Releases (macOS, Linux, Windows x64).
-After `v0.1.1`:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -60,6 +59,10 @@ Rust 1.95.
 ```bash
 canact probe --provider ollama --model llama3.2:3b --cheap --json
 ```
+
+The built-in Ollama URL is `http://127.0.0.1:11434/v1`. That string
+is the crate constant `OLLAMA_BASE_URL`. Nothing reads an environment
+variable of that name. Pass `--base-url` to use a different URL.
 
 `--cheap` is `--suite=policy` (host-policy fields, 4k ladder).
 `--full` adds sequencing and the 8k/16k ladder. `--suite=all`
@@ -115,15 +118,18 @@ canact matrix
 
 `canact export --aider` writes `.aider.model.settings.yml` and `.aider.model.metadata.json` into `--dir` (the current directory when `--dir` is omitted). Aider loads those two files from the repo. `canact export --cline` writes `cline.modelinfo.json` in that same directory. Paste that file into Cline. Cline does not load it from the repo. `canact export --all` writes all three files and leaves stdout empty. Each `wrote` line is on stderr. Overlay windows are the advertised context stored on the cache row, or the value passed to `--advertised-context`.
 
-`canact matrix` prints a plumbing table (pass / degraded / fail /
-skipped) from the cache. `--provider` is optional; omit it to include
+`canact matrix` prints pretty JSON from the cache. Each cell is
+`pass`, `degraded`, `fail`, or `skipped`. There is no `--json` flag
+and no human table. `--provider` is optional; omit it to include
 every cached provider. It does not call a model and has no composite
 score. `skipped` means the dimension was not measured (cheap policy
 rows for `constraintPlacement`; policy rows for `maxOutputTokens`).
 
 `canact mcp` is a stdio MCP server. The tool is `probe_model`. It
-returns the same host-policy JSON as `canact probe --json`. Pass
-`api_key_env` (the name of an env var), never the key itself.
+returns the same host-policy JSON as `canact probe --json`. Start it
+with `--api-key-env` (the env var name), `--base-url`,
+`--allow-base-url`, and `--allow-cache`. The tool must not receive
+a raw key.
 
 ## Library
 
@@ -142,7 +148,32 @@ and `needs_json_repair()` on the profile. `ProbeError::Auth` aborts
 the suite. Do not persist a Transient run. `ProbeCache` writes the
 on-disk `probes.json` file.
 
+`OpenAiCompatClient` needs `runtime` and `openai`. The pin above
+stays `runtime` only, which is enough for `ProbeRunner`. The key
+below is `None` for local Ollama. Do not put a raw key in source.
+
+```toml
+canact = { version = "0.9", default-features = false, features = ["runtime", "openai"] }
+```
+
+```rust
+use canact::{CatalogPriors, OpenAiCompatClient, ProbeRunner};
+
+let client = OpenAiCompatClient::new(
+    "http://127.0.0.1:11434/v1",
+    None,
+    "llama3.2:3b",
+    "ollama",
+    CatalogPriors::default(),
+)
+.expect("client");
+let _runner = ProbeRunner::new_throttled(client);
+```
+
 ## Host policy
+
+The table is the fields a host branches on. The other envelope
+fields are in [Read the card](docs/read-the-card.md).
 
 | Field | Meaning |
 |-------|---------|

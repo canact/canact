@@ -1,13 +1,13 @@
-//! Print a host-policy JSON envelope from an in-memory profile.
+//! Print a policy-suite host-policy JSON envelope.
 //!
-//! No network and no API key.
+//! Sequencing is skipped, so `agentLoop` is null. No network and no API key.
 
-include!("include/sample_profile.rs");
+include!("include/policy_sample.rs");
 
 use canact::HostPolicyMeta;
 
 fn main() {
-    let profile = sample_profile();
+    let profile = policy_sample();
     let meta = HostPolicyMeta::for_suite(true, false, canact::SuiteTier::Policy, Some(40_960));
     let envelope = profile.host_policy_envelope_with(meta);
     println!(

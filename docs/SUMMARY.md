@@ -5,9 +5,10 @@
 # Using canact
 
 - [Getting started](getting-started.md)
-- [Architecture](architecture.md)
+- [Read the card](read-the-card.md)
 
 # Project
 
+- [Architecture](architecture.md)
 - [Contributing](contributing.md)
 - [Security](security.md)

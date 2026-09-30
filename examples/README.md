@@ -8,9 +8,9 @@ These runs stay on disk. They do not call a model.
 cargo run --locked --example host_policy
 ```
 
-Prints the same envelope shape as `canact probe --json` (cacheable,
-`fromCache`, `maxTools`, `recommendedContextTokens` as a verified
-floor, not a host window).
+Prints a policy-suite envelope. `suite` is `policy`, `agentLoop` is
+null, and `probes.multiTurnTaskSequencing.status` is `skipped`.
+The overlay example keeps a separate Strong sequencing profile.
 
 ## Aider and Cline overlays
 
