@@ -820,13 +820,13 @@ async fn xml_skipped_when_native_tool_calling_is_strong() {
         .expect("run");
     assert_eq!(profile.tool_calling.level, CapabilityLevel::Strong);
     assert!(
-        profile.xml_tool_calling.details.contains("Not tested"),
-        "XML probe should be marked not tested when native is Strong, got: {}",
+        profile.xml_tool_calling.details.contains("Inferred Strong"),
+        "XML row should say the Strong score is inferred, got: {}",
         profile.xml_tool_calling.details
     );
     assert_eq!(
         profile.xml_tool_calling.details,
-        "Not tested (native tool calling is Strong; XML fallback unused)"
+        "Inferred Strong because native tool calling is Strong; XML fallback unused"
     );
     assert_eq!(profile.xml_tool_calling.level, CapabilityLevel::Strong);
     assert_eq!(profile.xml_tool_calling.score, 1.0);

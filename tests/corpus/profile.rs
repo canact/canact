@@ -1062,7 +1062,8 @@ fn human_table_omits_constraint_placement_when_unprobed_or_skipped() {
 }
 
 const EXPENSIVE_SKIP: &str = "Skipped: free-tier model, conserving API budget";
-const XML_INFERRED: &str = "Not tested (native tool calling is Strong; XML fallback unused)";
+const XML_INFERRED: &str =
+    "Inferred Strong because native tool calling is Strong; XML fallback unused";
 
 fn cheap_skip_probe(name: &str) -> ProbeResult {
     ProbeResult {
@@ -1165,6 +1166,19 @@ fn xml_inferred_strong_is_not_skipped() {
     );
     let value = profile.host_policy_envelope();
     assert_eq!(value["probes"]["xmlToolCalling"]["status"], "completed");
+    let table = profile.format_human_table(false);
+    let xml_line = table
+        .lines()
+        .find(|line| line.contains("Xml Tool Calling"))
+        .unwrap_or("");
+    assert!(
+        xml_line.contains("Strong") && !xml_line.contains("not probed"),
+        "{table}"
+    );
+    assert!(
+        table.contains(XML_INFERRED) && !table.contains("Not tested"),
+        "{table}"
+    );
 }
 
 #[test]
