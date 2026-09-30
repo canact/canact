@@ -16,7 +16,4 @@ if [[ ! -f $cache ]]; then
   exit 2
 fi
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-cd "$root"
-cargo run --locked --features cli --bin canact -- \
-  probe --json --model "$model" --provider "$provider" --cache "$cache"
+canact probe --json --model "$model" --provider "$provider" --cache "$cache"

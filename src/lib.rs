@@ -8,8 +8,8 @@ mod report;
 mod types;
 
 pub use cache::{
-    CACHE_TTL_SECS, CacheEntry, DEFAULT_PROBE_EFFORT, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION,
-    MatrixEntry, PROBE_SUITE_VERSION, ProbeCache,
+    CACHE_TTL_SECS, CacheEntry, CacheListRow, DEFAULT_PROBE_EFFORT, DEFAULT_SKIP_EXPENSIVE,
+    DEFAULT_VISION, MatrixEntry, PROBE_SUITE_VERSION, ProbeCache,
 };
 pub use endpoint::{
     ANTHROPIC_BASE_URL, BEDROCK_BASE_URL, GROK_BUILD_BASE_URL, GROQ_BASE_URL, KeyRoute,
