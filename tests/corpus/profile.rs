@@ -1414,3 +1414,27 @@ fn missing_model_message_lists_all_ids() {
     assert!(msg.contains("model-15"), "{msg}");
     assert!(!msg.contains("..."), "{msg}");
 }
+
+#[test]
+fn cheap_sample_envelope_matches_policy_suite() {
+    let mut profile = CapabilityProfile::unprobed("llama3.2:3b", "ollama");
+    profile.multi_turn_task_sequencing = ProbeResult {
+        name: "multi_turn_task_sequencing".to_owned(),
+        score: 0.5,
+        max_score: 1.0,
+        level: CapabilityLevel::Medium,
+        details: "Skipped: policy suite (use --suite=full or --suite=all)".to_owned(),
+    };
+    let envelope = profile.host_policy_envelope_with(HostPolicyMeta::for_suite(
+        true,
+        false,
+        canact::SuiteTier::Policy,
+        Some(40_960),
+    ));
+    assert_eq!(envelope["suite"], "policy", "{envelope}");
+    assert!(envelope["agentLoop"].is_null(), "{envelope}");
+    assert_eq!(
+        envelope["probes"]["multiTurnTaskSequencing"]["status"], "skipped",
+        "{envelope}"
+    );
+}

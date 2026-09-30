@@ -122,7 +122,16 @@ pub struct ProbeRunner<C: ProbeClient> {
 }
 
 impl<C: ProbeClient> ProbeRunner<C> {
-    /// Create a new probe runner targeting the given client (paid knobs).
+    /// Full suite and paid concurrency (64).
+    ///
+    /// `.suite()` changes the suite only. `.throttled()` changes
+    /// concurrency only. `.cheap()` and `.full()` set both.
+    ///
+    /// ```
+    /// use canact::{MockLlm, ProbeRunner};
+    ///
+    /// let _runner = ProbeRunner::new(MockLlm::new("m", "ollama"));
+    /// ```
     pub fn new(client: C) -> Self {
         Self {
             client,
@@ -132,7 +141,13 @@ impl<C: ProbeClient> ProbeRunner<C> {
         }
     }
 
-    /// Create a probe runner with throttled concurrency for free-tier models.
+    /// Policy suite and free concurrency (3).
+    ///
+    /// ```
+    /// use canact::{MockLlm, ProbeRunner};
+    ///
+    /// let _runner = ProbeRunner::new_throttled(MockLlm::new("m", "ollama"));
+    /// ```
     pub fn new_throttled(client: C) -> Self {
         Self {
             client,

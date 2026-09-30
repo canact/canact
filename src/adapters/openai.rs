@@ -48,6 +48,21 @@ impl std::fmt::Debug for OpenAiCompatClient {
 
 impl OpenAiCompatClient {
     /// Bind a wiremux client to `{base}` (OpenAI-compat `/v1` or a mock).
+    ///
+    /// This type needs crate features `runtime` and `openai`.
+    ///
+    /// ```
+    /// use canact::{CatalogPriors, OpenAiCompatClient};
+    ///
+    /// let _client = OpenAiCompatClient::new(
+    ///     "http://127.0.0.1:11434/v1",
+    ///     None,
+    ///     "llama3.2:3b",
+    ///     "ollama",
+    ///     CatalogPriors::default(),
+    /// )
+    /// .expect("client");
+    /// ```
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,

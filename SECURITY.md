@@ -56,4 +56,5 @@ maintainer GitHub account
 ```bash
 git fetch --tags
 git verify-tag v0.2.0
+git verify-tag v0.9.0
 ```

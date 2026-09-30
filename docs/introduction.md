@@ -17,3 +17,6 @@ template, and this tool schema, then writes host policy.
 Default features are empty. A library pin uses
 `default-features = false` plus `runtime`. The CLI and MCP server
 need `--features cli`.
+
+[Read the card](read-the-card.md) defines host, host policy, the
+fixed probe tool set, the context ladder, and the envelope.

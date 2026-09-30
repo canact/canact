@@ -39,6 +39,10 @@ MSRV is Rust 1.95.
 canact probe --provider ollama --model llama3.2:3b --cheap --json
 ```
 
+The built-in Ollama URL is `http://127.0.0.1:11434/v1`. That string
+is the crate constant `OLLAMA_BASE_URL`. Nothing reads an environment
+variable of that name. Pass `--base-url` to use a different URL.
+
 `--cheap` is `--suite=policy` (host-policy fields, 4k ladder).
 `--full` adds sequencing and the 8k/16k ladder. `--suite=all`
 adds diagnostics.
@@ -68,6 +72,8 @@ cache, or the network.
 Auth, a missing model, and connect failures abort
 the suite.
 
-`--json` prints the host-policy envelope. Dry runs that do not
-call a model live in the repo [`examples/`](https://github.com/canact/canact/tree/main/examples)
+`--json` prints the host-policy envelope. Field definitions and
+the rest of that object are in [Read the card](read-the-card.md).
+Dry runs that do not call a model live in the repo
+[`examples/`](https://github.com/canact/canact/tree/main/examples)
 directory.
