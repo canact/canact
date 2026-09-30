@@ -28,6 +28,41 @@ const PROMOTED_SKIP: &str = "Skipped: policy suite (use --suite=full or --suite=
 const DIAGNOSTIC_SKIP: &str = "Skipped: diagnostic suite (use --suite=all)";
 const ONE_SHOT_SKIP: &str = "Skipped: one_shot_tool_plan is not a host-policy signal";
 
+/// Planner order for this suite, not join completion order.
+///
+/// `vision` is the caller's decision.
+pub fn planned_probe_names(suite: SuiteTier, vision: bool) -> Vec<&'static str> {
+    let mut names = vec![
+        "tool_calling",
+        "json_output",
+        "instruction_following",
+        "search_replace",
+        "unified_diff",
+        "complex_tool_calling",
+        "nested_arguments",
+        "tool_selection",
+        "streaming_tool_calls",
+        "parallel_tool_scale",
+        "context_faithfulness",
+    ];
+    if suite.run_promoted_expensive() {
+        names.push("multi_turn_task_sequencing");
+    }
+    if suite.run_diagnostics() {
+        names.extend([
+            "code_syntax",
+            "max_tokens_compliance",
+            "system_message_adherence",
+            "token_efficiency",
+            "multi_turn_memory",
+        ]);
+    }
+    if vision {
+        names.push("vision");
+    }
+    names
+}
+
 /// Outcome of a probe suite run, including whether the profile is cacheable.
 #[derive(Debug, Clone)]
 pub struct ProbeRun {
@@ -571,5 +606,56 @@ pub fn resolve_probe(
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod planned_probe_names_tests {
+    use super::planned_probe_names;
+    use crate::types::SuiteTier;
+
+    const POLICY: &[&str] = &[
+        "tool_calling",
+        "json_output",
+        "instruction_following",
+        "search_replace",
+        "unified_diff",
+        "complex_tool_calling",
+        "nested_arguments",
+        "tool_selection",
+        "streaming_tool_calls",
+        "parallel_tool_scale",
+        "context_faithfulness",
+    ];
+
+    #[test]
+    fn planned_probe_names_policy_matches_runner_order() {
+        let names = planned_probe_names(SuiteTier::Policy, false);
+        assert_eq!(names, POLICY);
+        assert!(!names.contains(&"vision"));
+        assert!(!names.contains(&"one_shot_tool_plan"));
+        assert!(!names.contains(&"multi_turn_task_sequencing"));
+        assert!(!names.contains(&"token_efficiency"));
+    }
+
+    #[test]
+    fn planned_probe_names_policy_vision_includes_vision() {
+        let names = planned_probe_names(SuiteTier::Policy, true);
+        assert!(names.contains(&"vision"));
+        assert_eq!(&names[..POLICY.len()], POLICY);
+    }
+
+    #[test]
+    fn planned_probe_names_all_includes_diagnostics_not_one_shot() {
+        let names = planned_probe_names(SuiteTier::All, false);
+        assert!(names.contains(&"token_efficiency"));
+        assert!(names.contains(&"system_message_adherence"));
+        assert!(names.contains(&"code_syntax"));
+        assert!(names.contains(&"max_tokens_compliance"));
+        assert!(names.contains(&"multi_turn_memory"));
+        assert!(names.contains(&"multi_turn_task_sequencing"));
+        assert!(!names.contains(&"one_shot_tool_plan"));
+        assert!(!names.contains(&"vision"));
+        assert!(!names.contains(&"xml_tool_calling"));
     }
 }
