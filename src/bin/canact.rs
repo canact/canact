@@ -879,8 +879,18 @@ fn load_caller_tools(path: Option<&std::path::Path>) -> Result<Option<Vec<ProbeT
         return Ok(None);
     };
     let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to read tools file {}: {err}", path.display()))?;
+    // A Vec sees `{` and stops, so invalid JSON that starts with `{`
+    // would be reported as the wrong type.
+    let value: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|err| format!("failed to parse tools file {}: {err}", path.display()))?;
-    let rows: Vec<CallerToolFile> = serde_json::from_str(&raw)
+    if !value.is_array() {
+        return Err(format!(
+            "failed to parse tools file {}: expected a JSON array of tools",
+            path.display()
+        ));
+    }
+    let rows: Vec<CallerToolFile> = serde_json::from_value(value)
         .map_err(|err| format!("failed to parse tools file {}: {err}", path.display()))?;
     Ok(Some(
         rows.into_iter()
@@ -957,6 +967,36 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{cli_explicit_base_url, expand_tilde};
+
+    #[test]
+    fn broken_tools_object_reports_json_syntax() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(&path, "{not-json\n").expect("write");
+        let err = super::load_caller_tools(Some(&path)).expect_err("broken object");
+        assert!(err.contains("key must be a string"), "{err}");
+        assert!(!err.contains("expected a sequence"), "{err}");
+    }
+
+    #[test]
+    fn tools_json_object_asks_for_an_array() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(&path, "{}\n").expect("write");
+        let err = super::load_caller_tools(Some(&path)).expect_err("object");
+        assert!(err.contains("expected a JSON array of tools"), "{err}");
+    }
+
+    #[test]
+    fn empty_tools_array_loads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(&path, "[]\n").expect("write");
+        let tools = super::load_caller_tools(Some(&path))
+            .expect("empty array")
+            .expect("some");
+        assert!(tools.is_empty());
+    }
     use canact::{looks_cheap, resolve_api_key_from, should_load_xai_oauth};
     use std::path::PathBuf;
 
