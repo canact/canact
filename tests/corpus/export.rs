@@ -95,7 +95,7 @@ fn host_overlay_write_cline_json() {
     let info: ClineModelInfo = serde_json::from_str(&body).expect("parse");
     assert_eq!(info.context_window, None);
     assert_eq!(info.max_tokens, None);
-    assert!(info.supports_images);
+    assert_eq!(info.supports_images, Some(true));
 }
 
 #[test]
