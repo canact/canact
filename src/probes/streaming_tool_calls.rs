@@ -551,4 +551,20 @@ mod tests {
             "429 before chunks must be Err, not a completed Weak score; got {result:?}"
         );
     }
+
+    #[tokio::test]
+    async fn streaming_text_then_terminal_error_is_err_not_weak() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::TextDelta {
+                text: "hi".to_string(),
+            }),
+            Err(ProbeError::Transient(
+                "upstream stream ended before a terminal event".into(),
+            )),
+        ]);
+        let err = probe_streaming_tool_calls(&llm)
+            .await
+            .expect_err("text then a stream error must not score Weak");
+        assert!(err.to_string().contains("upstream stream ended"), "{err}");
+    }
 }
