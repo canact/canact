@@ -1287,6 +1287,87 @@ fn export_whitespace_dir_writes_cwd() {
 }
 
 #[test]
+fn export_whitespace_model_is_empty() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("missing.json");
+    let out = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "   ",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--model is empty"), "{stderr}");
+    assert!(!stderr.contains("no cached probe"), "{stderr}");
+}
+
+#[test]
+fn export_whitespace_provider_is_empty() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("missing.json");
+    let out = canact()
+        .args([
+            "export",
+            "--cline",
+            "--model",
+            "weak-tools",
+            "--provider",
+            " \n",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--provider is empty"), "{stderr}");
+    assert!(!stderr.contains("no cached probe"), "{stderr}");
+}
+
+#[test]
+fn export_padded_model_and_provider_still_match() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(cached_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+    ));
+    cache.save(&cache_path).expect("save");
+    let out = canact()
+        .current_dir(dir.path())
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            " weak-tools ",
+            "--provider",
+            " test ",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "padded ids must trim; stderr={stderr}"
+    );
+    assert!(
+        dir.path().join(".aider.model.settings.yml").is_file(),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn export_cline_without_advertised_window_omits_token_fields() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
