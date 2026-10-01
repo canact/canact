@@ -383,6 +383,10 @@ mod tests {
         assert_eq!(finish_from_reason("other"), ProbeFinish::Other);
         assert_eq!(finish_from_reason("STOP"), ProbeFinish::Other);
         assert_eq!(finish_from_reason(""), ProbeFinish::Other);
+        assert_eq!(
+            finish_from_reason("malformed_function_call"),
+            ProbeFinish::Other
+        );
     }
 
     #[test]
