@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.9.3.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.10.0.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -462,10 +462,20 @@ fn ir_request(req: &ProbeRequest) -> IrRequest {
                     items.push(IrItem::Assistant { parts });
                 }
             }
-            ProbeRole::Tool => items.push(IrItem::FunctionOutput {
-                call_id: msg.tool_call_id.clone().unwrap_or_default(),
-                output: content_text(&msg.content),
-            }),
+            ProbeRole::Tool => {
+                // Text stays on `output`. Images stay on `parts` so a
+                // Messages tool_result does not repeat the text.
+                let parts = content_parts(&msg.content)
+                    .into_iter()
+                    .filter(|part| !matches!(part, IrPart::Text(_)))
+                    .collect();
+                items.push(IrItem::FunctionOutput {
+                    call_id: msg.tool_call_id.clone().unwrap_or_default(),
+                    output: content_text(&msg.content),
+                    parts,
+                    is_error: false,
+                });
+            }
         }
     }
     let mut sampling = IrSampling::default();
@@ -479,6 +489,8 @@ fn ir_request(req: &ProbeRequest) -> IrRequest {
                     name: tool.name.clone(),
                     description: tool.description.clone(),
                     parameters: tool.parameters.clone(),
+                    // Probe schemas do not ask for json_schema strict.
+                    strict: None,
                 })
                 .collect(),
         )
@@ -552,7 +564,7 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
             IrStreamEvent::ToolCallEnd => {
                 flush_tool_slots(&mut tool_calls, &mut slots, &mut order);
             }
-            IrStreamEvent::FinishReason { reason } => {
+            IrStreamEvent::FinishReason { reason, .. } => {
                 finish = finish_from_reason(&reason);
             }
             IrStreamEvent::Usage {
@@ -628,7 +640,7 @@ fn stream_chunk(event: IrStreamEvent) -> Option<ProbeStreamChunk> {
             Some(ProbeStreamChunk::ToolCallArgDelta { delta, index })
         }
         IrStreamEvent::ToolCallEnd => Some(ProbeStreamChunk::ToolCallEnd),
-        IrStreamEvent::FinishReason { reason } => Some(ProbeStreamChunk::Finished {
+        IrStreamEvent::FinishReason { reason, .. } => Some(ProbeStreamChunk::Finished {
             finish: finish_from_reason(&reason),
         }),
         _ => None,
@@ -1302,7 +1314,7 @@ mod tests {
         assert_eq!(
             advertised_context_for_model(&models, "grok-4.6"),
             Some(500_000),
-            "wiremux 0.9.3 list_models must read context_window"
+            "wiremux 0.10.0 list_models must read context_window"
         );
     }
 
@@ -1405,6 +1417,53 @@ mod tests {
             ir.items.first(),
             Some(IrItem::User { parts }) if matches!(parts.first(), Some(IrPart::ImageBase64 { .. }))
         ));
+        assert!(matches!(
+            ir.tools.first(),
+            Some(IrTool::Function { strict: None, .. })
+        ));
+    }
+
+    #[test]
+    fn ir_request_tool_text_stays_out_of_parts() {
+        let req = ProbeRequest {
+            messages: vec![ProbeMessage {
+                role: ProbeRole::Tool,
+                content: ProbeContent::Parts(vec![
+                    ProbeContentPart::Text {
+                        text: "file body".into(),
+                    },
+                    ProbeContentPart::ImageBase64 {
+                        media_type: "image/png".into(),
+                        data: "abc".into(),
+                    },
+                ]),
+                tool_calls: None,
+                tool_call_id: Some("call_1".into()),
+            }],
+            tools: Vec::new(),
+            model: "m".into(),
+            temperature: None,
+            max_tokens: None,
+        };
+        let ir = ir_request(&req);
+        match ir.items.first() {
+            Some(IrItem::FunctionOutput {
+                call_id,
+                output,
+                parts,
+                is_error,
+            }) => {
+                assert_eq!(call_id, "call_1");
+                assert_eq!(output, "file body");
+                assert!(!*is_error);
+                assert!(matches!(
+                    parts.as_slice(),
+                    [IrPart::ImageBase64 { media_type, data }]
+                        if media_type == "image/png" && data == "abc"
+                ));
+            }
+            other => panic!("expected tool output, got {other:?}"),
+        }
     }
 
     #[test]

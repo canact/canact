@@ -1176,9 +1176,9 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
-version = "10.4.0"
+version = "11.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
+checksum = "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -2661,9 +2661,9 @@ dependencies = [
 
 [[package]]
 name = "wiremux"
-version = "0.9.3"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37bcdb31f39063890cf922fd3933e5d059d91efa580c7bc2b94faccc9ac4ce0b"
+checksum = "54e781cca422812a325200c8d1fda6ec7b8f67e4bd15e6a72b8dd89fa22da769"
 dependencies = [
  "bytes",
  "futures-util",
@@ -2676,9 +2676,9 @@ dependencies = [
 
 [[package]]
 name = "wiremux-auth"
-version = "0.9.3"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c87a43fc82a93ae6dce81764c9eea83f32f2dab00c85051257d0ce4c3a14fb4b"
+checksum = "2f0923fbebd97587dc51bbab932bbbf2d4828a88e8d55fc3427ae41a741348d9"
 dependencies = [
  "fs4",
  "getrandom 0.4.3",
