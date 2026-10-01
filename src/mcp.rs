@@ -790,15 +790,15 @@ fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
     }
 }
 
+fn first_present_secret(first: Option<String>, second: Option<String>) -> Option<String> {
+    present_secret(first).or_else(|| present_secret(second))
+}
+
 fn anthropic_env_key() -> Option<String> {
-    std::env::var("ANTHROPIC_AUTH_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("ANTHROPIC_API_KEY")
-                .ok()
-                .filter(|s| !s.is_empty())
-        })
+    first_present_secret(
+        std::env::var("ANTHROPIC_AUTH_TOKEN").ok(),
+        std::env::var("ANTHROPIC_API_KEY").ok(),
+    )
 }
 
 fn xai_key_for_route(
@@ -806,11 +806,10 @@ fn xai_key_for_route(
     other_cloud_keys: bool,
     explicit_base_url: bool,
 ) -> Result<Option<String>, String> {
-    if let Some(key) = std::env::var("XAI_API_KEY")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
-    {
+    if let Some(key) = first_present_secret(
+        std::env::var("XAI_API_KEY").ok(),
+        std::env::var("GROK_API_KEY").ok(),
+    ) {
         return Ok(Some(key));
     }
     if should_load_xai_oauth(provider, other_cloud_keys, explicit_base_url) {
@@ -1751,6 +1750,20 @@ mod tests {
             "openai",
         );
         assert_eq!(route.key, None);
+    }
+
+    #[test]
+    fn whitespace_xai_env_does_not_hide_grok_env() {
+        let key = first_present_secret(Some("  \n".into()), Some("grok-real\n".into()));
+        assert_eq!(key.as_deref(), Some("grok-real"));
+    }
+
+    #[test]
+    fn whitespace_only_env_pair_is_absent() {
+        assert_eq!(
+            first_present_secret(Some(" ".into()), Some("\n".into())),
+            None
+        );
     }
 
     #[test]
