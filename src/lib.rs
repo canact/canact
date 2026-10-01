@@ -21,9 +21,9 @@ pub use endpoint::{
     is_grok_build_provider_label, is_groq_cloud_host, is_groq_provider_label,
     is_ollama_compat_base, is_openai_codex_provider_label, is_openai_provider_label,
     is_xai_provider_label, local_provider_base_url, looks_cheap, missing_cloud_key_message,
-    openrouter_default_ok, present_base_url, probe_endpoint_without_key, provider_from_base_url,
-    redact_base_url, refuse_cloud_without_key, resolve_api_key_from, should_load_claude_code_login,
-    should_load_xai_oauth, uses_xai_credentials,
+    openrouter_default_ok, present_base_url, present_secret, probe_endpoint_without_key,
+    provider_from_base_url, redact_base_url, refuse_cloud_without_key, resolve_api_key_from,
+    should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
 };
 pub use error::ProbeError;
 pub use matrix::{PlumbingCell, PlumbingMatrix, PlumbingRow};

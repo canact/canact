@@ -12,9 +12,9 @@ use crate::{
     ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token, finalize_key_route,
     invalid_explicit_base_url, is_anthropic_provider_label, is_bedrock_provider_label,
     is_groq_provider_label, is_openai_codex_provider_label, is_openai_provider_label, looks_cheap,
-    openrouter_default_ok, present_base_url, refuse_cloud_without_key, resolve_api_key_from,
-    resolve_host_catalog, should_load_claude_code_login, should_load_xai_oauth,
-    uses_xai_credentials, xai_oauth_access_token,
+    openrouter_default_ok, present_base_url, present_secret, refuse_cloud_without_key,
+    resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
+    should_load_xai_oauth, uses_xai_credentials, xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -560,7 +560,7 @@ fn load_mcp_route(
 }
 
 fn mcp_env_nonempty(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|s| !s.is_empty())
+    present_secret(std::env::var(name).ok())
 }
 
 fn mcp_refusal_key_error(
@@ -717,6 +717,11 @@ fn mcp_resolve_key_route(
     anthropic: Option<String>,
     provider: &str,
 ) -> KeyRoute {
+    let named_key = present_secret(named_key);
+    let openai = present_secret(openai);
+    let openrouter = present_secret(openrouter);
+    let xai = present_secret(xai);
+    let anthropic = present_secret(anthropic);
     match trim_api_key_env(api_key_env) {
         Some(var) => KeyRoute {
             key: named_key,
@@ -785,15 +790,15 @@ fn mcp_missing_key_error(api_key_env: Option<&str>, provider: &str) -> String {
     }
 }
 
+fn first_present_secret(first: Option<String>, second: Option<String>) -> Option<String> {
+    present_secret(first).or_else(|| present_secret(second))
+}
+
 fn anthropic_env_key() -> Option<String> {
-    std::env::var("ANTHROPIC_AUTH_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("ANTHROPIC_API_KEY")
-                .ok()
-                .filter(|s| !s.is_empty())
-        })
+    first_present_secret(
+        std::env::var("ANTHROPIC_AUTH_TOKEN").ok(),
+        std::env::var("ANTHROPIC_API_KEY").ok(),
+    )
 }
 
 fn xai_key_for_route(
@@ -801,11 +806,10 @@ fn xai_key_for_route(
     other_cloud_keys: bool,
     explicit_base_url: bool,
 ) -> Result<Option<String>, String> {
-    if let Some(key) = std::env::var("XAI_API_KEY")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("GROK_API_KEY").ok().filter(|s| !s.is_empty()))
-    {
+    if let Some(key) = first_present_secret(
+        std::env::var("XAI_API_KEY").ok(),
+        std::env::var("GROK_API_KEY").ok(),
+    ) {
         return Ok(Some(key));
     }
     if should_load_xai_oauth(provider, other_cloud_keys, explicit_base_url) {
@@ -1717,6 +1721,49 @@ mod tests {
         assert_eq!(xai.key.as_deref(), Some("xai-named"));
         assert!(xai.from_xai);
         assert_eq!(xai.default_base_url(""), XAI_BASE_URL);
+    }
+
+    #[test]
+    fn mcp_named_env_key_trims_newline() {
+        let route = mcp_resolve_key_route(
+            Some("OPENAI_API_KEY"),
+            Some("sk-real\n".into()),
+            None,
+            None,
+            None,
+            None,
+            "openai",
+        );
+        assert_eq!(route.key.as_deref(), Some("sk-real"));
+        assert!(!route.from_openrouter);
+    }
+
+    #[test]
+    fn mcp_named_env_whitespace_key_is_absent() {
+        let route = mcp_resolve_key_route(
+            Some("OPENAI_API_KEY"),
+            Some("  ".into()),
+            None,
+            None,
+            None,
+            None,
+            "openai",
+        );
+        assert_eq!(route.key, None);
+    }
+
+    #[test]
+    fn whitespace_xai_env_does_not_hide_grok_env() {
+        let key = first_present_secret(Some("  \n".into()), Some("grok-real\n".into()));
+        assert_eq!(key.as_deref(), Some("grok-real"));
+    }
+
+    #[test]
+    fn whitespace_only_env_pair_is_absent() {
+        assert_eq!(
+            first_present_secret(Some(" ".into()), Some("\n".into())),
+            None
+        );
     }
 
     #[test]
