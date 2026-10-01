@@ -432,13 +432,21 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         eprintln!("error: specify --aider or --cline, or pass --all");
         return Err(1);
     }
+    let model = args.model.trim();
+    let provider = args.provider.trim();
+    if model.is_empty() {
+        eprintln!("error: --model is empty");
+        return Err(1);
+    }
+    if provider.is_empty() {
+        eprintln!("error: --provider is empty");
+        return Err(1);
+    }
     let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
         1u8
     })?;
-    let model = args.model.trim();
-    let provider = args.provider.trim();
     let (profile, cached_advertised) = match args.advertised_context {
         Some(n) => cache
             .find_profile_with_cost_and_advertised(model, provider, Some(n))
