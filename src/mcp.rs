@@ -12,9 +12,9 @@ use crate::{
     ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token, finalize_key_route,
     invalid_explicit_base_url, is_anthropic_provider_label, is_bedrock_provider_label,
     is_groq_provider_label, is_openai_codex_provider_label, is_openai_provider_label, looks_cheap,
-    openrouter_default_ok, present_base_url, refuse_cloud_without_key, resolve_api_key_from,
-    resolve_host_catalog, should_load_claude_code_login, should_load_xai_oauth,
-    uses_xai_credentials, xai_oauth_access_token,
+    openrouter_default_ok, present_base_url, present_secret, refuse_cloud_without_key,
+    resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
+    should_load_xai_oauth, uses_xai_credentials, xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -560,7 +560,7 @@ fn load_mcp_route(
 }
 
 fn mcp_env_nonempty(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|s| !s.is_empty())
+    present_secret(std::env::var(name).ok())
 }
 
 fn mcp_refusal_key_error(
@@ -717,6 +717,11 @@ fn mcp_resolve_key_route(
     anthropic: Option<String>,
     provider: &str,
 ) -> KeyRoute {
+    let named_key = present_secret(named_key);
+    let openai = present_secret(openai);
+    let openrouter = present_secret(openrouter);
+    let xai = present_secret(xai);
+    let anthropic = present_secret(anthropic);
     match trim_api_key_env(api_key_env) {
         Some(var) => KeyRoute {
             key: named_key,
@@ -1717,6 +1722,35 @@ mod tests {
         assert_eq!(xai.key.as_deref(), Some("xai-named"));
         assert!(xai.from_xai);
         assert_eq!(xai.default_base_url(""), XAI_BASE_URL);
+    }
+
+    #[test]
+    fn mcp_named_env_key_trims_newline() {
+        let route = mcp_resolve_key_route(
+            Some("OPENAI_API_KEY"),
+            Some("sk-real\n".into()),
+            None,
+            None,
+            None,
+            None,
+            "openai",
+        );
+        assert_eq!(route.key.as_deref(), Some("sk-real"));
+        assert!(!route.from_openrouter);
+    }
+
+    #[test]
+    fn mcp_named_env_whitespace_key_is_absent() {
+        let route = mcp_resolve_key_route(
+            Some("OPENAI_API_KEY"),
+            Some("  ".into()),
+            None,
+            None,
+            None,
+            None,
+            "openai",
+        );
+        assert_eq!(route.key, None);
     }
 
     #[test]

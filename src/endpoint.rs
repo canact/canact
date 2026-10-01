@@ -261,6 +261,11 @@ pub fn resolve_api_key_from(
     anthropic: Option<String>,
     provider: &str,
 ) -> KeyRoute {
+    let cli = present_secret(cli);
+    let openai = present_secret(openai);
+    let openrouter = present_secret(openrouter);
+    let xai = present_secret(xai);
+    let anthropic = present_secret(anthropic);
     if is_groq_provider_label(provider) || is_bedrock_provider_label(provider) {
         return KeyRoute {
             key: cli.filter(|s| !s.is_empty()),
@@ -443,6 +448,19 @@ fn is_openai_cloud_host(base_url: &str) -> bool {
 /// Present `--base-url` / MCP `base_url` after trim. Whitespace-only is absent.
 pub fn present_base_url(raw: Option<&str>) -> Option<&str> {
     raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Present API key after trim. Whitespace-only is absent.
+pub fn present_secret(raw: Option<String>) -> Option<String> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else if trimmed.len() == raw.len() {
+        Some(raw)
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 /// `Some(message)` when a present base URL is not http(s) with a host.
@@ -1611,6 +1629,38 @@ mod tests {
             false,
             present_base_url(Some("http://127.0.0.1:11434")).is_some()
         ));
+    }
+
+    #[test]
+    fn present_secret_drops_whitespace_only() {
+        assert_eq!(present_secret(Some("  \n".into())), None);
+        assert_eq!(present_secret(None), None);
+    }
+
+    #[test]
+    fn whitespace_cli_key_does_not_override_env() {
+        let route = resolve_api_key_from(
+            Some("   ".into()),
+            None,
+            None,
+            Some("xai-real".into()),
+            None,
+            "",
+        );
+        assert_eq!(route.key.as_deref(), Some("xai-real"));
+    }
+
+    #[test]
+    fn trailing_newline_api_key_is_trimmed() {
+        let route =
+            resolve_api_key_from(Some("sk-real\n".into()), None, None, None, None, "openai");
+        assert_eq!(route.key.as_deref(), Some("sk-real"));
+    }
+
+    #[test]
+    fn whitespace_openai_key_is_absent() {
+        let route = resolve_api_key_from(None, Some(" \t".into()), None, None, None, "");
+        assert_eq!(route.key, None);
     }
 
     #[test]
