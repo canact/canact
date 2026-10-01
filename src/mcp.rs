@@ -334,13 +334,16 @@ async fn probe_model_with_route(
             policy,
         ));
     }
-    let hints = resolve_host_catalog(
+    // Catalog and probe futures embed wiremux client state. Inlined, this
+    // future is ~217KB and overflows the Windows 1MB test stack before a
+    // refused base_url can return.
+    let hints = Box::pin(resolve_host_catalog(
         advertised,
         vision_flag,
         &base_url,
         api_key.as_deref(),
         &model,
-    )
+    ))
     .await;
     let advertised = hints.advertised_context_tokens;
     let vision = hints.supports_vision == Some(true);
@@ -376,19 +379,22 @@ async fn probe_model_with_route(
         supports_tools: None,
     };
     let throttle = looks_cheap(&provider, &model, &base_url);
-    let client = OpenAiCompatClient::new(base_url, api_key, model, provider, catalog)
-        .map_err(|e| e.to_string())?;
-    let mut runner = ProbeRunner::new(client).suite(suite);
-    if throttle {
-        runner = runner.throttled();
-    }
-    if let Some(list) = caller_tools {
-        runner = runner.with_tools(list);
-    }
-    let run = runner.run_detailed().await.map_err(|e| match e {
-        ProbeError::Auth(msg) => format!("authentication error: {msg}"),
-        other => other.to_string(),
-    })?;
+    let run = Box::pin(async move {
+        let client = OpenAiCompatClient::new(base_url, api_key, model, provider, catalog)
+            .map_err(|e| e.to_string())?;
+        let mut runner = ProbeRunner::new(client).suite(suite);
+        if throttle {
+            runner = runner.throttled();
+        }
+        if let Some(list) = caller_tools {
+            runner = runner.with_tools(list);
+        }
+        runner.run_detailed().await.map_err(|e| match e {
+            ProbeError::Auth(msg) => format!("authentication error: {msg}"),
+            other => other.to_string(),
+        })
+    })
+    .await?;
     if let Err(err) = run.persist(&mut cache, &cache_path) {
         eprintln!("warning: failed to save probe cache: {err}");
     }
@@ -2344,6 +2350,22 @@ mod tests {
         probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect(what)
+    }
+
+    #[test]
+    fn probe_model_future_fits_a_one_megabyte_stack() {
+        let args = json!({
+            "model": "gpt-4o",
+            "provider": "openai",
+            "base_url": "https://api.openai.com/v1",
+        });
+        let policy = McpServerOptions::default();
+        let fut = probe_model_with_route(&args, mcp_empty_route(), None, &policy);
+        let size = std::mem::size_of_val(&fut);
+        assert!(
+            size < 128 * 1024,
+            "probe future is {size} bytes; Windows tests overflow near 1MB"
+        );
     }
 
     #[test]
