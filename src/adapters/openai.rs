@@ -1424,6 +1424,52 @@ mod tests {
         assert!(!cacheable);
     }
 
+    #[tokio::test]
+    async fn stream_done_sentinel_is_success() {
+        let body =
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n".to_vec();
+        let base = spawn_http(200, "OK", body);
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let mut saw_text = false;
+        for chunk in chunks {
+            match chunk.expect("done sentinel is a finished stream") {
+                ProbeStreamChunk::TextDelta { text } if text == "hi" => saw_text = true,
+                ProbeStreamChunk::Finished { .. } => {}
+                other => panic!("unexpected chunk {other:?}"),
+            }
+        }
+        assert!(saw_text, "text before [DONE] must arrive");
+    }
+
+    #[tokio::test]
+    async fn stream_empty_finish_reason_is_scored_transient() {
+        let body =
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"\"}]}\n\n"
+                .to_vec();
+        let base = spawn_http(200, "OK", body);
+        let chunks: Vec<_> = client(&base).stream_chat(empty_req()).collect().await;
+        let mut saw_text = false;
+        let mut terminal = None;
+        for chunk in chunks {
+            match chunk {
+                Ok(ProbeStreamChunk::TextDelta { text }) if text == "hi" => saw_text = true,
+                Ok(_) => {}
+                Err(err) => terminal = Some(err),
+            }
+        }
+        assert!(saw_text, "text before the close must still arrive");
+        let err = terminal.expect("empty finish_reason is not terminal");
+        match err {
+            ProbeError::Transient(msg) => {
+                assert!(
+                    msg.contains("upstream stream ended before a terminal event"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected scored Transient, got {other:?}"),
+        }
+    }
+
     #[test]
     fn ir_request_maps_image_part() {
         let req = ProbeRequest {
