@@ -406,6 +406,16 @@ fn parse_mcp_tools(raw: Option<&Value>) -> Result<Option<Vec<ProbeTool>>, String
     let Some(raw) = raw else {
         return Ok(None);
     };
+    let Some(items) = raw.as_array() else {
+        return Err("failed to parse tools: expected a JSON array of tools".to_owned());
+    };
+    for (index, item) in items.iter().enumerate() {
+        if !item.is_object() {
+            return Err(format!(
+                "failed to parse tools: item {index} must be an object with name, description, and parameters"
+            ));
+        }
+    }
     let rows: Vec<McpCallerTool> = serde_json::from_value(raw.clone())
         .map_err(|err| format!("failed to parse tools: {err}"))?;
     Ok(Some(
@@ -1961,11 +1971,26 @@ mod tests {
         );
 
         assert!(parse_mcp_tools(None).expect("omit").is_none());
+        let empty = parse_mcp_tools(Some(&json!([])))
+            .expect("empty")
+            .expect("some");
+        assert!(empty.is_empty());
         let missing =
             parse_mcp_tools(Some(&json!([{"name": "lookup_issue"}]))).expect_err("fields");
         assert!(missing.contains("parse"), "{missing}");
         let object = parse_mcp_tools(Some(&json!({}))).expect_err("object");
-        assert!(object.contains("parse"), "{object}");
+        assert!(
+            object.contains("expected a JSON array of tools"),
+            "{object}"
+        );
+        assert!(!object.contains("expected a sequence"), "{object}");
+        assert!(!object.contains("McpCallerTool"), "{object}");
+        let string_item = parse_mcp_tools(Some(&json!(["lookup_issue"]))).expect_err("string");
+        assert!(
+            string_item.contains("item 0 must be an object with name, description, and parameters"),
+            "{string_item}"
+        );
+        assert!(!string_item.contains("McpCallerTool"), "{string_item}");
 
         let raw = json!([{
             "name": "lookup_issue",
@@ -1989,7 +2014,8 @@ mod tests {
         let err = probe_model_args(&args, &McpServerOptions::default())
             .await
             .expect_err("object is not a tool list");
-        assert!(err.contains("parse"), "{err}");
+        assert!(err.contains("expected a JSON array of tools"), "{err}");
+        assert!(!err.contains("expected a sequence"), "{err}");
         assert!(!err.contains("authentication error"), "{err}");
         assert!(!err.contains("connection"), "{err}");
         assert!(!err.contains("os error"), "{err}");
