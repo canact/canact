@@ -885,12 +885,38 @@ struct CallerToolFile {
     parameters: serde_json::Value,
 }
 
+fn parent_file_blocking(path: &std::path::Path) -> Option<&std::path::Path> {
+    let mut cursor = path.parent()?;
+    loop {
+        if cursor.as_os_str().is_empty() {
+            return None;
+        }
+        if cursor.exists() && !cursor.is_dir() {
+            return Some(cursor);
+        }
+        if cursor.exists() {
+            return None;
+        }
+        match cursor.parent() {
+            Some(parent) if parent != cursor => cursor = parent,
+            _ => return None,
+        }
+    }
+}
+
 fn load_caller_tools(path: Option<&std::path::Path>) -> Result<Option<Vec<ProbeTool>>, String> {
     let Some(path) = path else {
         return Ok(None);
     };
     if path.is_dir() {
         return Err(format!("tools file {} must be a file", path.display()));
+    }
+    if let Some(blocker) = parent_file_blocking(path) {
+        return Err(format!(
+            "tools file {} parent must be a directory (got a file: {})",
+            path.display(),
+            blocker.display()
+        ));
     }
     let raw = std::fs::read_to_string(path)
         .map_err(|err| format!("failed to read tools file {}: {err}", path.display()))?;
@@ -1038,6 +1064,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let err = super::load_caller_tools(Some(dir.path())).expect_err("directory");
         assert!(err.contains("must be a file"), "{err}");
+        assert!(!err.contains("os error"), "{err}");
+    }
+
+    #[test]
+    fn tools_parent_file_names_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let as_file = dir.path().join("notadir");
+        std::fs::write(&as_file, b"nope").expect("file");
+        let nested = as_file.join("tools.json");
+        let err = super::load_caller_tools(Some(&nested)).expect_err("parent file");
+        assert!(err.contains("got a file"), "{err}");
+        assert!(err.contains("notadir"), "{err}");
         assert!(!err.contains("os error"), "{err}");
     }
     use canact::{looks_cheap, resolve_api_key_from, should_load_xai_oauth};
