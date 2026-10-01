@@ -867,6 +867,9 @@ fn load_caller_tools(path: Option<&std::path::Path>) -> Result<Option<Vec<ProbeT
     let Some(path) = path else {
         return Ok(None);
     };
+    if path.is_dir() {
+        return Err(format!("tools file {} must be a file", path.display()));
+    }
     let raw = std::fs::read_to_string(path)
         .map_err(|err| format!("failed to read tools file {}: {err}", path.display()))?;
     // A Vec sees `{` and stops, so invalid JSON that starts with `{`
@@ -1006,6 +1009,14 @@ mod tests {
             .expect("empty array")
             .expect("some");
         assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn tools_directory_must_be_a_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = super::load_caller_tools(Some(dir.path())).expect_err("directory");
+        assert!(err.contains("must be a file"), "{err}");
+        assert!(!err.contains("os error"), "{err}");
     }
     use canact::{looks_cheap, resolve_api_key_from, should_load_xai_oauth};
     use std::path::PathBuf;
