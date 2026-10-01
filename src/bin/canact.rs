@@ -470,13 +470,7 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
     })?;
     let advertised = args.advertised_context.or(cached_advertised);
     let dir = resolve_user_path(args.dir.clone(), PathBuf::from("."));
-    if dir.exists() && !dir.is_dir() {
-        eprintln!(
-            "error: --dir must be a directory (got a file: {})",
-            dir.display()
-        );
-        return Err(1);
-    }
+    reject_export_dir(&dir)?;
     let mut stdout_body = None;
     if args.all || args.aider {
         let overlay = HostOverlay::aider(&profile, advertised);
@@ -496,6 +490,26 @@ fn run_export(args: ExportArgs) -> Result<(), u8> {
         print!("{body}");
     }
     Ok(())
+}
+
+fn reject_export_dir(dir: &std::path::Path) -> Result<(), u8> {
+    let mut path = dir;
+    loop {
+        if path.exists() && !path.is_dir() {
+            eprintln!(
+                "error: --dir must be a directory (got a file: {})",
+                path.display()
+            );
+            return Err(1);
+        }
+        if path.exists() {
+            return Ok(());
+        }
+        match path.parent() {
+            Some(parent) if parent != path => path = parent,
+            _ => return Ok(()),
+        }
+    }
 }
 
 fn write_one_overlay(overlay: &HostOverlay, dir: &std::path::Path) -> Result<(), u8> {

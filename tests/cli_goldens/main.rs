@@ -1477,6 +1477,40 @@ fn export_dir_file_explains_not_os_error_17() {
 }
 
 #[test]
+fn export_dir_parent_file_explains_not_os_error() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(cached_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Medium,
+    ));
+    cache.save(&cache_path).expect("save");
+    let as_file = dir.path().join("notadir");
+    std::fs::write(&as_file, b"nope").expect("file");
+    let nested = as_file.join("out");
+    let out = canact()
+        .args([
+            "export",
+            "--aider",
+            "--model",
+            "weak-tools",
+            "--provider",
+            "test",
+            "--cache",
+            cache_path.to_str().expect("utf8"),
+            "--dir",
+            nested.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn export");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("must be a directory"), "{stderr}");
+    assert!(!stderr.contains("os error"), "{stderr}");
+}
+
+#[test]
 fn matrix_help_lists_provider() {
     let help = stdout_of(&["matrix", "--help"]);
     assert!(help.contains("--provider"), "{help}");
