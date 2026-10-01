@@ -303,6 +303,36 @@ fn cache_path_is_directory(path: &Path) -> ProbeError {
     .into()
 }
 
+fn blocking_cache_parent(path: &Path) -> Option<&Path> {
+    let mut cursor = path.parent()?;
+    loop {
+        if cursor.as_os_str().is_empty() {
+            return None;
+        }
+        if cursor.exists() && !cursor.is_dir() {
+            return Some(cursor);
+        }
+        if cursor.exists() {
+            return None;
+        }
+        match cursor.parent() {
+            Some(parent) if parent != cursor => cursor = parent,
+            _ => return None,
+        }
+    }
+}
+
+fn cache_parent_is_file(path: &Path) -> ProbeError {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "probe cache parent must be a directory (got a file: {})",
+            path.display()
+        ),
+    )
+    .into()
+}
+
 /// File-based probe cache keyed by model|provider|effort|suite|cost|vision|ctx.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProbeCache {
@@ -342,6 +372,9 @@ impl ProbeCache {
     /// Applies migrations to fix stale probe scores from older versions.
     pub fn load(path: &Path) -> Result<Self, ProbeError> {
         if !path.exists() {
+            if let Some(blocker) = blocking_cache_parent(path) {
+                return Err(cache_parent_is_file(blocker));
+            }
             return Ok(Self::default());
         }
         if path.is_dir() {
@@ -382,6 +415,9 @@ impl ProbeCache {
     pub fn save(&self, path: &Path) -> Result<(), ProbeError> {
         if path.is_dir() {
             return Err(cache_path_is_directory(path));
+        }
+        if let Some(blocker) = blocking_cache_parent(path) {
+            return Err(cache_parent_is_file(blocker));
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

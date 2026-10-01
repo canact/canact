@@ -945,6 +945,25 @@ fn load_directory_is_error() {
 }
 
 #[test]
+fn save_under_file_parent_names_the_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let as_file = dir.path().join("notadir");
+    std::fs::write(&as_file, b"nope").expect("file");
+    let cache_path = as_file.join("probes.json");
+    let err = ProbeCache::default()
+        .save(&cache_path)
+        .expect_err("parent file");
+    let msg = err.to_string();
+    assert!(msg.contains("got a file"), "{msg}");
+    assert!(msg.contains("notadir"), "{msg}");
+    assert!(!msg.contains("os error"), "{msg}");
+    let err = ProbeCache::load(&cache_path).expect_err("load parent file");
+    let msg = err.to_string();
+    assert!(msg.contains("got a file"), "{msg}");
+    assert!(!msg.contains("os error"), "{msg}");
+}
+
+#[test]
 fn load_empty_file_is_empty() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("empty.json");
