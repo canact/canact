@@ -122,6 +122,36 @@ pub enum CapabilityLevel {
     Strong,
 }
 
+/// Exit bar for `canact probe --fail-on`.
+///
+/// Skipped probes, unprobed defaults, and synthesized errors are not measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailOn {
+    /// A completed dimension measured [`CapabilityLevel::Weak`].
+    Weak,
+    /// A completed dimension measured below [`CapabilityLevel::Strong`].
+    Degraded,
+}
+
+impl FailOn {
+    /// Parse `weak` or `degraded`. Surrounding spaces are ignored.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "weak" => Some(Self::Weak),
+            "degraded" => Some(Self::Degraded),
+            _ => None,
+        }
+    }
+
+    /// CLI token (`weak` or `degraded`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Weak => "weak",
+            Self::Degraded => "degraded",
+        }
+    }
+}
+
 /// Suite cost tier (`--suite=policy|full|all`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -637,6 +667,31 @@ impl CapabilityProfile {
         true
     }
 
+    /// Completed dimensions below `bar`, in [`DIMENSION_NAMES`] order.
+    ///
+    /// [`FailOn::Weak`] matches measured Weak. [`FailOn::Degraded`] matches
+    /// measured Weak or Medium. Skipped, unprobed, and `Probe failed:` rows
+    /// are omitted.
+    pub fn fail_on_hits(&self, bar: FailOn) -> Vec<(&'static str, CapabilityLevel)> {
+        let mut hits = Vec::new();
+        for &name in DIMENSION_NAMES {
+            let Some(level) = self
+                .dimension_result(name)
+                .and_then(ProbeResult::measured_level)
+            else {
+                continue;
+            };
+            let below = match bar {
+                FailOn::Weak => level == CapabilityLevel::Weak,
+                FailOn::Degraded => level < CapabilityLevel::Strong,
+            };
+            if below {
+                hits.push((name, level));
+            }
+        }
+        hits
+    }
+
     /// canact CLI `--json` host-policy envelope.
     ///
     /// Not Bline `build_probe_json`. Does not emit `bestEditFormat`.
@@ -1115,5 +1170,129 @@ mod suite_tier_tests {
         assert_eq!(SuiteTier::parse(""), None);
         assert_eq!(SuiteTier::parse("   "), None);
         assert_eq!(SuiteTier::parse("unknown"), None);
+    }
+}
+
+#[cfg(test)]
+mod fail_on_tests {
+    use super::{CapabilityLevel, CapabilityProfile, FailOn, ProbeResult};
+
+    fn set_dimension(
+        profile: &mut CapabilityProfile,
+        name: &str,
+        level: CapabilityLevel,
+        details: &str,
+    ) {
+        let slot = profile
+            .dimension_result_mut(name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        *slot = ProbeResult {
+            name: name.to_owned(),
+            score: match level {
+                CapabilityLevel::Strong => 1.0,
+                CapabilityLevel::Medium => 0.5,
+                CapabilityLevel::Weak => 0.1,
+            },
+            max_score: 1.0,
+            level,
+            details: details.to_owned(),
+        };
+    }
+
+    #[test]
+    fn fail_on_measured_weak_hits_both_bars() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        set_dimension(&mut profile, "json_output", CapabilityLevel::Weak, "done");
+        assert_eq!(
+            profile.fail_on_hits(FailOn::Weak),
+            vec![("json_output", CapabilityLevel::Weak)]
+        );
+        assert_eq!(
+            profile.fail_on_hits(FailOn::Degraded),
+            vec![("json_output", CapabilityLevel::Weak)]
+        );
+    }
+
+    #[test]
+    fn fail_on_measured_medium_hits_only_degraded() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        set_dimension(&mut profile, "json_output", CapabilityLevel::Medium, "done");
+        assert!(
+            profile.fail_on_hits(FailOn::Weak).is_empty(),
+            "medium is not below the weak bar"
+        );
+        assert_eq!(
+            profile.fail_on_hits(FailOn::Degraded),
+            vec![("json_output", CapabilityLevel::Medium)]
+        );
+    }
+
+    #[test]
+    fn fail_on_measured_strong_hits_neither() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        set_dimension(&mut profile, "json_output", CapabilityLevel::Strong, "done");
+        assert!(profile.fail_on_hits(FailOn::Weak).is_empty());
+        assert!(profile.fail_on_hits(FailOn::Degraded).is_empty());
+    }
+
+    #[test]
+    fn fail_on_skipped_medium_is_not_a_hit() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        set_dimension(
+            &mut profile,
+            "instruction_following",
+            CapabilityLevel::Medium,
+            "Skipped: policy suite (use --suite=full or --suite=all)",
+        );
+        assert!(profile.fail_on_hits(FailOn::Weak).is_empty());
+        assert!(profile.fail_on_hits(FailOn::Degraded).is_empty());
+    }
+
+    #[test]
+    fn fail_on_synthesized_error_is_not_a_hit() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        set_dimension(
+            &mut profile,
+            "json_output",
+            CapabilityLevel::Medium,
+            "Probe failed: timeout",
+        );
+        assert!(profile.fail_on_hits(FailOn::Weak).is_empty());
+        assert!(profile.fail_on_hits(FailOn::Degraded).is_empty());
+    }
+
+    #[test]
+    fn fail_on_hits_follow_dimension_names_order() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        set_dimension(
+            &mut profile,
+            "instruction_following",
+            CapabilityLevel::Weak,
+            "done",
+        );
+        set_dimension(&mut profile, "json_output", CapabilityLevel::Medium, "done");
+        assert_eq!(
+            profile.fail_on_hits(FailOn::Degraded),
+            vec![
+                ("json_output", CapabilityLevel::Medium),
+                ("instruction_following", CapabilityLevel::Weak),
+            ]
+        );
+        assert_eq!(
+            profile.fail_on_hits(FailOn::Weak),
+            vec![("instruction_following", CapabilityLevel::Weak)]
+        );
+    }
+
+    #[test]
+    fn fail_on_parse_accepts_bars_with_spaces_and_rejects_unknown() {
+        assert_eq!(FailOn::parse(" weak "), Some(FailOn::Weak));
+        assert_eq!(FailOn::parse(" degraded "), Some(FailOn::Degraded));
+        assert_eq!(FailOn::parse("weak"), Some(FailOn::Weak));
+        assert_eq!(FailOn::parse("degraded"), Some(FailOn::Degraded));
+        assert_eq!(FailOn::parse("foo"), None);
+        assert_eq!(FailOn::parse(""), None);
+        assert_eq!(FailOn::as_str(FailOn::Weak), "weak");
+        assert_eq!(FailOn::as_str(FailOn::Degraded), "degraded");
     }
 }

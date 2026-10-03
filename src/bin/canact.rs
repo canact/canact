@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use canact::{
-    CacheListRow, CapabilityProfile, CatalogPriors, HostOverlay, HostPolicyMeta, McpServerOptions,
-    OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError, ProbeRun, ProbeRunner, ProbeTool,
-    SuiteTier, claude_code_access_token, finalize_key_route, invalid_explicit_base_url,
-    is_bedrock_provider_label, is_groq_provider_label, list_model_ids, looks_cheap,
-    missing_cloud_key_message, missing_model_message, planned_probe_names, present_base_url,
-    present_secret, probe_endpoint_without_key, probe_tools_digest, redact_base_url,
-    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio_with,
-    should_load_claude_code_login, should_load_xai_oauth, with_route_error_label,
-    xai_oauth_access_token,
+    CacheListRow, CapabilityLevel, CapabilityProfile, CatalogPriors, FailOn, HostOverlay,
+    HostPolicyMeta, McpServerOptions, OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError,
+    ProbeRun, ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token, finalize_key_route,
+    invalid_explicit_base_url, is_bedrock_provider_label, is_groq_provider_label, list_model_ids,
+    looks_cheap, missing_cloud_key_message, missing_model_message, planned_probe_names,
+    present_base_url, present_secret, probe_endpoint_without_key, probe_tools_digest,
+    redact_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
+    with_route_error_label, xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -151,6 +151,10 @@ struct ProbeArgs {
     #[arg(long)]
     full: bool,
 
+    /// Exit 2 when a completed dimension is below the bar. Skipped and failed probes do not count.
+    #[arg(long, value_name = "weak|degraded")]
+    fail_on: Option<String>,
+
     /// Cache file [default: platform cache dir / canact / probes.json]
     #[arg(long)]
     cache: Option<PathBuf>,
@@ -249,6 +253,13 @@ fn cli_explicit_base_url(raw: Option<&str>) -> bool {
 }
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
+    let fail_on = match parse_fail_on(args.fail_on.as_deref()) {
+        Ok(bar) => bar,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return Err(1);
+        }
+    };
     let caller_tools = match load_caller_tools(args.tools.as_deref()) {
         Ok(tools) => tools,
         Err(msg) => {
@@ -327,6 +338,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                 args.json,
                 args.verbose,
                 probe_meta(true, suite, advertised, caller_tools.as_deref()),
+                fail_on,
             );
         }
         if let Some((profile, hit_suite, advertised)) = cached_probe(
@@ -343,6 +355,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
                 args.json,
                 args.verbose,
                 probe_meta(true, hit_suite, advertised, caller_tools.as_deref()),
+                fail_on,
             );
         }
     }
@@ -378,6 +391,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             args.json,
             args.verbose,
             probe_meta(true, hit_suite, advertised, caller_tools.as_deref()),
+            fail_on,
         );
     }
     let catalog = CatalogPriors {
@@ -426,7 +440,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         eprintln!("warning: failed to save probe cache: {err}");
     }
 
-    emit_run(&run, args.json, args.verbose)
+    emit_run(&run, args.json, args.verbose, fail_on)
 }
 
 fn run_export(args: ExportArgs) -> Result<(), u8> {
@@ -618,13 +632,14 @@ fn run_matrix(args: MatrixArgs) -> Result<(), u8> {
     }
 }
 
-fn emit_run(run: &ProbeRun, json: bool, verbose: bool) -> Result<(), u8> {
+fn emit_run(run: &ProbeRun, json: bool, verbose: bool, fail_on: Option<FailOn>) -> Result<(), u8> {
     emit_envelope(
         &run.profile,
         json,
         verbose,
         run.host_policy_envelope(),
         run.advertised_context_tokens,
+        fail_on,
     )
 }
 
@@ -694,6 +709,7 @@ fn emit_profile(
     json: bool,
     verbose: bool,
     meta: HostPolicyMeta,
+    fail_on: Option<FailOn>,
 ) -> Result<(), u8> {
     eprintln!("cache hit");
     emit_envelope(
@@ -702,6 +718,7 @@ fn emit_profile(
         verbose,
         profile.host_policy_envelope_with(meta),
         meta.advertised_context_tokens,
+        fail_on,
     )
 }
 
@@ -711,6 +728,7 @@ fn emit_envelope(
     verbose: bool,
     envelope: serde_json::Value,
     advertised: Option<u32>,
+    fail_on: Option<FailOn>,
 ) -> Result<(), u8> {
     if json {
         match serde_json::to_string_pretty(&envelope) {
@@ -728,9 +746,41 @@ fn emit_envelope(
     }
     if let Some(msg) = profile.tool_gate_error() {
         eprintln!("{msg}");
-        Err(2)
-    } else {
-        Ok(())
+        return Err(2);
+    }
+    if let Some(bar) = fail_on {
+        let hits = profile.fail_on_hits(bar);
+        if !hits.is_empty() {
+            eprintln!("{}", fail_on_stderr(bar, &hits));
+            return Err(2);
+        }
+    }
+    Ok(())
+}
+
+fn parse_fail_on(raw: Option<&str>) -> Result<Option<FailOn>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    FailOn::parse(raw)
+        .map(Some)
+        .ok_or_else(|| format!("error: unknown --fail-on={raw} (expected weak or degraded)"))
+}
+
+fn fail_on_stderr(bar: FailOn, hits: &[(&str, CapabilityLevel)]) -> String {
+    let parts = hits
+        .iter()
+        .map(|(name, level)| format!("{name} is {}", level_word(*level)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("error: --fail-on {}: {parts}", bar.as_str())
+}
+
+fn level_word(level: CapabilityLevel) -> &'static str {
+    match level {
+        CapabilityLevel::Weak => "weak",
+        CapabilityLevel::Medium => "medium",
+        CapabilityLevel::Strong => "strong",
     }
 }
 
@@ -1348,6 +1398,30 @@ mod tests {
             .join("canact")
             .join("probes.json");
         assert_eq!(super::default_cache_path(), expected);
+    }
+
+    #[test]
+    fn unknown_fail_on_is_exit_1_message() {
+        let err = super::parse_fail_on(Some("foo")).expect_err("unknown");
+        assert_eq!(
+            err,
+            "error: unknown --fail-on=foo (expected weak or degraded)"
+        );
+        assert_eq!(super::parse_fail_on(None).expect("omitted"), None);
+        assert_eq!(
+            super::parse_fail_on(Some(" degraded ")).expect("padded"),
+            Some(canact::FailOn::Degraded)
+        );
+        assert_eq!(
+            super::fail_on_stderr(
+                canact::FailOn::Degraded,
+                &[
+                    ("json_output", canact::CapabilityLevel::Medium),
+                    ("instruction_following", canact::CapabilityLevel::Weak),
+                ],
+            ),
+            "error: --fail-on degraded: json_output is medium, instruction_following is weak"
+        );
     }
 
     #[test]
