@@ -11,7 +11,8 @@ use canact::{
     missing_cloud_key_message, missing_model_message, planned_probe_names, present_base_url,
     present_secret, probe_endpoint_without_key, probe_tools_digest, redact_base_url,
     refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio_with,
-    should_load_claude_code_login, should_load_xai_oauth, xai_oauth_access_token,
+    should_load_claude_code_login, should_load_xai_oauth, with_route_error_label,
+    xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -287,7 +288,8 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         }) {
             Ok(resolved) => resolved,
             Err(msg) => {
-                eprintln!("error: authentication error: {msg}");
+                let labeled = with_route_error_label(msg);
+                eprintln!("error: {labeled}");
                 return Err(1);
             }
         };
@@ -645,6 +647,10 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
         return Err(1);
     }
     let (provider, base_url) = probe_endpoint_without_key(provider_hint, args.base_url.as_deref());
+    if let Some(msg) = invalid_explicit_base_url(Some(&base_url)) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
     let base_url = redact_base_url(&base_url);
     let probes = planned_probe_names(suite, args.vision);
     if args.json {
@@ -1046,6 +1052,15 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains("CallerToolFile"), "{err}");
+    }
+
+    #[test]
+    fn tools_file_object_missing_description() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(&path, "[{\"name\":\"lookup_issue\"}]").expect("write");
+        let err = super::load_caller_tools(Some(&path)).expect_err("missing description");
+        assert!(err.contains("description"), "{err}");
     }
 
     #[test]

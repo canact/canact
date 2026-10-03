@@ -24,6 +24,7 @@ pub use endpoint::{
     openrouter_default_ok, present_base_url, present_secret, probe_endpoint_without_key,
     provider_from_base_url, redact_base_url, refuse_cloud_without_key, resolve_api_key_from,
     should_load_claude_code_login, should_load_xai_oauth, uses_xai_credentials,
+    with_route_error_label,
 };
 pub use error::ProbeError;
 pub use matrix::{PlumbingCell, PlumbingMatrix, PlumbingRow};
