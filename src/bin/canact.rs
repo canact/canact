@@ -1049,6 +1049,15 @@ mod tests {
     }
 
     #[test]
+    fn tools_file_object_missing_description() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(&path, "[{\"name\":\"lookup_issue\"}]").expect("write");
+        let err = super::load_caller_tools(Some(&path)).expect_err("missing description");
+        assert!(err.contains("description"), "{err}");
+    }
+
+    #[test]
     fn empty_tools_array_loads() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("tools.json");
