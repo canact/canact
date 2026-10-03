@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::endpoint::mcp_tool_base_url_is_loopback;
+use crate::text::control_character_message;
 use crate::{
     CatalogPriors, HostPolicyMeta, KeyRoute, OpenAiCompatClient, ProbeCache, ProbeError,
     ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token, finalize_key_route,
@@ -228,8 +229,11 @@ async fn probe_model_with_route(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| "model is required".to_owned())?
-        .to_owned();
+        .ok_or_else(|| "model is required".to_owned())?;
+    if let Some(msg) = control_character_message("model", model) {
+        return Err(msg);
+    }
+    let model = model.to_owned();
     let advertised = match args.get("advertised_context") {
         None => None,
         Some(v) => match json_u32(Some(v)) {
@@ -291,6 +295,9 @@ async fn probe_model_with_route(
         .map_err(with_route_error_label)?;
     if let Some(msg) = shipped_profile_base_conflict(&provider, &base_url) {
         return Err(msg.to_owned());
+    }
+    if let Some(msg) = control_character_message("provider", &provider) {
+        return Err(msg);
     }
     let api_key = route.key.clone();
     if !force {

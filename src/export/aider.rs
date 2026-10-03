@@ -109,13 +109,26 @@ impl AiderOverlay {
 }
 
 fn yaml_scalar(s: &str) -> String {
-    let safe = s
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':'));
+    let safe = s.chars().all(|c| {
+        !c.is_control() && (c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':'))
+    });
     if safe && !s.is_empty() {
         s.to_owned()
     } else {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        let mut escaped = String::new();
+        for c in s.chars() {
+            match c {
+                '\0' => {}
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                other if other.is_control() => {}
+                other => escaped.push(other),
+            }
+        }
+        format!("\"{escaped}\"")
     }
 }
 
@@ -124,6 +137,20 @@ mod tests {
     use super::*;
     use crate::export::tests::sample_profile;
     use crate::types::CapabilityLevel;
+
+    #[test]
+    fn settings_yaml_escapes_newline_and_drops_nul() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Strong,
+            CapabilityLevel::Strong,
+        );
+        p.model_id = "llama\n3\0".to_owned();
+        let yaml = AiderOverlay::from_profile(&p, None).settings_yaml();
+        assert!(yaml.contains("llama\\n3"), "{yaml}");
+        assert!(!yaml.contains('\0'), "{yaml}");
+        assert_eq!(yaml.lines().filter(|l| l.starts_with("- name:")).count(), 1);
+    }
 
     #[test]
     fn strong_search_replace_exports_aider_diff() {
