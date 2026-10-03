@@ -14,7 +14,7 @@ use crate::{
     is_groq_provider_label, is_openai_codex_provider_label, is_openai_provider_label, looks_cheap,
     openrouter_default_ok, present_base_url, present_secret, refuse_cloud_without_key,
     resolve_api_key_from, resolve_host_catalog, should_load_claude_code_login,
-    should_load_xai_oauth, uses_xai_credentials, xai_oauth_access_token,
+    should_load_xai_oauth, uses_xai_credentials, with_route_error_label, xai_oauth_access_token,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -287,7 +287,7 @@ async fn probe_model_with_route(
                 policy,
             )
         })
-        .map_err(|msg| format!("authentication error: {msg}"))?;
+        .map_err(with_route_error_label)?;
     let api_key = route.key.clone();
     if !force {
         if let Some(profile) = cache.get_with_suite_tools(

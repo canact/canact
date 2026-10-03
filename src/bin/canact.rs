@@ -11,7 +11,8 @@ use canact::{
     missing_cloud_key_message, missing_model_message, planned_probe_names, present_base_url,
     present_secret, probe_endpoint_without_key, probe_tools_digest, redact_base_url,
     refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio_with,
-    should_load_claude_code_login, should_load_xai_oauth, xai_oauth_access_token,
+    should_load_claude_code_login, should_load_xai_oauth, with_route_error_label,
+    xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -287,7 +288,8 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         }) {
             Ok(resolved) => resolved,
             Err(msg) => {
-                eprintln!("error: authentication error: {msg}");
+                let labeled = with_route_error_label(msg);
+                eprintln!("error: {labeled}");
                 return Err(1);
             }
         };

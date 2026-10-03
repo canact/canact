@@ -574,6 +574,15 @@ pub fn finalize_key_route(
     Ok((route, base_url, provider))
 }
 
+/// A base-URL rejection is not a login failure.
+pub fn with_route_error_label(msg: String) -> String {
+    if msg.starts_with("invalid base URL") {
+        msg
+    } else {
+        format!("authentication error: {msg}")
+    }
+}
+
 /// True when the host or model looks local/free so the cheap suite is enough.
 /// Host label used as `provider` when the user omitted `--provider`.
 /// Loopback URLs keep `host:port` so different listeners do not share a cache row.
@@ -645,27 +654,28 @@ fn is_local_provider_label(provider: &str) -> bool {
     ) || loopback_host_port_base_url(provider).is_some()
 }
 
+/// Loopback host plus any `:` suffix.
+///
+/// A bad suffix stays after the host so the http(s) check rejects it.
+/// `None` would fall through to `https://api.openai.com/v1`.
+/// `::1` is written as `[::1]:{suffix}`, never `[::1:{suffix}]`.
 fn loopback_host_port_base_url(provider: &str) -> Option<String> {
-    let host = host_without_port(provider);
-    if host == provider {
-        return None;
+    const HOSTS: &[(&str, &str)] = &[
+        ("[::1]", "[::1]"),
+        ("::1", "[::1]"),
+        ("localhost", "localhost"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("0.0.0.0", "0.0.0.0"),
+    ];
+    for &(prefix, authority) in HOSTS {
+        if let Some(suffix) = provider
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_prefix(':'))
+        {
+            return Some(format!("http://{authority}:{suffix}/v1"));
+        }
     }
-    let port = provider.rsplit_once(':').map(|(_, p)| p)?;
-    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let bare = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-    if !matches!(bare, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1") {
-        return None;
-    }
-    if bare == "::1" {
-        Some(format!("http://[::1]:{port}/v1"))
-    } else {
-        Some(format!("http://{host}:{port}/v1"))
-    }
+    None
 }
 
 fn url_host_hint(url: &str) -> String {
@@ -1609,18 +1619,32 @@ mod tests {
     #[test]
     fn finalize_key_route_rejects_loopback_provider_port_that_is_not_tcp() {
         let msg = "invalid base URL (need http or https with a host)";
-        let first = resolve_api_key_from(None, None, None, None, None, "127.0.0.1:99999");
-        let err = match finalize_key_route("127.0.0.1:99999", None, first, |_| {
-            panic!("must not re-resolve when URL was omitted")
-        }) {
-            Err(err) => err,
-            Ok(_) => panic!("port 99999 is not a TCP port"),
-        };
-        assert_eq!(err, msg);
-        assert!(
-            !err.contains("api.openai.com"),
-            "a bad loopback port must not fall through to OpenAI"
-        );
+        for provider in [
+            "127.0.0.1:99999",
+            "127.0.0.1:abc",
+            "127.0.0.1:80:80",
+            "127.0.0.1:+9",
+            "127.0.0.1:",
+            "[::1]:abc",
+            "::1:abc",
+        ] {
+            let first = resolve_api_key_from(None, None, None, None, None, provider);
+            let err = match finalize_key_route(provider, None, first, |_| {
+                panic!("must not re-resolve when URL was omitted")
+            }) {
+                Err(err) => err,
+                Ok(_) => panic!("{provider} must be rejected"),
+            };
+            assert_eq!(err, msg, "{provider}");
+            assert!(
+                !err.contains("api.openai.com"),
+                "{provider} must not fall through to OpenAI"
+            );
+            assert!(
+                !with_route_error_label(err).contains("authentication"),
+                "{provider} refusal is not a login failure"
+            );
+        }
 
         let first = resolve_api_key_from(None, None, None, None, None, "127.0.0.1:1234");
         let (_route, base_url, provider) =
@@ -1795,6 +1819,70 @@ mod tests {
             redact_base_url("http://user:pass@[::1]:9/v1"),
             "http://[::1]:9/v1"
         );
+    }
+
+    #[test]
+    fn default_compat_base_url_keeps_bad_loopback_suffix_off_openai() {
+        let openai = "https://api.openai.com/v1";
+        let cases = [
+            ("127.0.0.1:abc", "http://127.0.0.1:abc/v1"),
+            ("127.0.0.1:80:80", "http://127.0.0.1:80:80/v1"),
+            ("[::1]:abc", "http://[::1]:abc/v1"),
+            ("::1:abc", "http://[::1]:abc/v1"),
+            ("127.0.0.1:+9", "http://127.0.0.1:+9/v1"),
+            ("127.0.0.1:", "http://127.0.0.1:/v1"),
+            ("127.0.0.1:99999", "http://127.0.0.1:99999/v1"),
+            ("localhost:abc", "http://localhost:abc/v1"),
+            ("0.0.0.0:abc", "http://0.0.0.0:abc/v1"),
+            ("::1:80:80", "http://[::1]:80:80/v1"),
+        ];
+        for (provider, expect) in cases {
+            let url = default_compat_base_url(provider, false);
+            assert_eq!(url, expect, "{provider}");
+            assert_ne!(url, openai, "{provider}");
+            assert!(
+                invalid_explicit_base_url(Some(&url)).is_some(),
+                "{provider} -> {url}"
+            );
+            assert!(
+                !url.contains("[::1:"),
+                "a bad ::1 suffix must stay outside the brackets: {url}"
+            );
+            assert_ne!(
+                default_compat_base_url(provider, true),
+                "https://openrouter.ai/api/v1",
+                "{provider} must stay off OpenRouter"
+            );
+        }
+        assert_eq!(
+            default_compat_base_url("127.0.0.1:1234", false),
+            "http://127.0.0.1:1234/v1"
+        );
+        assert_eq!(
+            default_compat_base_url("[::1]:11434", false),
+            "http://[::1]:11434/v1"
+        );
+        assert_eq!(
+            default_compat_base_url("::1:11434", false),
+            "http://[::1]:11434/v1"
+        );
+        assert_eq!(default_compat_base_url("127.0.0.1", false), OLLAMA_BASE_URL);
+        assert_eq!(default_compat_base_url("localhost", false), OLLAMA_BASE_URL);
+        assert_eq!(default_compat_base_url("::1", false), OLLAMA_BASE_URL);
+        assert_eq!(default_compat_base_url("[::1]", false), OLLAMA_BASE_URL);
+        assert_eq!(default_compat_base_url("0.0.0.0", false), OLLAMA_BASE_URL);
+    }
+
+    #[test]
+    fn with_route_error_label_skips_authentication_for_invalid_base_url() {
+        let raw = invalid_explicit_base_url(Some(&default_compat_base_url("127.0.0.1:abc", false)))
+            .expect("bad loopback suffix");
+        let labeled = with_route_error_label(raw);
+        assert!(labeled.starts_with("invalid base URL"), "{labeled}");
+        assert!(!labeled.contains("authentication"), "{labeled}");
+        let auth = with_route_error_label("set OPENAI_API_KEY".to_owned());
+        assert!(auth.contains("authentication"), "{auth}");
+        assert_eq!(auth, "authentication error: set OPENAI_API_KEY");
     }
 
     #[test]
