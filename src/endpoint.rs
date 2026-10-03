@@ -445,6 +445,31 @@ fn is_openai_cloud_host(base_url: &str) -> bool {
     host == "api.openai.com" || host.ends_with(".openai.com")
 }
 
+/// `Some` when this provider dials a shipped profile and `base_url` is a different host.
+///
+/// The default URL for that provider returns `None`. A proxy or another
+/// region would otherwise be printed by `--dry-run` and then ignored.
+pub fn shipped_profile_base_conflict(provider: &str, base_url: &str) -> Option<&'static str> {
+    if is_openai_codex_provider_label(provider) && !is_openai_cloud_host(base_url) {
+        return Some(
+            "--base-url is ignored for openai-codex; the shipped profile dials https://api.openai.com",
+        );
+    }
+    if is_grok_build_messages_provider_label(provider) && !is_grok_build_cloud_host(base_url) {
+        return Some(
+            "--base-url is ignored for the grok-build messages profile; it dials https://cli-chat-proxy.grok.com",
+        );
+    }
+    if is_bedrock_provider_label(provider) && is_bedrock_cloud_host(base_url) {
+        let host = url_host_hint(base_url);
+        let default_host = url_host_hint(BEDROCK_BASE_URL);
+        if host.trim_end_matches('.') != default_host.trim_end_matches('.') {
+            return Some("--base-url does not select the Bedrock region; set AWS_REGION");
+        }
+    }
+    None
+}
+
 /// Present `--base-url` / MCP `base_url` after trim. Whitespace-only is absent.
 pub fn present_base_url(raw: Option<&str>) -> Option<&str> {
     raw.map(str::trim).filter(|s| !s.is_empty())
@@ -1818,6 +1843,55 @@ mod tests {
         assert_eq!(
             redact_base_url("http://user:pass@[::1]:9/v1"),
             "http://[::1]:9/v1"
+        );
+    }
+
+    #[test]
+    fn shipped_profile_rejects_a_different_base_host() {
+        assert_eq!(
+            shipped_profile_base_conflict("openai-codex", "https://api.openai.com/v1"),
+            None
+        );
+        assert!(
+            shipped_profile_base_conflict("codex", "https://proxy.example/v1")
+                .unwrap()
+                .contains("api.openai.com")
+        );
+        assert_eq!(
+            shipped_profile_base_conflict(
+                "grok-build-messages",
+                "https://cli-chat-proxy.grok.com/v1"
+            ),
+            None
+        );
+        assert!(
+            shipped_profile_base_conflict("xai-grok-build-messages", "https://proxy.example/v1")
+                .unwrap()
+                .contains("cli-chat-proxy.grok.com")
+        );
+        assert_eq!(
+            shipped_profile_base_conflict("grok-build", "https://proxy.example/v1"),
+            None,
+            "the non-messages grok-build label still honors a different host"
+        );
+        assert_eq!(
+            shipped_profile_base_conflict(
+                "amazon-bedrock",
+                "https://bedrock-runtime.us-east-1.amazonaws.com"
+            ),
+            None
+        );
+        assert!(
+            shipped_profile_base_conflict(
+                "bedrock",
+                "https://bedrock-runtime.eu-west-1.amazonaws.com"
+            )
+            .unwrap()
+            .contains("AWS_REGION")
+        );
+        assert_eq!(
+            shipped_profile_base_conflict("ollama", "http://127.0.0.1:11434/v1"),
+            None
         );
     }
 
