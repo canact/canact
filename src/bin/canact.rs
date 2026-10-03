@@ -645,6 +645,10 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
         return Err(1);
     }
     let (provider, base_url) = probe_endpoint_without_key(provider_hint, args.base_url.as_deref());
+    if let Some(msg) = invalid_explicit_base_url(Some(&base_url)) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
     let base_url = redact_base_url(&base_url);
     let probes = planned_probe_names(suite, args.vision);
     if args.json {
