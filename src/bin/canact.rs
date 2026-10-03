@@ -11,8 +11,8 @@ use canact::{
     looks_cheap, missing_cloud_key_message, missing_model_message, planned_probe_names,
     present_base_url, present_secret, probe_endpoint_without_key, probe_tools_digest,
     redact_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
-    run_mcp_stdio_with, should_load_claude_code_login, should_load_xai_oauth,
-    with_route_error_label, xai_oauth_access_token,
+    run_mcp_stdio_with, shipped_profile_base_conflict, should_load_claude_code_login,
+    should_load_xai_oauth, with_route_error_label, xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -305,6 +305,10 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
             }
         };
     let api_key = route.key.clone();
+    if let Some(msg) = shipped_profile_base_conflict(&provider, &base_url) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
     let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let mut cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
@@ -663,6 +667,10 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
     }
     let (provider, base_url) = probe_endpoint_without_key(provider_hint, args.base_url.as_deref());
     if let Some(msg) = invalid_explicit_base_url(Some(&base_url)) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
+    if let Some(msg) = shipped_profile_base_conflict(&provider, &base_url) {
         eprintln!("error: {msg}");
         return Err(1);
     }

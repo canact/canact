@@ -63,6 +63,12 @@ canact probe --provider ollama --model llama3.2:3b --cheap --json
 The built-in Ollama URL is `http://127.0.0.1:11434/v1`. That string
 is the crate constant `OLLAMA_BASE_URL`. Nothing reads an environment
 variable of that name. Pass `--base-url` to use a different URL.
+`openai-codex` and `codex` dial the shipped Responses profile at
+`https://api.openai.com`. The grok-build messages labels dial
+`https://cli-chat-proxy.grok.com`. A different `--base-url` is an
+error for those labels. Amazon Bedrock dials
+`bedrock-runtime.$AWS_REGION`. `--base-url` does not select that
+region.
 
 `--cheap` is `--suite=policy` (host-policy fields, 4k ladder).
 `--full` adds sequencing and the 8k/16k ladder. `--suite=all`
@@ -122,8 +128,12 @@ canact matrix
 `pass`, `degraded`, `fail`, or `skipped`. There is no `--json` flag
 and no human table. `--provider` is optional; omit it to include
 every cached provider. It does not call a model and has no composite
-score. `skipped` means the dimension was not measured (cheap policy
-rows for `constraintPlacement`; policy rows for `maxOutputTokens`).
+score. `skipped` means the cell is not a pass or a fail.
+`constraintPlacement` is skipped unless `--suite=all`.
+`maxOutputTokens` is measured on every suite, including policy.
+A policy cell is `skipped` when that probe does not find a cap.
+`--full` does not add the probe. A missing cap on full or all is
+`fail`.
 
 `canact mcp` is a stdio MCP server. The tool is `probe_model`. It
 returns the same host-policy JSON as `canact probe --json`. Start it
