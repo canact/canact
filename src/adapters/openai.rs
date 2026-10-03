@@ -651,7 +651,14 @@ fn map_client_error(err: ClientError) -> ProbeError {
     match err {
         ClientError::Auth { message, .. } => ProbeError::Auth(redact_secrets(&message)),
         ClientError::NotFound { message, .. } => ProbeError::NotFound(redact_secrets(&message)),
-        ClientError::RateLimit { retry_after, .. } => ProbeError::RateLimit { retry_after },
+        ClientError::RateLimit {
+            retry_after,
+            message,
+            ..
+        } => ProbeError::RateLimit {
+            retry_after,
+            message: redact_secrets(&message),
+        },
         ClientError::Transient { message, kind, .. } => {
             let message = redact_secrets(&message);
             if kind == TransientKind::Connect {
@@ -840,6 +847,19 @@ mod tests {
     use std::time::Duration;
 
     const SECRET: &str = "sk-test-secret";
+
+    #[test]
+    fn rate_limit_keeps_retry_after_and_vendor_text() {
+        let err = map_client_error(ClientError::RateLimit {
+            status: Some(429),
+            retry_after: Some(3),
+            message: format!("slow down {SECRET}"),
+        });
+        let text = err.to_string();
+        assert!(text.contains("retry after 3s"), "{text}");
+        assert!(text.contains("slow down"), "{text}");
+        assert!(!text.contains(SECRET), "{text}");
+    }
 
     fn empty_req() -> ProbeRequest {
         ProbeRequest {

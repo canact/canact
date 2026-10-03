@@ -80,7 +80,10 @@ fn resolve_probe_timeout_is_not_cacheable() {
 
 #[test]
 fn resolve_probe_rate_limit_is_not_cacheable() {
-    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::RateLimit { retry_after: None });
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::RateLimit {
+        retry_after: None,
+        message: String::new(),
+    });
     let (result, cacheable) = resolve_probe(err, "streaming_tool_calls").expect("synthesized");
     assert_eq!(result.level, CapabilityLevel::Medium);
     assert!(!cacheable, "429 must not be written to the 30-day cache");
@@ -380,8 +383,12 @@ impl ProbeClient for OversizeErrLlm {
     ) -> impl Future<Output = Result<ProbeResponse, ProbeError>> + Send {
         let oversize_err = if req.max_tokens == Some(OVERSIZE_MAX_TOKENS) {
             Some(match &self.0 {
-                ProbeError::RateLimit { retry_after } => ProbeError::RateLimit {
+                ProbeError::RateLimit {
+                    retry_after,
+                    message,
+                } => ProbeError::RateLimit {
                     retry_after: *retry_after,
+                    message: message.clone(),
                 },
                 ProbeError::Transient(msg) => ProbeError::Transient(msg.clone()),
                 ProbeError::Llm(msg) => ProbeError::Llm(msg.clone()),
@@ -417,8 +424,11 @@ impl ProbeClient for OversizeErrLlm {
 
 #[tokio::test]
 async fn oversize_rate_limit_is_uncacheable() {
-    let runner = ProbeRunner::new(OversizeErrLlm(ProbeError::RateLimit { retry_after: None }))
-        .suite(SuiteTier::Policy);
+    let runner = ProbeRunner::new(OversizeErrLlm(ProbeError::RateLimit {
+        retry_after: None,
+        message: String::new(),
+    }))
+    .suite(SuiteTier::Policy);
     let run = runner.run_detailed().await.expect("run_detailed");
     assert!(
         run.profile.max_output_tokens.is_none(),

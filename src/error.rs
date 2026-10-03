@@ -29,8 +29,14 @@ pub enum ProbeError {
     #[error("transient error: failed to connect: {0}")]
     Unreachable(String),
     /// HTTP 429. Do not persist a 30-day score.
-    #[error("rate limited")]
-    RateLimit { retry_after: Option<u64> },
+    ///
+    /// `message` is redacted vendor text. Empty when the caller only
+    /// has `Retry-After`.
+    #[error("{}", rate_limit_text(*retry_after, message))]
+    RateLimit {
+        retry_after: Option<u64>,
+        message: String,
+    },
     /// Filesystem I/O error (cache read/write).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -40,6 +46,19 @@ pub enum ProbeError {
     /// Internal runtime error (e.g. poisoned lock, probes not wired).
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+fn rate_limit_text(retry_after: Option<u64>, message: &str) -> String {
+    let mut out = String::from("rate limited");
+    if let Some(secs) = retry_after {
+        out.push_str(&format!("; retry after {secs}s"));
+    }
+    let message = message.trim();
+    if !message.is_empty() && !message.eq_ignore_ascii_case("rate limited") {
+        out.push_str(": ");
+        out.push_str(message);
+    }
+    out
 }
 
 impl ProbeError {
@@ -191,6 +210,20 @@ mod tests {
             Some(ProbeError::NotFound(msg)) => msg,
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rate_limit_text_keeps_retry_after_and_vendor_message() {
+        let err = ProbeError::RateLimit {
+            retry_after: Some(12),
+            message: "slow down".to_owned(),
+        };
+        assert_eq!(err.to_string(), "rate limited; retry after 12s: slow down");
+        let bare = ProbeError::RateLimit {
+            retry_after: None,
+            message: String::new(),
+        };
+        assert_eq!(bare.to_string(), "rate limited");
     }
 
     #[test]
