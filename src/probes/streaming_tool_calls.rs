@@ -544,7 +544,10 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_rate_limit_before_chunks_is_err_not_weak() {
-        let llm = StreamMockLlm::new(vec![Err(ProbeError::RateLimit { retry_after: None })]);
+        let llm = StreamMockLlm::new(vec![Err(ProbeError::RateLimit {
+            retry_after: None,
+            message: String::new(),
+        })]);
         let result = probe_streaming_tool_calls(&llm).await;
         assert!(
             result.is_err(),

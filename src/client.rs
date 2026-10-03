@@ -265,8 +265,12 @@ fn clone_probe_error(err: &ProbeError) -> ProbeError {
         ProbeError::Llm(s) => ProbeError::Llm(s.clone()),
         ProbeError::Transient(s) => ProbeError::Transient(s.clone()),
         ProbeError::Unreachable(s) => ProbeError::Unreachable(s.clone()),
-        ProbeError::RateLimit { retry_after } => ProbeError::RateLimit {
+        ProbeError::RateLimit {
+            retry_after,
+            message,
+        } => ProbeError::RateLimit {
             retry_after: *retry_after,
+            message: message.clone(),
         },
         ProbeError::Io(e) => ProbeError::Io(std::io::Error::new(e.kind(), e.to_string())),
         ProbeError::Json(e) => ProbeError::Internal(format!("JSON error: {e}")),

@@ -268,7 +268,10 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limit_is_err_not_unmeasured() {
-        let llm = MockLlm::new("m", "p").with_error(ProbeError::RateLimit { retry_after: None });
+        let llm = MockLlm::new("m", "p").with_error(ProbeError::RateLimit {
+            retry_after: None,
+            message: String::new(),
+        });
         let err = probe_max_output_tokens(&llm).await.unwrap_err();
         assert!(
             matches!(err, ProbeError::RateLimit { .. }),
