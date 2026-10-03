@@ -1453,21 +1453,29 @@ mod tests {
         for chunk in chunks {
             match chunk {
                 Ok(ProbeStreamChunk::TextDelta { text }) if text == "hi" => saw_text = true,
-                Ok(_) => {}
-                Err(err) => terminal = Some(err),
+                Ok(other) => panic!("unexpected chunk {other:?}"),
+                Err(err) => {
+                    assert!(terminal.is_none(), "two errors: {terminal:?} then {err:?}");
+                    terminal = Some(err);
+                }
             }
         }
         assert!(saw_text, "text before the close must still arrive");
         let err = terminal.expect("empty finish_reason is not terminal");
-        match err {
+        match &err {
             ProbeError::Transient(msg) => {
                 assert!(
                     msg.contains("upstream stream ended before a terminal event"),
                     "{msg}"
                 );
+                assert!(!err.is_connect());
             }
             other => panic!("expected scored Transient, got {other:?}"),
         }
+        let (result, cacheable) =
+            resolve_probe(Err(err), "tool_calling").expect("incomplete stream stays scored");
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert!(!cacheable);
     }
 
     #[test]
