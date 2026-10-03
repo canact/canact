@@ -31,9 +31,21 @@ pub fn strip_think_blocks(input: &str) -> String {
     out
 }
 
+/// `Some` when `value` contains a newline, NUL, or other control character.
+///
+/// Model ids and provider labels are printed into cache-list rows and
+/// Aider YAML. A control character splits those records.
+#[must_use]
+pub fn control_character_message(field: &str, value: &str) -> Option<String> {
+    value
+        .chars()
+        .find(|c| c.is_control())
+        .map(|_| format!("{field} must not contain a control character"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::strip_think_blocks;
+    use super::{control_character_message, strip_think_blocks};
 
     #[test]
     fn strip_think_blocks_closed_pair() {
@@ -67,5 +79,17 @@ mod tests {
         );
         assert_eq!(strip_think_blocks("no tags"), "no tags");
         assert_eq!(strip_think_blocks(""), "");
+    }
+
+    #[test]
+    fn control_character_message_rejects_newline_and_nul() {
+        assert_eq!(control_character_message("model", "llama3.2:3b"), None);
+        assert!(
+            control_character_message("model", "llama\n3")
+                .unwrap()
+                .contains("model")
+        );
+        assert!(control_character_message("provider", "ollama\0").is_some());
+        assert_eq!(control_character_message("model", "  gpt-4o  "), None);
     }
 }

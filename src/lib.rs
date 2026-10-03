@@ -57,7 +57,7 @@ pub use runner::{
     planned_probe_names, resolve_probe,
 };
 #[cfg(feature = "runtime")]
-pub use text::strip_think_blocks;
+pub use text::{control_character_message, strip_think_blocks};
 #[cfg(feature = "runtime")]
 pub use tool_digest::probe_tools_digest;
 

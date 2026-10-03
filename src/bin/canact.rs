@@ -6,13 +6,14 @@ use std::process::ExitCode;
 use canact::{
     CacheListRow, CapabilityLevel, CapabilityProfile, CatalogPriors, FailOn, HostOverlay,
     HostPolicyMeta, McpServerOptions, OpenAiCompatClient, PlumbingMatrix, ProbeCache, ProbeError,
-    ProbeRun, ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token, finalize_key_route,
-    invalid_explicit_base_url, is_bedrock_provider_label, is_groq_provider_label, list_model_ids,
-    looks_cheap, missing_cloud_key_message, missing_model_message, planned_probe_names,
-    present_base_url, present_secret, probe_endpoint_without_key, probe_tools_digest,
-    redact_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
-    run_mcp_stdio_with, shipped_profile_base_conflict, should_load_claude_code_login,
-    should_load_xai_oauth, with_route_error_label, xai_oauth_access_token,
+    ProbeRun, ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token,
+    control_character_message, finalize_key_route, invalid_explicit_base_url,
+    is_bedrock_provider_label, is_groq_provider_label, list_model_ids, looks_cheap,
+    missing_cloud_key_message, missing_model_message, planned_probe_names, present_base_url,
+    present_secret, probe_endpoint_without_key, probe_tools_digest, redact_base_url,
+    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio_with,
+    shipped_profile_base_conflict, should_load_claude_code_login, should_load_xai_oauth,
+    with_route_error_label, xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -309,6 +310,10 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         eprintln!("error: {msg}");
         return Err(1);
     }
+    if let Some(msg) = control_character_message("provider", &provider) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
     let cache_path = resolve_user_path(args.cache.clone(), default_cache_path());
     let mut cache = ProbeCache::load(&cache_path).map_err(|e| {
         eprintln!("error: failed to load cache {}: {e}", cache_path.display());
@@ -574,11 +579,18 @@ fn run_cache_list(args: CacheListArgs) -> Result<(), u8> {
     Ok(())
 }
 
+fn one_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 fn format_cache_list_line(row: &CacheListRow) -> String {
     let mut line = format!(
         "{}\t{}\t{}\t{}",
-        row.model_id,
-        row.provider,
+        one_field(&row.model_id),
+        one_field(&row.provider),
         row.suite.as_str(),
         row.probed_at
     );
@@ -865,10 +877,20 @@ async fn resolve_model(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
+        if let Some(msg) = control_character_message("--model", model) {
+            eprintln!("error: {msg}");
+            return Err(1);
+        }
         return Ok(model.to_owned());
     }
     match list_model_ids(base_url, api_key).await {
-        Ok(ids) if ids.len() == 1 => Ok(ids[0].clone()),
+        Ok(ids) if ids.len() == 1 => {
+            if let Some(msg) = control_character_message("--model", &ids[0]) {
+                eprintln!("error: {msg}");
+                return Err(1);
+            }
+            Ok(ids[0].clone())
+        }
         Ok(ids) => {
             eprintln!("{}", missing_model_message(&ids));
             Err(1)
@@ -1078,7 +1100,23 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{cli_explicit_base_url, expand_tilde};
+    use super::{cli_explicit_base_url, expand_tilde, format_cache_list_line};
+    use canact::{CacheListRow, SuiteTier};
+
+    #[test]
+    fn cache_list_line_keeps_one_row_when_model_has_a_newline() {
+        let row = CacheListRow {
+            model_id: "llama\n3".to_owned(),
+            provider: "ollama\0".to_owned(),
+            suite: SuiteTier::Policy,
+            probed_at: 1,
+            stale: false,
+        };
+        let line = format_cache_list_line(&row);
+        assert_eq!(line.lines().count(), 1, "{line}");
+        assert!(!line.contains('\0'), "{line}");
+        assert!(line.contains("llama?3"), "{line}");
+    }
 
     #[test]
     fn broken_tools_object_reports_json_syntax() {
