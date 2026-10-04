@@ -52,6 +52,18 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertIn("!startsWith(github.head_ref, 'release-please')", text)
         self.assertIn("autorelease: pending", text)
 
+    def test_dependabot_auto_merge_reads_the_event_only(self) -> None:
+        text = (WORKFLOWS / "dependabot-auto-merge.yml").read_text(encoding="utf-8")
+        on_block = _on_block(text)
+        self.assertIn("pull_request_target:", on_block)
+        self.assertIn("workflow_dispatch:", on_block)
+        self.assertNotIn("actions/checkout", text)
+        self.assertIn("dependabot[bot]", text)
+        self.assertIn("version-update:semver-major", text)
+        self.assertIn("cancel-in-progress: false", text)
+        self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", text)
+        self.assertIn("GH_TOKEN: ${{ steps.app-token.outputs.token }}", text)
+
     def test_cheap_pr_status_checks_do_not_cancel(self) -> None:
         for name in ("pr-title.yml", "dco.yml"):
             text = (WORKFLOWS / name).read_text(encoding="utf-8")

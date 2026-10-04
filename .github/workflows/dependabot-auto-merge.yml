@@ -1,0 +1,112 @@
+name: Dependabot auto-merge
+
+# Reads the event payload only. Does not check out the PR head.
+on:
+  pull_request_target:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number || github.ref }}
+  # A cancelled approve leaves the PR without a review.
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    name: Dependabot auto-merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AUTO_APPROVE_CLIENT_ID }}
+          private-key: ${{ secrets.AUTO_APPROVE_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-workflows: write
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # update-type is the highest bump in the group. A commit pin
+      # compares as a major because the two SHAs differ. That is not
+      # a semver break. A real major next to a pin still waits.
+      - name: Detect a real major
+        id: major
+        env:
+          PREV: ${{ steps.metadata.outputs.previous-version }}
+          TYPE: ${{ steps.metadata.outputs.update-type }}
+          DEPS: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          set -euo pipefail
+          real=true
+          if [ -n "${DEPS}" ] && [ "${DEPS}" != "null" ]; then
+            if printf '%s' "$DEPS" | jq -e 'type == "array" and length > 0' >/dev/null; then
+              status=0
+              printf '%s' "$DEPS" | jq -e --arg aggregate "$TYPE" '
+                any(.[];
+                  ((.prevVersion // "") | test("^[0-9a-f]{40}$") | not) and
+                  (
+                    .updateType == "version-update:semver-major" or
+                    (
+                      ((.updateType // "") == "") and
+                      $aggregate == "version-update:semver-major"
+                    )
+                  )
+                )
+              ' >/dev/null || status=$?
+              if [ "$status" -eq 0 ]; then
+                real=true
+              elif [ "$status" -eq 1 ]; then
+                real=false
+              else
+                echo "Could not read Dependabot metadata"
+                real=true
+              fi
+            fi
+          elif [ -n "${TYPE}" ]; then
+            if [ "${TYPE}" != "version-update:semver-major" ] || printf '%s' "$PREV" | grep -Eq '^[0-9a-f]{40}$'; then
+              real=false
+            fi
+          fi
+          echo "real=${real}" >> "$GITHUB_OUTPUT"
+      - name: Approve
+        if: steps.major.outputs.real != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          decision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq .reviewDecision)
+          if [ "$decision" != "APPROVED" ]; then
+            gh pr review --repo "$REPO" --approve "$PR"
+          fi
+      - name: Enable auto-merge
+        if: steps.major.outputs.real != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          enabled=$(gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null')
+          if [ "$enabled" != "true" ]; then
+            gh pr merge --repo "$REPO" --auto --squash "$PR"
+          fi
+      - name: Skip a real major
+        if: steps.major.outputs.real == 'true'
+        run: echo "Skipping a real major update. It needs a manual review."

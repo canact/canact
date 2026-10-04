@@ -6,3 +6,4 @@ rules:
     ignore:
       # Reads the event payload only. No checkout of PR head.
       - pr-title.yml
+      - dependabot-auto-merge.yml
