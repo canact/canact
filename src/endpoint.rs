@@ -684,6 +684,8 @@ fn is_local_provider_label(provider: &str) -> bool {
 /// A bad suffix stays after the host so the http(s) check rejects it.
 /// `None` would fall through to `https://api.openai.com/v1`.
 /// `::1` is written as `[::1]:{suffix}`, never `[::1:{suffix}]`.
+/// `@` is percent-encoded. Left raw, it is userinfo and the host after
+/// it is what gets dialed.
 fn loopback_host_port_base_url(provider: &str) -> Option<String> {
     const HOSTS: &[(&str, &str)] = &[
         ("[::1]", "[::1]"),
@@ -697,6 +699,7 @@ fn loopback_host_port_base_url(provider: &str) -> Option<String> {
             .strip_prefix(prefix)
             .and_then(|rest| rest.strip_prefix(':'))
         {
+            let suffix = suffix.replace('@', "%40");
             return Some(format!("http://{authority}:{suffix}/v1"));
         }
     }
@@ -1909,6 +1912,24 @@ mod tests {
             ("localhost:abc", "http://localhost:abc/v1"),
             ("0.0.0.0:abc", "http://0.0.0.0:abc/v1"),
             ("::1:80:80", "http://[::1]:80:80/v1"),
+            (
+                "127.0.0.1:9@evil.example",
+                "http://127.0.0.1:9%40evil.example/v1",
+            ),
+            (
+                "localhost:9@evil.example",
+                "http://localhost:9%40evil.example/v1",
+            ),
+            (
+                "0.0.0.0:9@evil.example",
+                "http://0.0.0.0:9%40evil.example/v1",
+            ),
+            ("[::1]:9@evil.example", "http://[::1]:9%40evil.example/v1"),
+            ("::1:9@evil.example", "http://[::1]:9%40evil.example/v1"),
+            (
+                "127.0.0.1:9@evil.example:443",
+                "http://127.0.0.1:9%40evil.example:443/v1",
+            ),
         ];
         for (provider, expect) in cases {
             let url = default_compat_base_url(provider, false);
@@ -1945,6 +1966,33 @@ mod tests {
         assert_eq!(default_compat_base_url("::1", false), OLLAMA_BASE_URL);
         assert_eq!(default_compat_base_url("[::1]", false), OLLAMA_BASE_URL);
         assert_eq!(default_compat_base_url("0.0.0.0", false), OLLAMA_BASE_URL);
+    }
+
+    #[test]
+    fn loopback_provider_at_sign_is_not_a_different_host() {
+        let canary = "canary-loopback-at-secret";
+        for provider in [
+            "127.0.0.1:9@evil.example",
+            "LOCALHOST:9@Evil.Example",
+            "0.0.0.0:9@evil.example",
+            "[::1]:9@evil.example",
+            "::1:9@evil.example",
+            "127.0.0.1:9@evil.example:443",
+        ] {
+            let url = default_compat_base_url(provider, false);
+            assert!(!url.contains('@'), "{provider} -> {url}");
+            assert_ne!(url, "https://api.openai.com/v1", "{provider}");
+            let first = resolve_api_key_from(None, Some(canary.into()), None, None, None, provider);
+            let err = match finalize_key_route(provider, None, first, |_| {
+                panic!("must not re-resolve when URL was omitted")
+            }) {
+                Err(err) => err,
+                Ok((_, base_url, _)) => panic!("{provider} dialed {base_url}"),
+            };
+            assert!(err.contains("invalid base URL"), "{provider}: {err}");
+            assert!(!err.contains(canary), "{provider}: {err}");
+            assert!(!err.contains("evil.example"), "{provider}: {err}");
+        }
     }
 
     #[test]

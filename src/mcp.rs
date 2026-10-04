@@ -2242,15 +2242,18 @@ mod tests {
     fn mcp_rejects_unknown_api_key_env() {
         let _foo = FooKeyEnv::set("canary-secret");
         let named = mcp_named_or_route_key(Some("FOO_KEY"), "openai");
-        assert_ne!(
-            named.as_deref(),
-            Some("canary-secret"),
-            "unknown api_key_env must not be read"
+        assert!(
+            named.is_none(),
+            "unknown api_key_env must not be read, got {named:?}"
         );
         let err = mcp_missing_key_error(Some("FOO_KEY"), "openai");
         assert!(
             err.contains("name not allowed"),
             "unknown api_key_env must be rejected, got {err}"
+        );
+        assert!(
+            !err.contains("canary-secret"),
+            "rejected name must not echo the env value: {err}"
         );
     }
 
@@ -2426,6 +2429,65 @@ mod tests {
             "userinfo before a loopback host stays allowed",
         ));
         assert_eq!(envelope["fromCache"], true, "{envelope}");
+    }
+
+    async fn refused_loopback_provider(provider: &str, api_key_env: Option<&str>) -> String {
+        let mut args = json!({
+            "model": "gpt-4o",
+            "provider": provider,
+        });
+        if let Some(name) = api_key_env {
+            args["api_key_env"] = json!(name);
+        }
+        probe_model_args(&args, &McpServerOptions::default())
+            .await
+            .expect_err(provider)
+    }
+
+    #[test]
+    fn mcp_loopback_provider_at_sign_does_not_dial_that_host() {
+        let _skip = crate::adapters::openai::CatalogSkipHttp::enable();
+        let _home = IsolatedHome::new();
+        let _env = IsolatedApiKeyEnv::set_openai("canary-loopback-at-secret");
+        let _circuit = OauthShortCircuit::enable();
+        let cache_file = default_cache_path();
+        assert!(!cache_file.exists(), "precondition");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        for provider in [
+            "127.0.0.1:9@evil.example",
+            "localhost:9@evil.example",
+            "0.0.0.0:9@evil.example",
+            "[::1]:9@evil.example",
+            "::1:9@evil.example",
+            "127.0.0.1:9@evil.example:443",
+        ] {
+            let err = rt.block_on(refused_loopback_provider(provider, None));
+            assert!(
+                err.contains("invalid base URL"),
+                "{provider} must be refused before a dial, got {err}"
+            );
+            assert!(!err.contains("canary-loopback-at-secret"), "{err}");
+            assert!(!err.contains("authentication error"), "{err}");
+            assert!(!err.contains("failed to connect"), "{err}");
+        }
+        let err = rt.block_on(refused_loopback_provider(
+            "127.0.0.1:9@evil.example",
+            Some("OPENAI_API_KEY"),
+        ));
+        assert!(err.contains("invalid base URL"), "{err}");
+        assert!(!err.contains("canary-loopback-at-secret"), "{err}");
+        assert_eq!(oauth_counts(), (0, 0));
+        assert!(
+            crate::adapters::openai::take_catalog_lookups().is_empty(),
+            "a confused loopback provider must not call catalog"
+        );
+        assert!(
+            !cache_file.exists(),
+            "refused provider must not create a cache"
+        );
     }
 
     fn write_openai_cache(path: &std::path::Path, tokens: u32) -> Vec<u8> {
