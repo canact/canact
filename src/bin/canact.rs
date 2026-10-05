@@ -430,7 +430,25 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     }
 
     if !args.json {
-        println!("Probing {model} ({provider})...");
+        // CLI strings only. The resolved model is downstream of the key.
+        let shown_model = args
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let shown_provider = if provider_hint.is_empty() {
+            None
+        } else {
+            Some(provider_hint.as_str())
+        };
+        match (shown_model, shown_provider) {
+            (Some(model_name), Some(provider_name)) => {
+                println!("Probing {model_name} ({provider_name})...");
+            }
+            (Some(model_name), None) => println!("Probing {model_name}..."),
+            (None, Some(provider_name)) => println!("Probing ({provider_name})..."),
+            (None, None) => println!("Probing..."),
+        }
         println!();
     }
     for name in planned_probe_names(suite, vision) {

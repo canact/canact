@@ -38,7 +38,7 @@ fn stdout_of(args: &[&str]) -> String {
     let out = canact()
         .args(args)
         .output()
-        .unwrap_or_else(|e| panic!("spawn canact {args:?}: {e}"));
+        .unwrap_or_else(|e| panic!("spawn canact: {e}"));
     assert!(
         out.status.success(),
         "canact {args:?} failed: {}",
@@ -2488,7 +2488,7 @@ fn dry_run_cmd(args: &[&str]) -> std::process::Output {
         .env_remove("GROQ_API_KEY")
         .env_remove("AWS_BEARER_TOKEN_BEDROCK")
         .output()
-        .unwrap_or_else(|err| panic!("spawn canact {args:?}: {err}"))
+        .unwrap_or_else(|err| panic!("spawn canact: {err}"))
 }
 
 #[test]
