@@ -152,3 +152,7 @@ and leaves stdout empty. The file list stays in the
 suite, and probe names, then exits. It does not read a login, the
 cache, or the network. See
 [#290](https://github.com/canact/canact/issues/290).
+
+`canact probe --fail-on weak` exits 2 when a finished row is Weak.
+`--fail-on degraded` also exits 2 for Medium. A skipped row or a
+probe error does not count. An unknown value exits 1.

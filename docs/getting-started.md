@@ -54,6 +54,9 @@ stored Grok and Claude Code logins. Env vars still apply.
 `canact probe --dry-run` prints the provider, redacted base URL,
 suite, and probe names, then exits. It does not read a login, the
 cache, or the network.
+`canact probe --fail-on weak` exits 2 when a finished row is Weak.
+`--fail-on degraded` also exits 2 for Medium. A skipped row or a
+probe error does not count. An unknown value exits 1.
 
 | Provider label | Default URL when `--base-url` is omitted | What is tried, first match wins | Stored login |
 | --- | --- | --- | --- |
