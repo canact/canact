@@ -1470,6 +1470,68 @@ mod tests {
         );
     }
 
+    fn set_measured(
+        profile: &mut canact::CapabilityProfile,
+        name: &str,
+        level: canact::CapabilityLevel,
+    ) {
+        let slot = profile
+            .dimension_result_mut(name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let score = match level {
+            canact::CapabilityLevel::Strong => 1.0,
+            canact::CapabilityLevel::Medium => 0.5,
+            canact::CapabilityLevel::Weak => 0.1,
+        };
+        *slot = canact::ProbeResult {
+            name: name.to_owned(),
+            score,
+            max_score: 1.0,
+            level,
+            details: "done".to_owned(),
+        };
+    }
+
+    #[test]
+    fn fail_on_weak_exits_2_when_tools_pass() {
+        let mut profile = canact::CapabilityProfile::unprobed("m", "p");
+        set_measured(
+            &mut profile,
+            "tool_calling",
+            canact::CapabilityLevel::Strong,
+        );
+        set_measured(&mut profile, "json_output", canact::CapabilityLevel::Weak);
+        let envelope = serde_json::json!({});
+        assert_eq!(
+            super::emit_envelope(&profile, false, false, envelope.clone(), None, None),
+            Ok(()),
+            "a passing tool gate without --fail-on exits 0"
+        );
+        assert_eq!(
+            super::emit_envelope(
+                &profile,
+                false,
+                false,
+                envelope.clone(),
+                None,
+                Some(canact::FailOn::Weak),
+            ),
+            Err(2)
+        );
+        set_measured(&mut profile, "json_output", canact::CapabilityLevel::Strong);
+        assert_eq!(
+            super::emit_envelope(
+                &profile,
+                false,
+                false,
+                envelope,
+                None,
+                Some(canact::FailOn::Weak),
+            ),
+            Ok(())
+        );
+    }
+
     #[test]
     fn looks_cheap_treats_ipv6_loopback_like_localhost() {
         assert!(looks_cheap("openai-compat", "llama3", "http://[::1]:11434"));
