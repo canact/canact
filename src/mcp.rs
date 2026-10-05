@@ -1194,7 +1194,7 @@ mod tests {
         assert_eq!(err, "api_key_env name not allowed");
         assert!(
             !err.contains("OPENAI_API_KEY") && !err.contains("XAI_API_KEY"),
-            "named api_key_env error must not list fallback env vars: {err}"
+            "named api_key_env error must not list fallback env vars"
         );
     }
 
@@ -1414,8 +1414,8 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("padded advertised_context must hit ctx4096");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
-        assert_eq!(envelope["advertisedContextTokens"], 4096, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
+        assert_eq!(envelope["advertisedContextTokens"], 4096, "probe envelope");
     }
 
     #[tokio::test]
@@ -1438,11 +1438,11 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("omitted advertised_context is a cache hit");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
         assert_eq!(
             envelope["advertisedContextTokens"],
             Value::Null,
-            "{envelope}"
+            "probe envelope"
         );
     }
 
@@ -1563,8 +1563,8 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("padded suite must parse Full");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
-        assert_eq!(envelope["suite"], "full", "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
+        assert_eq!(envelope["suite"], "full", "probe envelope");
     }
 
     #[tokio::test]
@@ -1645,8 +1645,8 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("omitted cheap is policy");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
-        assert_eq!(envelope["suite"], "policy", "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
+        assert_eq!(envelope["suite"], "policy", "probe envelope");
     }
 
     #[tokio::test]
@@ -1671,8 +1671,8 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("cheap+full with no suite is Full");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
-        assert_eq!(envelope["suite"], "full", "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
+        assert_eq!(envelope["suite"], "full", "probe envelope");
     }
 
     #[tokio::test]
@@ -1698,11 +1698,8 @@ mod tests {
                 .unwrap_or_else(|err| {
                     panic!("whitespace cache {cache_arg:?} must use default: {err}")
                 });
-            assert_eq!(envelope["fromCache"], true, "{cache_arg:?} {envelope}");
-            assert_eq!(
-                envelope["effectiveContextTokens"], 4242,
-                "{cache_arg:?} {envelope}"
-            );
+            assert_eq!(envelope["fromCache"], true, "probe envelope");
+            assert_eq!(envelope["effectiveContextTokens"], 4242, "probe envelope");
         }
     }
 
@@ -1717,8 +1714,8 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
             .expect("omitted vision uses catalog cache");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
-        assert_eq!(envelope["effectiveContextTokens"], 777, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
+        assert_eq!(envelope["effectiveContextTokens"], 777, "probe envelope");
     }
 
     #[test]
@@ -1821,10 +1818,10 @@ mod tests {
             "provider=groq must not send OPENAI_API_KEY"
         );
         let groq_err = mcp_missing_key_error(None, "groq");
-        assert!(groq_err.contains("GROQ_API_KEY"), "{groq_err}");
+        assert!(groq_err.contains("GROQ_API_KEY"), "groq missing-key text");
         assert!(
             !groq_err.contains("set api_key_env (or OPENAI_API_KEY"),
-            "Groq missing-key must not list OPENAI_API_KEY as the fix: {groq_err}"
+            "Groq missing-key must not list OPENAI_API_KEY as the fix"
         );
 
         let bedrock = mcp_resolve_key_route(
@@ -1841,11 +1838,11 @@ mod tests {
         let bedrock_err = mcp_missing_key_error(None, "bedrock");
         assert!(
             bedrock_err.contains("AWS_BEARER_TOKEN_BEDROCK"),
-            "{bedrock_err}"
+            "bedrock missing-key text"
         );
         assert!(
             !bedrock_err.contains("set api_key_env (or OPENAI_API_KEY"),
-            "Bedrock missing-key must not list OPENAI_API_KEY as the fix: {bedrock_err}"
+            "Bedrock missing-key must not list OPENAI_API_KEY as the fix"
         );
 
         let codex = mcp_resolve_key_route(
@@ -1874,10 +1871,13 @@ mod tests {
             "provider=openai-codex must not send OPENROUTER_API_KEY"
         );
         let codex_err = mcp_missing_key_error(None, "openai-codex");
-        assert!(codex_err.contains("OPENAI_API_KEY"), "{codex_err}");
+        assert!(
+            codex_err.contains("OPENAI_API_KEY"),
+            "codex missing-key text"
+        );
         assert!(
             !codex_err.contains("OPENROUTER_API_KEY"),
-            "Codex missing-key must not list OpenRouter: {codex_err}"
+            "Codex missing-key must not list OpenRouter"
         );
     }
 
@@ -1904,31 +1904,34 @@ mod tests {
             "MCP provider openai must not use OpenRouter when only OPENROUTER_API_KEY is set"
         );
         let openai_err = mcp_missing_key_error(None, "openai");
-        assert!(openai_err.contains("OPENAI_API_KEY"), "{openai_err}");
+        assert!(
+            openai_err.contains("OPENAI_API_KEY"),
+            "openai missing-key text"
+        );
         assert!(
             !openai_err.contains("OPENROUTER_API_KEY"),
-            "provider=openai must not tell the host to set OPENROUTER_API_KEY: {openai_err}"
+            "provider=openai must not tell the host to set OPENROUTER_API_KEY"
         );
         assert!(
             !openai_err.contains("XAI_API_KEY") && !openai_err.contains("ANTHROPIC_API_KEY"),
-            "provider=openai must not list other clouds: {openai_err}"
+            "provider=openai must not list other clouds"
         );
         let openrouter_err = mcp_missing_key_error(None, "openrouter");
         assert!(
             openrouter_err.contains("OPENROUTER_API_KEY")
                 && openrouter_err.contains("OPENAI_API_KEY"),
-            "{openrouter_err}"
+            "openrouter missing-key text"
         );
         assert!(
             !openrouter_err.contains("XAI_API_KEY")
                 && !openrouter_err.contains("ANTHROPIC_API_KEY"),
-            "provider=openrouter must not list xAI or Anthropic: {openrouter_err}"
+            "provider=openrouter must not list xAI or Anthropic"
         );
         let empty_err = mcp_missing_key_error(None, "");
         assert_eq!(empty_err, "set api_key_env or OPENAI_API_KEY");
         assert!(
             !empty_err.contains("XAI_API_KEY"),
-            "empty provider defaults to OpenAI and must not list other clouds: {empty_err}"
+            "empty provider defaults to OpenAI and must not list other clouds"
         );
         assert_eq!(
             route_url("api.openai.com", true, false, false),
@@ -2242,18 +2245,15 @@ mod tests {
     fn mcp_rejects_unknown_api_key_env() {
         let _foo = FooKeyEnv::set("canary-secret");
         let named = mcp_named_or_route_key(Some("FOO_KEY"), "openai");
-        assert!(
-            named.is_none(),
-            "unknown api_key_env must not be read, got {named:?}"
-        );
+        assert!(named.is_none(), "unknown api_key_env must not be read");
         let err = mcp_missing_key_error(Some("FOO_KEY"), "openai");
         assert!(
             err.contains("name not allowed"),
-            "unknown api_key_env must be rejected, got {err}"
+            "unknown api_key_env must be rejected"
         );
         assert!(
             !err.contains("canary-secret"),
-            "rejected name must not echo the env value: {err}"
+            "rejected name must not echo the env value"
         );
     }
 
@@ -2274,7 +2274,7 @@ mod tests {
             let err = mcp_missing_key_error(Some(name), "openai");
             assert!(
                 !err.contains("name not allowed"),
-                "{name} must stay allowed, got {err}"
+                "allowlisted env name must stay allowed"
             );
         }
     }
@@ -2298,7 +2298,7 @@ mod tests {
         let envelope = probe_model_args(&args, &cache_ok())
             .await
             .expect("named anthropic plus a loopback tool url");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
         assert_eq!(
             oauth_counts(),
             (0, 0),
@@ -2331,7 +2331,7 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &public_ok)
             .await
             .expect("finalize tool url reaches the cache");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
         assert_eq!(
             oauth_counts(),
             (0, 0),
@@ -2420,15 +2420,15 @@ mod tests {
             &cache_str,
             "loopback tool base_url stays allowed",
         ));
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
-        assert_eq!(envelope["effectiveContextTokens"], 333, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
+        assert_eq!(envelope["effectiveContextTokens"], 333, "probe envelope");
 
         let envelope = rt.block_on(cached_tool_base_url(
             "http://evil.example@127.0.0.1:11434/v1",
             &cache_str,
             "userinfo before a loopback host stays allowed",
         ));
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
     }
 
     async fn refused_loopback_provider(provider: &str, api_key_env: Option<&str>) -> String {
@@ -2563,7 +2563,7 @@ mod tests {
             probe_model_with_route(&args, mcp_empty_route(), None, &McpServerOptions::default())
                 .await
                 .expect("cache inside the default directory stays allowed");
-        assert_eq!(envelope["effectiveContextTokens"], 666, "{envelope}");
+        assert_eq!(envelope["effectiveContextTokens"], 666, "probe envelope");
     }
 
     #[tokio::test]
@@ -2584,7 +2584,7 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &allowed)
             .await
             .expect("allow_cache reads an outside file");
-        assert_eq!(envelope["effectiveContextTokens"], 444, "{envelope}");
+        assert_eq!(envelope["effectiveContextTokens"], 444, "probe envelope");
         assert_eq!(std::fs::read(&outside_path).expect("unchanged"), before);
     }
 
@@ -2799,8 +2799,8 @@ mod tests {
         });
         let err = probe_model_args(&args, &policy).await.unwrap_err();
         assert_eq!(err, "FOO_KEY is unset or empty");
-        assert!(!err.contains("name not allowed"), "{err}");
-        assert_eq!(oauth_counts(), (0, 0), "{err}");
+        assert!(!err.contains("name not allowed"), "pinned unset name");
+        assert_eq!(oauth_counts(), (0, 0), "pinned unset name");
         assert!(crate::adapters::openai::take_catalog_lookups().is_empty());
     }
 
@@ -2874,7 +2874,7 @@ mod tests {
         let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &policy)
             .await
             .expect("same trimmed url");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
     }
 
     #[test]
@@ -2908,7 +2908,7 @@ mod tests {
         let envelope = probe_model_args(&args, &policy)
             .await
             .expect("a server-pinned url may still read a stored login");
-        assert_eq!(envelope["fromCache"], true, "{envelope}");
+        assert_eq!(envelope["fromCache"], true, "probe envelope");
         assert_eq!(
             oauth_counts(),
             (1, 0),
