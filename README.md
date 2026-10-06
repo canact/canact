@@ -48,7 +48,7 @@ scoop install canact/canact
 Library (runtime only, no CLI):
 
 ```toml
-canact = { version = "0.9", default-features = false, features = ["runtime"] }
+canact = { version = "0.10", default-features = false, features = ["runtime"] }
 ```
 
 Default features are empty so a host pin does not pull clap. MSRV is
@@ -166,7 +166,7 @@ stays `runtime` only, which is enough for `ProbeRunner`. The key
 below is `None` for local Ollama. Do not put a raw key in source.
 
 ```toml
-canact = { version = "0.9", default-features = false, features = ["runtime", "openai"] }
+canact = { version = "0.10", default-features = false, features = ["runtime", "openai"] }
 ```
 
 ```rust

@@ -96,7 +96,7 @@ A snippet that constructs `OpenAiCompatClient` needs features
 local Ollama. Do not put a raw key in the source.
 
 ```toml
-canact = { version = "0.9", default-features = false, features = ["runtime", "openai"] }
+canact = { version = "0.10", default-features = false, features = ["runtime", "openai"] }
 ```
 
 ```rust
