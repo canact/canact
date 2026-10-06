@@ -1117,6 +1117,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_200_empty_text_parts_with_vendor_error_is_not_success() {
+        let base = spawn_http(
+            200,
+            "OK",
+            br#"{"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":""}]},"finish_reason":"stop"}],"error":{"message":"Provider returned error","code":502}}"#
+                .to_vec(),
+        );
+        let err = client(&base)
+            .chat(empty_req())
+            .await
+            .expect_err("empty text parts with a vendor error");
+        let text = err.to_string();
+        assert!(text.contains("Provider returned error"), "{text}");
+        assert!(
+            matches!(err, ProbeError::Transient(_)),
+            "numeric code 502 stays transient, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_200_finished_empty_choice_is_success() {
+        let base = spawn_http(
+            200,
+            "OK",
+            br#"{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}"#
+                .to_vec(),
+        );
+        let resp = client(&base)
+            .chat(empty_req())
+            .await
+            .expect("finished empty choice");
+        assert_eq!(resp.text, "");
+        assert_eq!(resp.finish, ProbeFinish::Stop);
+    }
+
+    #[tokio::test]
     async fn chat_parses_text_and_usage() {
         let base = spawn_http(200, "OK", chat_ok("hello"));
         let resp = client(&base).chat(empty_req()).await.expect("ok");
