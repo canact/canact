@@ -3,6 +3,47 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.10.0](https://github.com/canact/canact/compare/v0.9.0...v0.10.0) (2026-10-06)
+
+
+### Features
+
+* add cache path and cache list ([#296](https://github.com/canact/canact/issues/296)) ([32cb65b](https://github.com/canact/canact/commit/32cb65b65e80f5fa7a5185e8983ba304f16a9bf1))
+* add export --all ([#298](https://github.com/canact/canact/issues/298)) ([11620aa](https://github.com/canact/canact/commit/11620aad9840f87c02d37e4a16fdaa362e56fa90)), closes [#289](https://github.com/canact/canact/issues/289)
+* add probe --dry-run ([#299](https://github.com/canact/canact/issues/299)) ([1a50f77](https://github.com/canact/canact/commit/1a50f7758356c80e3abb394976787d3750f0fa1e)), closes [#290](https://github.com/canact/canact/issues/290)
+* add probe --no-login ([#297](https://github.com/canact/canact/issues/297)) ([fe8de12](https://github.com/canact/canact/commit/fe8de121e2c7630ef5894c20ece11bb0189ef552)), closes [#288](https://github.com/canact/canact/issues/288)
+* consume wiremux 0.10.0 ([#318](https://github.com/canact/canact/issues/318)) ([dbdcceb](https://github.com/canact/canact/commit/dbdcceb4bd17e57188c0a0c766e003b587aa8ec3))
+* consume wiremux 0.9.3 ([#304](https://github.com/canact/canact/issues/304)) ([f583abf](https://github.com/canact/canact/commit/f583abf8477f6ac10f74e2fbe471294b8af0bdd2))
+* exit 2 from canact probe --fail-on ([#321](https://github.com/canact/canact/issues/321)) ([d01dd20](https://github.com/canact/canact/commit/d01dd204396ab61adac23dc245c0af41ed2af899))
+* let a host pass its own tool list into the tool probes ([#301](https://github.com/canact/canact/issues/301)) ([91fb739](https://github.com/canact/canact/commit/91fb73964725802a78151054c4cb8b43c56a1155))
+
+
+### Bug Fixes
+
+* confine MCP probe_model tool arguments ([#293](https://github.com/canact/canact/issues/293)) ([353ddcd](https://github.com/canact/canact/commit/353ddcdf4d8e7b05d02052ce7ceb25828967a324))
+* consume wiremux 0.10.3 ([#332](https://github.com/canact/canact/issues/332)) ([c197b36](https://github.com/canact/canact/commit/c197b36d9210294e9c5058c23f333a6a8b46bdc2))
+* drop the repeated advertised-context error prefix ([#309](https://github.com/canact/canact/issues/309)) ([502f0e8](https://github.com/canact/canact/commit/502f0e8faf1f6da556c19c29ab410155a22d15cc))
+* ignore a blank API key and reject a tools directory ([#312](https://github.com/canact/canact/issues/312)) ([a4f5c1f](https://github.com/canact/canact/commit/a4f5c1f8cbe8841cc3ad933d5c7067dde7d43261))
+* include retry-after and the vendor text on a 429 ([#324](https://github.com/canact/canact/issues/324)) ([6fd2c2f](https://github.com/canact/canact/commit/6fd2c2f69dc1e042318fb14007ebe39ad9bcad3b))
+* keep probe logs off the key route ([966b331](https://github.com/canact/canact/commit/966b3314d11f5b6b46777d7728134e9d503d752a))
+* keep probe logs off the key route ([#331](https://github.com/canact/canact/issues/331)) ([966b331](https://github.com/canact/canact/commit/966b3314d11f5b6b46777d7728134e9d503d752a))
+* label inferred XML tool calling as Strong ([#305](https://github.com/canact/canact/issues/305)) ([35e47ee](https://github.com/canact/canact/commit/35e47ee8d589ab97a6a26db512eeaa4a0b8670af))
+* omit unprobed vision from the Cline overlay ([#306](https://github.com/canact/canact/issues/306)) ([dc41585](https://github.com/canact/canact/commit/dc415850a6a757356262972107cd24a98efd4e0a))
+* refuse a loopback provider whose suffix changes the host ([#326](https://github.com/canact/canact/issues/326)) ([7f0c74c](https://github.com/canact/canact/commit/7f0c74c9555e8938e67f993fdb354cdd4e90269c))
+* refuse a shipped-profile host that --base-url does not match ([#322](https://github.com/canact/canact/issues/322)) ([6c6ca3d](https://github.com/canact/canact/commit/6c6ca3df8eaa71f5da2843c154993824996997da))
+* reject a base URL port that is not a TCP port ([#311](https://github.com/canact/canact/issues/311)) ([d8b1fcf](https://github.com/canact/canact/commit/d8b1fcfa8e06bd585c7a5537cc6fc134cdc52c13))
+* reject a base URL that is not http(s) ([#310](https://github.com/canact/canact/issues/310)) ([2156fb9](https://github.com/canact/canact/commit/2156fb94dfd8e1e4e1a4a3434a8b4fbd7e5dc14f))
+* reject a loopback provider that is not a real URL ([#320](https://github.com/canact/canact/issues/320)) ([fabf5ed](https://github.com/canact/canact/commit/fabf5ed90cd4393690141542d4aabec042200a30))
+* reject a model id that contains a control character ([#323](https://github.com/canact/canact/issues/323)) ([67fbf60](https://github.com/canact/canact/commit/67fbf6083336a91d279c7fc1398893f4f2e41aa7))
+* report tools-file JSON errors accurately ([#307](https://github.com/canact/canact/issues/307)) ([8f6b510](https://github.com/canact/canact/commit/8f6b510c8bbc41a1bb53d13e5de281bdf10315e0))
+* say a tools-file item must be an object ([#308](https://github.com/canact/canact/issues/308)) ([09aff39](https://github.com/canact/canact/commit/09aff39905b21d60db26073e8cd2fb6f6c58c573))
+* say an MCP tools value must be an array of objects ([#313](https://github.com/canact/canact/issues/313)) ([1361c30](https://github.com/canact/canact/commit/1361c30eec7c581468562257ce614009dcdf42d1))
+* say when a probe cache parent is a file ([#316](https://github.com/canact/canact/issues/316)) ([97486d0](https://github.com/canact/canact/commit/97486d02f4ef30f4bb4730da335a39f40e0c6072))
+* say when a tools file parent is a file ([#317](https://github.com/canact/canact/issues/317)) ([d9fb44c](https://github.com/canact/canact/commit/d9fb44ce762eb9a6a84ef25b7a412c48817bf1b6))
+* say when an export directory parent is a file ([#315](https://github.com/canact/canact/issues/315)) ([5b57d21](https://github.com/canact/canact/commit/5b57d21d737d05708ebddea208664997945b4ade))
+* say when export model or provider is empty ([#314](https://github.com/canact/canact/issues/314)) ([f932699](https://github.com/canact/canact/commit/f9326991b5a833aa7e3d4a3928012a521433c05c))
+* state the human-table count and tool-selection status ([#295](https://github.com/canact/canact/issues/295)) ([9c971ae](https://github.com/canact/canact/commit/9c971ae229aa8ad762244294e90fffa9eabed3e0)), closes [#285](https://github.com/canact/canact/issues/285) [#286](https://github.com/canact/canact/issues/286)
+
 ## [0.9.0](https://github.com/canact/canact/compare/v0.8.0...v0.9.0) (2026-09-27)
 
 
