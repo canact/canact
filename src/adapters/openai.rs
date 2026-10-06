@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.10.0.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.10.3.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -1093,6 +1093,27 @@ mod tests {
             ProbeError::Transient(_) => {}
             other => panic!("expected Transient, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn chat_200_empty_choice_with_vendor_error_is_not_success() {
+        // OpenRouter returns HTTP 200 with an error object beside an empty choice.
+        let base = spawn_http(
+            200,
+            "OK",
+            br#"{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop"}],"error":{"message":"Provider returned error","code":502}}"#
+                .to_vec(),
+        );
+        let err = client(&base)
+            .chat(empty_req())
+            .await
+            .expect_err("empty choice with a vendor error");
+        let text = err.to_string();
+        assert!(text.contains("Provider returned error"), "{text}");
+        assert!(
+            matches!(err, ProbeError::Transient(_)),
+            "numeric code 502 stays transient, got {err:?}"
+        );
     }
 
     #[tokio::test]
