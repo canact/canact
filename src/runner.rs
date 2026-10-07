@@ -12,7 +12,8 @@ use crate::client::{ProbeClient, ProbeTool};
 use crate::error::ProbeError;
 use crate::probes;
 use crate::types::{
-    CapabilityLevel, CapabilityProfile, HostPolicyMeta, ProbeResult, SuiteTier, TOOL_PROBE_NAMES,
+    CapabilityLevel, CapabilityProfile, HostPolicyMeta, NO_TOOLS_DETAILS, ProbeResult, SuiteTier,
+    TOOL_PROBE_NAMES,
 };
 
 /// Default concurrency for paid providers (effectively unlimited).
@@ -607,10 +608,10 @@ fn no_multimodal_message(err: &str) -> bool {
 /// Resolve a probe result and whether it is safe to write into the 30-day cache.
 ///
 /// Auth and unreachable hosts abort the suite (`Err`). Definitive "does
-/// not support tools" on a tool-named probe is Weak and cacheable. Other
-/// errors store Medium with `Probe failed:` details. Policy uses
-/// [`crate::ProbeResult::completed_level`], which treats that prefix as
-/// Weak. Transient errors must not be persisted as a capability score.
+/// not support tools" on a tool-named probe is a completed Weak and
+/// cacheable. Other errors store Medium with `Probe failed:` details.
+/// That prefix is unfinished and is omitted from overall. Transient
+/// errors must not be persisted as a capability score.
 pub fn resolve_probe(
     result: Result<ProbeResult, ProbeError>,
     name: &str,
@@ -651,7 +652,7 @@ pub fn resolve_probe(
                         score: 0.0,
                         max_score: 1.0,
                         level: CapabilityLevel::Weak,
-                        details: format!("Probe failed: {err}"),
+                        details: NO_TOOLS_DETAILS.to_owned(),
                     },
                     true,
                 ))

@@ -131,13 +131,21 @@ fn resolve_probe_vision_no_multimodal_is_measured_weak() {
 fn resolve_probe_no_tools_is_weak_and_cacheable() {
     let err: Result<ProbeResult, ProbeError> =
         Err(ProbeError::Llm("does not support tools".into()));
-    let (result, cacheable) = resolve_probe(err, "tool_calling").expect("synthesized");
+    let (result, cacheable) = resolve_probe(err, "tool_calling").expect("scored");
     assert_eq!(result.level, CapabilityLevel::Weak);
     assert_eq!(result.score, 0.0);
     assert!(
         cacheable,
         "definitive no-tools may stay in the 30-day cache"
     );
+    assert!(
+        !result.details.starts_with("Probe failed:"),
+        "must be a completed Weak so overall counts it: {result:?}"
+    );
+    assert_eq!(result.measured_level(), Some(CapabilityLevel::Weak));
+    let mut card = sample_profile();
+    card.tool_calling = result;
+    assert_eq!(card.overall_level(), CapabilityLevel::Weak);
 }
 
 #[test]
@@ -145,10 +153,15 @@ fn resolve_probe_no_tools_is_weak_for_all_tool_probe_names() {
     for name in TOOL_PROBE_NAMES {
         let err: Result<ProbeResult, ProbeError> =
             Err(ProbeError::Llm("does not support tools".into()));
-        let (result, cacheable) = resolve_probe(err, name).expect("synthesized");
+        let (result, cacheable) = resolve_probe(err, name).expect("scored");
         assert_eq!(result.level, CapabilityLevel::Weak, "{name}");
         assert_eq!(result.score, 0.0, "{name}");
         assert!(cacheable, "{name}");
+        assert_eq!(
+            result.measured_level(),
+            Some(CapabilityLevel::Weak),
+            "{name}"
+        );
     }
 }
 
