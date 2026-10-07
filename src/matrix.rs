@@ -402,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn unprobed_parallel_floor_is_skipped() {
+    fn unprobed_parallel_floor_is_skipped_measured_weak_is_fail() {
         let mut card = CapabilityProfile::unprobed("m", "ollama");
         if card.parallel_tool_scale.measured_level().is_some() {
             card.parallel_tool_scale.level = CapabilityLevel::Medium;
@@ -410,6 +410,11 @@ mod tests {
         }
         let row = PlumbingRow::from_profile(&card);
         assert_eq!(row.parallel_floor, PlumbingCell::Skipped);
+
+        let mut weak = profile();
+        weak.parallel_tool_scale = probe("parallel_tool_scale", CapabilityLevel::Weak);
+        let weak_row = PlumbingRow::from_profile(&weak);
+        assert_eq!(weak_row.parallel_floor, PlumbingCell::Fail);
     }
 
     #[test]
