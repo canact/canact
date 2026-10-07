@@ -197,7 +197,7 @@ fields are in [Read the card](docs/read-the-card.md).
 | `useStreamingForToolCalls` | Streaming tool-call probe completed Medium or stronger |
 | `supportsNestedToolArgs` | Nested-argument probe completed Medium or stronger |
 | `verifiedParallelToolCalls` | Floor: at least N parallel `read_file` calls (probe asks for 5) |
-| `agentLoop` | `full` / `assisted` / `single` from sequencing |
+| `agentLoop` | `full` / `assisted` / `single` when sequencing completed. JSON `null` when sequencing was skipped (a policy run). |
 | `recommendedContextTokens` | Verified floor: `min(advertised, measured)`. Not a host window. Advertised alone is never used. |
 | `maxOutputTokens` | Measured provider output cap. Never the input window. Omitted until measured. |
 | `cacheable` | Safe to persist for 30 days |
