@@ -865,12 +865,18 @@ fn load_migrates_stale_no_tools_v7_to_weak_and_persists() {
     let got = loaded.get("m", "p").expect("v7 hit after load");
     assert_eq!(got.tool_calling.level, CapabilityLevel::Weak);
     assert_eq!(got.tool_calling.score, 0.0);
+    assert_eq!(got.tool_calling.details, "Model does not support tools");
+    assert_eq!(
+        got.tool_calling.measured_level(),
+        Some(CapabilityLevel::Weak)
+    );
     assert_eq!(got.one_shot_tool_plan.level, CapabilityLevel::Weak);
     assert_eq!(got.one_shot_tool_plan.score, 0.0);
     assert_eq!(got.multi_turn_task_sequencing.level, CapabilityLevel::Weak);
     assert_eq!(got.multi_turn_task_sequencing.score, 0.0);
     assert_eq!(got.json_output.level, CapabilityLevel::Medium);
     assert_eq!(got.json_output.score, 0.5);
+    assert!(got.json_output.details.starts_with("Probe failed:"));
 
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("reread")).expect("json");
@@ -1008,6 +1014,10 @@ fn load_keeps_migrated_profile_when_save_fails() {
     let got = loaded.get("m", "p").expect("session-correct migrated hit");
     assert_eq!(got.tool_calling.level, CapabilityLevel::Weak);
     assert_eq!(got.tool_calling.score, 0.0);
+    assert_eq!(
+        got.tool_calling.measured_level(),
+        Some(CapabilityLevel::Weak)
+    );
 
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("reread")).expect("json");

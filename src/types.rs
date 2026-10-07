@@ -458,6 +458,12 @@ pub const TOOL_PROBE_NAMES: &[&str] = &[
     "multi_turn_task_sequencing",
 ];
 
+/// Completed-Weak detail for a tool probe that refused tools.
+///
+/// Must not start with `Probe failed:`. That prefix is an unfinished
+/// error and is omitted from `overall`.
+pub(crate) const NO_TOOLS_DETAILS: &str = "Model does not support tools";
+
 /// Dimensions a host may branch on. Shown under envelope `"probes"`.
 ///
 /// Sequencing is skipped on [`SuiteTier::Policy`] but still a policy field

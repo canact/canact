@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ProbeError;
 use crate::types::{
-    CapabilityLevel, CapabilityProfile, DIMENSION_NAMES, SuiteTier, TOOL_PROBE_NAMES,
-    default_probe_named,
+    CapabilityLevel, CapabilityProfile, DIMENSION_NAMES, NO_TOOLS_DETAILS, SuiteTier,
+    TOOL_PROBE_NAMES, default_probe_named,
 };
 
 /// How long a cached entry remains valid (30 days in seconds).
@@ -1209,10 +1209,10 @@ impl ProbeCache {
         self.profiles.insert(key, entry);
     }
 
-    /// Fix stale probe scores from before the "does not support tools"
-    /// scoring fix. Tool-related probes that failed because the provider
-    /// returned "does not support tools" were incorrectly scored as Medium
-    /// (0.5) instead of Weak (0.0) by the old `probe_or_default`.
+    /// Fix stale tool rows whose provider text was "does not support tools".
+    ///
+    /// Old rows stored Medium 0.5. Rows that still start with `Probe failed:`
+    /// stay unfinished, so overall omits them. Both become a completed Weak.
     ///
     /// Returns true when any row was rewritten so [`Self::load`] can persist.
     fn migrate_stale_tool_scores(&mut self) -> bool {
@@ -1222,9 +1222,16 @@ impl ProbeCache {
                 let Some(probe) = entry.profile.dimension_result_mut(name) else {
                     continue;
                 };
-                if probe.details.contains("does not support tools")
-                    && probe.level != CapabilityLevel::Weak
-                {
+                if !probe.details.contains("does not support tools") {
+                    continue;
+                }
+                if probe.level != CapabilityLevel::Weak {
+                    probe.level = CapabilityLevel::Weak;
+                    probe.score = 0.0;
+                    changed = true;
+                }
+                if probe.details.starts_with("Probe failed:") {
+                    probe.details = NO_TOOLS_DETAILS.to_owned();
                     probe.level = CapabilityLevel::Weak;
                     probe.score = 0.0;
                     changed = true;
