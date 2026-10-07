@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.10.3.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.10.4.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
