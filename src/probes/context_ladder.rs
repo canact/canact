@@ -172,28 +172,66 @@ fn fold_marker(s: &str) -> String {
         .collect()
 }
 
-fn recalls_warehouse(lower: &str) -> bool {
-    fold_marker(lower).contains(&fold_marker(&FACT_WAREHOUSE.to_lowercase()))
+/// `needle` is present and not glued to a longer letter or digit.
+fn contains_bounded(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let mut rest = hay;
+    let mut offset = 0;
+    while let Some(rel) = rest.find(needle) {
+        let abs = offset + rel;
+        let after = abs + needle.len();
+        let before_ok = hay[..abs]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        let after_ok = hay[after..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        let next = rel + needle.len();
+        offset += next;
+        rest = &rest[next..];
+    }
+    false
 }
 
-fn recalls_protocol(lower: &str) -> bool {
+fn recalls_warehouse(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    contains_bounded(
+        &fold_marker(&lower),
+        &fold_marker(&FACT_WAREHOUSE.to_lowercase()),
+    )
+}
+
+fn recalls_protocol(text: &str) -> bool {
+    let lower = text.to_lowercase();
     let proto = FACT_PROTOCOL.to_lowercase();
     let version = proto.trim_start_matches("proto-");
-    lower.contains(&proto) || lower.contains(&proto.replace('-', " ")) || lower.contains(version)
+    let spaced = proto.replace('-', " ");
+    contains_bounded(&lower, &proto)
+        || contains_bounded(&lower, &spaced)
+        || contains_bounded(&lower, version)
 }
 
-fn recalls_heartbeat(lower: &str) -> bool {
-    if lower.contains(FACT_HEARTBEAT) || lower.contains("2,840") {
+fn recalls_heartbeat(text: &str) -> bool {
+    let owned = text.to_lowercase();
+    let lower = owned.as_str();
+    if contains_bounded(&lower, FACT_HEARTBEAT) || contains_bounded(&lower, "2,840") {
         return integer_is_planted_ms(lower);
     }
     let compact: String = lower
         .chars()
         .filter(|c| !c.is_whitespace() && *c != ',')
         .collect();
-    (compact.contains(FACT_HEARTBEAT) && integer_is_planted_ms(lower))
-        || compact.contains("2.84s")
-        || compact.contains("2.84sec")
-        || (lower.contains("2.84")
+    (contains_bounded(&compact, FACT_HEARTBEAT) && integer_is_planted_ms(lower))
+        || contains_bounded(&compact, "2.84s")
+        || contains_bounded(&compact, "2.84sec")
+        || (contains_bounded(lower, "2.84")
             && (has_seconds_unit(lower)
                 || (lower.contains("heartbeat")
                     && !has_milliseconds_unit(lower)
@@ -202,10 +240,8 @@ fn recalls_heartbeat(lower: &str) -> bool {
 }
 
 fn integer_is_planted_ms(lower: &str) -> bool {
-    if has_milliseconds_unit(lower) {
-        return true;
-    }
-    // 2840 seconds / 2840s is 1000x the planted millisecond fact.
+    // 2840 seconds / 2840s is 1000x the planted millisecond fact, even
+    // when the reply also says the word milliseconds.
     if has_seconds_unit(lower)
         || has_compact_seconds_after_integer(lower)
         || has_minutes_unit(lower)
@@ -498,6 +534,30 @@ mod tests {
         assert!(
             recalls_all_facts("WH-4481\n9.2.11\n2840"),
             "bare 9.2.11 with warehouse and heartbeat must count"
+        );
+    }
+
+    #[test]
+    fn ladder_embedded_markers_do_not_count() {
+        assert_eq!(
+            count_recalled_facts("WH-44810\n19.2.11\n12840"),
+            0,
+            "longer tokens that only embed the markers are not the facts"
+        );
+        assert!(!recalls_warehouse("WH-44810"));
+        assert!(recalls_warehouse("WH-4481"));
+        assert!(!recalls_protocol("19.2.11"));
+        assert!(recalls_protocol("9.2.11"));
+        assert!(!recalls_heartbeat("12840"));
+        assert!(recalls_heartbeat("2840"));
+        assert!(
+            !recalls_heartbeat("2.84 section"),
+            "section is not the seconds abbreviation"
+        );
+        assert_eq!(
+            count_recalled_facts("WH-4481\nproto-9.2.11\n2840 seconds, not milliseconds"),
+            2,
+            "2840 seconds stays rejected when the word milliseconds is also present"
         );
     }
 
