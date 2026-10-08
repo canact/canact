@@ -19,7 +19,7 @@ use super::{refuse_truncated_incomplete, user_text};
 /// - `1.0` - `finish=Length` (non-empty), or Stop with <= 400 characters
 /// - `0.5` - Stop with 401-800 characters
 /// - `0.0` - empty Stop, or Stop with > 800 characters
-/// - empty `finish=Length` is Transient (not a 30-day Weak card)
+/// - empty `finish=Length`, or a safety stop, is Transient (not a 30-day Weak card)
 pub async fn probe_max_tokens_compliance<C: ProbeClient>(
     llm: &C,
 ) -> Result<ProbeResult, ProbeError> {
@@ -32,6 +32,9 @@ pub async fn probe_max_tokens_compliance<C: ProbeClient>(
     };
 
     let response = llm.chat(request).await?;
+    if response.finish == ProbeFinish::Safety {
+        refuse_truncated_incomplete(response.finish, 0.0)?;
+    }
     if response.finish == ProbeFinish::Length && response.text.trim().is_empty() {
         refuse_truncated_incomplete(response.finish, 0.0)?;
     }
@@ -78,6 +81,17 @@ mod tests {
     use super::*;
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn safety_stop_is_not_compliance() {
+        let mut response = text_response("no");
+        response.finish = ProbeFinish::Safety;
+        let llm = MockLlm { response };
+        let err = probe_max_tokens_compliance(&llm)
+            .await
+            .expect_err("safety stop is not a score");
+        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
+    }
 
     #[tokio::test]
     async fn length_empty_is_transient() {

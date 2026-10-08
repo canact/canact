@@ -555,6 +555,16 @@ fn take_ladder(
     match ladder.error {
         Ok(()) => Ok(ladder.tokens),
         Err(err) => {
+            let blocks_window = matches!(
+                err,
+                ProbeError::Auth(_)
+                    | ProbeError::NotFound(_)
+                    | ProbeError::Unreachable(_)
+                    | ProbeError::RateLimit { .. }
+            );
+            if !blocks_window && ProbeError::is_context_window_message(&err.to_string()) {
+                return Ok(ladder.tokens);
+            }
             let (_, ok_to_cache) = resolve_probe(Err(err), "effective_context_tokens")?;
             *cacheable &= ok_to_cache;
             Ok(ladder.tokens)
@@ -605,6 +615,13 @@ fn no_multimodal_message(err: &str) -> bool {
         || t.contains("vision is not supported")
 }
 
+fn image_too_large_message(err: &str) -> bool {
+    let t = err.to_ascii_lowercase();
+    t.contains("image is too large") || t.contains("image too large")
+}
+
+const MALFORMED_TOOL_DETAILS: &str = "Model emitted a malformed tool call";
+
 /// Resolve a probe result and whether it is safe to write into the 30-day cache.
 ///
 /// Auth and unreachable hosts abort the suite (`Err`). Definitive "does
@@ -625,6 +642,39 @@ pub fn resolve_probe(
             let is_tool_probe = TOOL_PROBE_NAMES.contains(&name);
             let tools_not_supported = err_msg.contains("does not support tools");
             let vision_not_supported = name == "vision" && no_multimodal_message(&err_msg);
+            let image_too_large = name == "vision" && image_too_large_message(&err_msg);
+            let malformed_tool = is_tool_probe
+                && err_msg
+                    .to_ascii_lowercase()
+                    .contains("malformed_function_call");
+
+            if image_too_large {
+                warn!(probe = name, error = %err, "Image exceeds the model size limit");
+                return Ok((
+                    ProbeResult {
+                        name: name.to_string(),
+                        score: 0.0,
+                        max_score: 1.0,
+                        level: CapabilityLevel::Weak,
+                        details: "Image exceeds the model size limit".to_string(),
+                    },
+                    true,
+                ));
+            }
+
+            if malformed_tool {
+                warn!(probe = name, error = %err, "Model emitted a malformed tool call");
+                return Ok((
+                    ProbeResult {
+                        name: name.to_string(),
+                        score: 0.0,
+                        max_score: 1.0,
+                        level: CapabilityLevel::Weak,
+                        details: MALFORMED_TOOL_DETAILS.to_string(),
+                    },
+                    true,
+                ));
+            }
 
             if vision_not_supported {
                 warn!(
@@ -721,5 +771,85 @@ mod planned_probe_names_tests {
         assert!(!names.contains(&"one_shot_tool_plan"));
         assert!(!names.contains(&"vision"));
         assert!(!names.contains(&"xml_tool_calling"));
+    }
+}
+
+#[cfg(test)]
+mod window_cache_tests {
+    use super::take_ladder;
+    use crate::error::ProbeError;
+    use crate::probes::ContextLadder;
+
+    #[test]
+    fn window_rejection_keeps_floor_and_cache() {
+        let mut cacheable = true;
+        let ladder = ContextLadder {
+            tokens: Some(4096),
+            error: Err(ProbeError::Llm("context length exceeded".into())),
+            recall_hits: 3,
+        };
+        let floor = take_ladder(&mut cacheable, ladder).expect("floor");
+        assert_eq!(floor, Some(4096));
+        assert!(cacheable);
+    }
+
+    #[test]
+    fn transient_ladder_error_clears_cache() {
+        let mut cacheable = true;
+        let ladder = ContextLadder {
+            tokens: Some(4096),
+            error: Err(ProbeError::Transient("timed out".into())),
+            recall_hits: 3,
+        };
+        let floor = take_ladder(&mut cacheable, ladder).expect("floor");
+        assert_eq!(floor, Some(4096));
+        assert!(!cacheable);
+    }
+
+    #[test]
+    fn max_tokens_parameter_error_is_not_a_window_rejection() {
+        let mut cacheable = true;
+        let ladder = ContextLadder {
+            tokens: Some(4096),
+            error: Err(ProbeError::Llm(
+                "Unsupported parameter: 'max_tokens'".into(),
+            )),
+            recall_hits: 3,
+        };
+        let floor = take_ladder(&mut cacheable, ladder).expect("floor");
+        assert_eq!(floor, Some(4096));
+        assert!(!cacheable);
+    }
+
+    #[test]
+    fn rate_limit_with_request_too_large_clears_cache() {
+        let mut cacheable = true;
+        let ladder = ContextLadder {
+            tokens: Some(4096),
+            error: Err(ProbeError::RateLimit {
+                retry_after: Some(1),
+                message: "Request too large for gpt-4o on tokens per min (TPM): Limit 10000, Requested 12000".into(),
+            }),
+            recall_hits: 3,
+        };
+        let floor = take_ladder(&mut cacheable, ladder).expect("floor");
+        assert_eq!(floor, Some(4096));
+        assert!(!cacheable);
+    }
+
+    #[test]
+    fn tpm_llm_copy_is_not_a_window_rejection() {
+        let mut cacheable = true;
+        let ladder = ContextLadder {
+            tokens: Some(4096),
+            error: Err(ProbeError::Llm(
+                "Request too large for gpt-4o on tokens per min (TPM): Limit 10000, Requested 12000"
+                    .into(),
+            )),
+            recall_hits: 3,
+        };
+        let floor = take_ladder(&mut cacheable, ladder).expect("floor");
+        assert_eq!(floor, Some(4096));
+        assert!(!cacheable);
     }
 }

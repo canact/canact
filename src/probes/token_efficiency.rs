@@ -33,8 +33,11 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     };
 
     // Length on this probe is the measurement: 256 tokens for "What is 2+2?"
-    // is verbose. Do not call refuse_truncated_incomplete here.
+    // is verbose. A safety stop is not that measurement.
     let response = llm.chat(request).await?;
+    if response.finish == ProbeFinish::Safety {
+        refuse_truncated_incomplete(response.finish, 0.0)?;
+    }
     let empty_text = response.text.trim().is_empty();
     if response.finish == ProbeFinish::Length && empty_text {
         refuse_truncated_incomplete(response.finish, 0.0)?;
@@ -95,6 +98,17 @@ mod tests {
     use crate::client::{ProbeFinish, ProbeResponse, ProbeUsage};
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    #[tokio::test]
+    async fn safety_stop_is_not_a_concise_score() {
+        let mut response = text_response("4");
+        response.finish = ProbeFinish::Safety;
+        let llm = MockLlm { response };
+        let err = probe_token_efficiency(&llm)
+            .await
+            .expect_err("safety stop is not a score");
+        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
+    }
 
     #[tokio::test]
     async fn length_empty_is_transient() {

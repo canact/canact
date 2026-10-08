@@ -8,6 +8,9 @@ src/lib.rs          public types and re-exports
   endpoint          provider URL and host-family hints
   types             CapabilityProfile, levels, host-policy fields
   error             Auth / NotFound abort; Transient stays session-local
+                    a window rejection keeps the last ladder rung
+                    a safety stop is Transient and is not cached
+                    a malformed tool call is a completed Weak
   runtime           ProbeClient, ProbeRunner, graders
   adapters/openai   OpenAI-compat, Anthropic, Ollama, xAI
 src/bin/canact.rs   CLI, export, and `canact mcp` (feature `cli`)

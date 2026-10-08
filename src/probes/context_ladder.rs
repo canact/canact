@@ -4,7 +4,9 @@
 //! Each rung reports a recall fraction; `context_faithfulness` is derived.
 //! Catalog `advertised_context_tokens` may cap the max rung; it is never
 //! stored as the measured value without a passing live rung.
-//! Mid-climb Transient/RateLimit keeps the last passing rung.
+//! A mid-climb timeout or rate limit keeps the last passing rung and
+//! must not be cached. A context-window error keeps that rung and may
+//! be cached.
 
 use crate::ProbeError;
 use crate::client::{
@@ -49,8 +51,9 @@ archives daily summaries for later model calibration.";
 /// Best passing rung plus any mid-climb transport or auth error.
 ///
 /// A recall miss is `error: Ok(())` with `tokens` set to the last pass.
-/// Auth stays in `error` so the suite can abort. Other errors keep
-/// `tokens` and must refuse the 30-day cache.
+/// Auth stays in `error` so the suite can abort. A context-window
+/// error keeps `tokens` and may be cached. Timeout, connect, and
+/// rate-limit errors keep `tokens` and must not be cached.
 #[derive(Debug)]
 pub struct ContextLadder {
     /// Highest rung that recalled all markers.
@@ -86,6 +89,13 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
         let request = build_rung_request(llm.model_id(), rung);
         match llm.chat(request).await {
             Ok(response) => {
+                if response.finish == ProbeFinish::Safety {
+                    return ContextLadder {
+                        tokens: best,
+                        error: Err(ProbeError::Transient("provider safety stop".into())),
+                        recall_hits,
+                    };
+                }
                 recall_hits = count_recalled_facts(&response.text);
                 if recall_hits < 3 {
                     let error = if response.finish == ProbeFinish::Length {
@@ -153,6 +163,19 @@ fn recalls_all_facts(text: &str) -> bool {
 
 /// Derived `context_faithfulness` from the last ladder rung.
 pub fn faithfulness_from_ladder(ladder: &ContextLadder) -> crate::types::ProbeResult {
+    if ladder.tokens.is_none()
+        && let Err(err) = &ladder.error
+        && (ProbeError::is_context_window_message(&err.to_string())
+            || matches!(err, ProbeError::Transient(msg) if msg.contains("provider safety stop")))
+    {
+        return crate::types::ProbeResult {
+            name: "context_faithfulness".to_string(),
+            score: 0.5,
+            max_score: 1.0,
+            level: crate::types::CapabilityLevel::Medium,
+            details: format!("Probe failed: {err}"),
+        };
+    }
     let score = f32::from(ladder.recall_hits) / 3.0;
     crate::types::ProbeResult {
         name: "context_faithfulness".to_string(),
@@ -331,6 +354,7 @@ mod tests {
         transient_at_or_above: Option<u32>,
         auth_at_or_above: Option<u32>,
         length_on_fail: bool,
+        safety_at_or_above: Option<u32>,
         calls: Mutex<Vec<u32>>,
     }
 
@@ -342,8 +366,14 @@ mod tests {
                 transient_at_or_above: None,
                 auth_at_or_above: None,
                 length_on_fail: false,
+                safety_at_or_above: None,
                 calls: Mutex::new(Vec::new()),
             }
+        }
+
+        fn safety_at(mut self, tokens: u32) -> Self {
+            self.safety_at_or_above = Some(tokens);
+            self
         }
 
         fn length_on_fail(mut self) -> Self {
@@ -395,6 +425,13 @@ mod tests {
                 Err(ProbeError::Auth("bad".into()))
             } else if self.transient_at_or_above.is_some_and(|t| tokens >= t) {
                 Err(ProbeError::Transient("timeout".into()))
+            } else if self.safety_at_or_above.is_some_and(|t| tokens >= t) {
+                Ok(ProbeResponse {
+                    text: format!("{FACT_WAREHOUSE}\n{FACT_PROTOCOL}\n{FACT_HEARTBEAT}"),
+                    tool_calls: Vec::new(),
+                    finish: ProbeFinish::Safety,
+                    usage: None,
+                })
             } else {
                 let fail = self
                     .fail_at_or_above
@@ -773,5 +810,56 @@ mod tests {
         assert_eq!(got.recall_hits, 0);
         let faith = faithfulness_from_ladder(&got);
         assert_eq!(faith.score, 0.0);
+    }
+
+    #[test]
+    fn window_error_before_a_pass_is_not_a_measured_miss() {
+        let ladder = ContextLadder {
+            tokens: None,
+            error: Err(ProbeError::Llm("context length exceeded".into())),
+            recall_hits: 0,
+        };
+        let faith = faithfulness_from_ladder(&ladder);
+        assert!(faith.is_synthesized_error(), "{faith:?}");
+        assert_eq!(faith.measured_level(), None);
+    }
+
+    #[test]
+    fn window_error_after_a_pass_keeps_the_recall() {
+        let ladder = ContextLadder {
+            tokens: Some(4096),
+            error: Err(ProbeError::Llm("context length exceeded".into())),
+            recall_hits: 3,
+        };
+        let faith = faithfulness_from_ladder(&ladder);
+        assert_eq!(faith.score, 1.0);
+        assert!(!faith.is_synthesized_error());
+    }
+
+    #[tokio::test]
+    async fn safety_stop_with_all_facts_is_not_a_passing_rung() {
+        let llm = LadderMock::new(None, None).safety_at(4096);
+        let got = probe_effective_context_tokens(&llm, true).await;
+        assert_eq!(got.tokens, None);
+        assert!(
+            matches!(got.error, Err(ProbeError::Transient(ref msg)) if msg.contains("provider safety stop")),
+            "{:?}",
+            got.error
+        );
+        let faith = faithfulness_from_ladder(&got);
+        assert!(faith.is_synthesized_error(), "{faith:?}");
+        assert_eq!(faith.measured_level(), None);
+    }
+
+    #[tokio::test]
+    async fn safety_stop_after_a_pass_keeps_the_earlier_rung() {
+        let llm = LadderMock::new(None, None).safety_at(8192);
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert_eq!(got.tokens, Some(4096));
+        assert_eq!(got.recall_hits, 3);
+        assert!(got.error.is_err(), "{:?}", got.error);
+        let faith = faithfulness_from_ladder(&got);
+        assert_eq!(faith.score, 1.0);
+        assert!(!faith.is_synthesized_error());
     }
 }
