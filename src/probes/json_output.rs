@@ -496,11 +496,16 @@ mod tests {
                 response: text_response(body),
             };
             let result = probe_json_output(&llm).await.unwrap();
-            assert!(result.score < 1.0, "{body}: {}", result.details);
-            assert_ne!(
+            assert!(
+                result.score < 0.4,
+                "empty json strings must stay Weak, not Medium: {body}: {}",
+                result.details
+            );
+            assert_eq!(
                 result.level,
-                CapabilityLevel::Strong,
-                "empty json strings must not skip repair: {body}"
+                CapabilityLevel::Weak,
+                "empty json strings must not skip repair: {body}: {}",
+                result.details
             );
         }
     }

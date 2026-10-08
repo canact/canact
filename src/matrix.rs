@@ -27,21 +27,23 @@ pub struct PlumbingRow {
     pub model: String,
     /// Provider label from the cache row.
     pub provider: String,
-    /// Native tool calling completed Medium or stronger.
+    /// Native tool calling completed Medium or stronger. Unmeasured is skipped.
     pub native_tools: PlumbingCell,
-    /// Native tools pass, or XML fallback when native is Weak.
+    /// Native Strong or Medium is pass. XML Strong or Medium is degraded.
+    /// Both unmeasured is skipped. Measured Weak native with unmeasured XML is fail.
     pub xml_fallback: PlumbingCell,
-    /// Streaming tool-call probe completed Medium or stronger.
+    /// Streaming tool-call probe completed Medium or stronger. Unmeasured is skipped.
     pub streaming_tool_calls: PlumbingCell,
-    /// Nested-argument probe completed Medium or stronger.
+    /// Nested-argument probe completed Medium or stronger. Unmeasured is skipped.
     pub nested_args: PlumbingCell,
-    /// Complex / multi-tool probe completed Medium or stronger.
+    /// Complex / multi-tool probe completed Medium or stronger. Unmeasured is skipped.
     pub complex_tools: PlumbingCell,
-    /// Parallel floor: at least 2 pass, 1 degraded, else fail.
+    /// Parallel floor: at least 2 pass, 1 degraded, else fail. Unmeasured is skipped.
     pub parallel_floor: PlumbingCell,
-    /// JSON Strong pass, Medium (repair) degraded, else fail.
+    /// JSON Strong pass, Medium (repair) degraded, Weak fail. Unmeasured is skipped.
     pub json_output: PlumbingCell,
     /// Search/replace pass, unified diff degraded, whole file fail.
+    /// Both unmeasured is skipped.
     pub edit_format: PlumbingCell,
     /// A measured context floor exists.
     pub measured_context_floor: PlumbingCell,
@@ -153,25 +155,29 @@ fn constraint_cell(profile: &CapabilityProfile) -> PlumbingCell {
 fn measured_medium_pass(pr: &crate::types::ProbeResult) -> PlumbingCell {
     match pr.measured_level() {
         Some(CapabilityLevel::Strong | CapabilityLevel::Medium) => PlumbingCell::Pass,
-        Some(CapabilityLevel::Weak) | None => PlumbingCell::Fail,
+        Some(CapabilityLevel::Weak) => PlumbingCell::Fail,
+        None => PlumbingCell::Skipped,
     }
 }
 
 fn xml_cell(profile: &CapabilityProfile) -> PlumbingCell {
-    match profile.tool_calling.measured_level() {
-        Some(CapabilityLevel::Strong | CapabilityLevel::Medium) => PlumbingCell::Pass,
-        _ => match profile.xml_tool_calling.measured_level() {
-            Some(CapabilityLevel::Strong | CapabilityLevel::Medium) => PlumbingCell::Degraded,
-            _ => PlumbingCell::Fail,
-        },
+    match (
+        profile.tool_calling.measured_level(),
+        profile.xml_tool_calling.measured_level(),
+    ) {
+        (Some(CapabilityLevel::Strong | CapabilityLevel::Medium), _) => PlumbingCell::Pass,
+        (_, Some(CapabilityLevel::Strong | CapabilityLevel::Medium)) => PlumbingCell::Degraded,
+        (None, None) => PlumbingCell::Skipped,
+        _ => PlumbingCell::Fail,
     }
 }
 
 fn parallel_cell(profile: &CapabilityProfile) -> PlumbingCell {
     match profile.verified_parallel_tool_calls() {
+        None => PlumbingCell::Skipped,
         Some(n) if n >= 2 => PlumbingCell::Pass,
         Some(1) => PlumbingCell::Degraded,
-        Some(_) | None => PlumbingCell::Fail,
+        Some(_) => PlumbingCell::Fail,
     }
 }
 
@@ -179,11 +185,17 @@ fn json_cell(profile: &CapabilityProfile) -> PlumbingCell {
     match profile.json_output.measured_level() {
         Some(CapabilityLevel::Strong) => PlumbingCell::Pass,
         Some(CapabilityLevel::Medium) => PlumbingCell::Degraded,
-        Some(CapabilityLevel::Weak) | None => PlumbingCell::Fail,
+        Some(CapabilityLevel::Weak) => PlumbingCell::Fail,
+        None => PlumbingCell::Skipped,
     }
 }
 
 fn edit_cell(profile: &CapabilityProfile) -> PlumbingCell {
+    if profile.search_replace.measured_level().is_none()
+        && profile.unified_diff.measured_level().is_none()
+    {
+        return PlumbingCell::Skipped;
+    }
     match profile.best_edit_format() {
         EditFormatRecommendation::SearchReplace => PlumbingCell::Pass,
         EditFormatRecommendation::UnifiedDiff | EditFormatRecommendation::DiffFenced => {
@@ -351,17 +363,58 @@ mod tests {
     }
 
     #[test]
-    fn skipped_native_is_fail_not_pass() {
-        let mut p = profile();
-        p.tool_calling = ProbeResult {
+    fn skipped_native_is_skipped_measured_weak_is_fail() {
+        let mut skipped = profile();
+        skipped.tool_calling = ProbeResult {
             name: "tool_calling".into(),
             score: 0.5,
             max_score: 1.0,
             level: CapabilityLevel::Medium,
             details: "Skipped: policy suite (use --suite=full or --suite=all)".into(),
         };
-        let row = PlumbingRow::from_profile(&p);
-        assert_eq!(row.native_tools, PlumbingCell::Fail);
+        let skipped_row = PlumbingRow::from_profile(&skipped);
+        assert_eq!(skipped_row.native_tools, PlumbingCell::Skipped);
+
+        let mut weak = profile();
+        weak.tool_calling = probe("tool_calling", CapabilityLevel::Weak);
+        let weak_row = PlumbingRow::from_profile(&weak);
+        assert_eq!(weak_row.native_tools, PlumbingCell::Fail);
+    }
+
+    #[test]
+    fn probe_failed_json_is_skipped_measured_weak_is_fail() {
+        let mut failed = profile();
+        failed.json_output = ProbeResult {
+            name: "json_output".into(),
+            score: 0.5,
+            max_score: 1.0,
+            level: CapabilityLevel::Medium,
+            details: "Probe failed: timeout".into(),
+        };
+        assert!(failed.json_output.details.starts_with("Probe failed:"));
+        let failed_row = PlumbingRow::from_profile(&failed);
+        assert_eq!(failed_row.json_output, PlumbingCell::Skipped);
+
+        let mut weak = profile();
+        weak.json_output = probe("json_output", CapabilityLevel::Weak);
+        let weak_row = PlumbingRow::from_profile(&weak);
+        assert_eq!(weak_row.json_output, PlumbingCell::Fail);
+    }
+
+    #[test]
+    fn unprobed_parallel_floor_is_skipped_measured_weak_is_fail() {
+        let mut card = CapabilityProfile::unprobed("m", "ollama");
+        if card.parallel_tool_scale.measured_level().is_some() {
+            card.parallel_tool_scale.level = CapabilityLevel::Medium;
+            card.parallel_tool_scale.details = "Skipped: not measured".into();
+        }
+        let row = PlumbingRow::from_profile(&card);
+        assert_eq!(row.parallel_floor, PlumbingCell::Skipped);
+
+        let mut weak = profile();
+        weak.parallel_tool_scale = probe("parallel_tool_scale", CapabilityLevel::Weak);
+        let weak_row = PlumbingRow::from_profile(&weak);
+        assert_eq!(weak_row.parallel_floor, PlumbingCell::Fail);
     }
 
     #[test]
