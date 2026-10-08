@@ -10,9 +10,22 @@ use crate::client::{ProbeClient, ProbeRequest, ProbeTool};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    nonempty_string_arg_any, refuse_truncated_incomplete, refuse_truncated_tool_call, tool,
-    user_text,
+    has_visible_arg_text, refuse_truncated_incomplete, refuse_truncated_tool_call, tool, user_text,
 };
+
+/// First usable `path`, otherwise `file_path`. A blank or non-string `path`
+/// must not hide a real `file_path`.
+fn usable_read_path(arguments: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
+    for key in ["path", "file_path"] {
+        let Some(text) = arguments.get(key).and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if has_visible_arg_text(text) {
+            return Some(text.trim());
+        }
+    }
+    None
+}
 
 /// Probe whether the model can produce 5 parallel tool calls.
 ///
@@ -98,15 +111,8 @@ pub async fn probe_parallel_tool_scale_with<C: ProbeClient>(
     let name_ok = |name: &str| accepted.iter().any(|accepted_name| accepted_name == name);
     let valid_calls: Vec<&str> = calls
         .iter()
-        .filter(|call| {
-            name_ok(&call.name) && nonempty_string_arg_any(&call.arguments, &["path", "file_path"])
-        })
-        .filter_map(|call| {
-            call.arguments
-                .get("path")
-                .or_else(|| call.arguments.get("file_path"))
-                .and_then(|value| value.as_str())
-        })
+        .filter(|call| name_ok(&call.name))
+        .filter_map(|call| usable_read_path(&call.arguments))
         .collect();
 
     let mut unique_paths: Vec<&str> = valid_calls.clone();
@@ -269,6 +275,61 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+        }
+    }
+
+    fn read_file_call_path_and_alias(
+        id: &str,
+        path: serde_json::Value,
+        file_path: &str,
+    ) -> ProbeToolCall {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("path".to_string(), path);
+        arguments.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(file_path.to_string()),
+        );
+        ProbeToolCall {
+            id: id.into(),
+            name: "read_file".into(),
+            arguments,
+        }
+    }
+
+    #[tokio::test]
+    async fn strong_when_unusable_path_hides_file_path() {
+        let files = [
+            "src/main.rs",
+            "src/lib.rs",
+            "Cargo.toml",
+            "README.md",
+            "tests/integration.rs",
+        ];
+        for (label, path_of) in [
+            ("blank", serde_json::Value::String(String::new())),
+            ("numeric", serde_json::json!(1)),
+        ] {
+            let calls = files
+                .iter()
+                .enumerate()
+                .map(|(index, file_path)| {
+                    let path = if label == "numeric" {
+                        serde_json::json!(index + 1)
+                    } else {
+                        path_of.clone()
+                    };
+                    read_file_call_path_and_alias(&index.to_string(), path, file_path)
+                })
+                .collect();
+            let llm = MockLlm {
+                response: multi_tool_call_response(calls),
+            };
+            let result = probe_parallel_tool_scale(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "{label} path must not hide a usable file_path: {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{label}");
         }
     }
 
