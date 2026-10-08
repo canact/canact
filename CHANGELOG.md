@@ -3,6 +3,17 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.10.2](https://github.com/canact/canact/compare/v0.10.1...v0.10.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* count a no-tools refusal as a completed Weak ([#337](https://github.com/canact/canact/issues/337)) ([0045b4f](https://github.com/canact/canact/commit/0045b4fba7b0b6bc1c4872fe06ef6bacf35e6770))
+* count file_path when path is not a usable string ([#344](https://github.com/canact/canact/issues/344)) ([0aca0d7](https://github.com/canact/canact/commit/0aca0d78833731761ab70f37bfd840024834f6e2))
+* keep a window floor and drop safety stops from cache ([#342](https://github.com/canact/canact/issues/342)) ([63cddb0](https://github.com/canact/canact/commit/63cddb0cdd046d65be96547785f9f2ce12958f93)), closes [#339](https://github.com/canact/canact/issues/339) [#340](https://github.com/canact/canact/issues/340)
+* mark unmeasured matrix cells skipped ([#341](https://github.com/canact/canact/issues/341)) ([8f25931](https://github.com/canact/canact/commit/8f2593116c20ec8f87f52395ddf03be7a3a460c0))
+* score code syntax delimiters on the stripped body ([#343](https://github.com/canact/canact/issues/343)) ([06ec823](https://github.com/canact/canact/commit/06ec823d07d853efcb9d97d189e896cf91066034))
+
 ## [0.10.1](https://github.com/canact/canact/compare/v0.10.0...v0.10.1) (2026-10-07)
 
 
