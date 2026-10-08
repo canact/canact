@@ -151,6 +151,36 @@ impl ProbeError {
             None
         }
     }
+    /// True when vendor text says the prompt is past the model window.
+    ///
+    /// Needles (case-insensitive): `context length exceeded`,
+    /// `maximum context length`, `prompt is too long`, `request too large`,
+    /// `content_too_large`. A bare `max_tokens` parameter error is not a
+    /// window rejection. A tokens-per-minute limit that says
+    /// `request too large` is not one either.
+    #[must_use]
+    pub fn is_context_window_message(display: &str) -> bool {
+        looks_like_context_window(display)
+    }
+}
+
+fn looks_like_context_window(display: &str) -> bool {
+    let t = display.to_ascii_lowercase();
+    if t.contains("max_tokens must be greater than thinking")
+        || t.contains("unsupported parameter: 'max_tokens'")
+        || t.contains("unsupported parameter: \"max_tokens\"")
+        || t.contains("tokens per min")
+        || t.contains("tokens per minute")
+        || t.contains("rate limit")
+        || t.contains("rate_limit")
+    {
+        return false;
+    }
+    t.contains("context length exceeded")
+        || t.contains("maximum context length")
+        || t.contains("prompt is too long")
+        || t.contains("request too large")
+        || t.contains("content_too_large")
 }
 
 fn looks_like_model_not_found(text: &str) -> bool {
@@ -343,6 +373,30 @@ mod tests {
         ));
         assert!(msg.contains("unknown model"), "{msg}");
         assert!(ProbeError::not_found_from_body("invalid json schema").is_none());
+    }
+
+    #[test]
+    fn context_window_message_matches_vendor_copy() {
+        for needle in [
+            "context length exceeded",
+            "maximum context length",
+            "Prompt is too long",
+            "request too large",
+            "content_too_large",
+        ] {
+            assert!(ProbeError::is_context_window_message(needle), "{needle}");
+        }
+        assert!(!ProbeError::is_context_window_message(
+            "max_tokens must be greater than thinking.budget_tokens"
+        ));
+        assert!(!ProbeError::is_context_window_message(
+            "Unsupported parameter: 'max_tokens'"
+        ));
+        assert!(!ProbeError::is_context_window_message("timed out"));
+        assert!(!ProbeError::is_context_window_message(
+            "Request too large for gpt-4o on tokens per min (TPM): Limit 10000, Requested 12000"
+        ));
+        assert!(ProbeError::is_context_window_message("request too large"));
     }
 
     #[test]

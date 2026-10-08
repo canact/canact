@@ -108,6 +108,39 @@ fn transient_xml_medium_does_not_open_can_use_tools() {
 }
 
 #[test]
+fn resolve_probe_safety_stop_is_not_cacheable() {
+    let err: Result<ProbeResult, ProbeError> =
+        Err(ProbeError::Transient("provider safety stop".into()));
+    let (result, cacheable) = resolve_probe(err, "tool_calling").expect("unfinished");
+    assert!(!cacheable);
+    assert!(result.details.starts_with("Probe failed:"));
+}
+
+#[test]
+fn resolve_probe_malformed_function_call_is_cached_weak() {
+    let err: Result<ProbeResult, ProbeError> =
+        Err(ProbeError::Llm("malformed_function_call".into()));
+    let (result, cacheable) = resolve_probe(err, "tool_calling").expect("scored");
+    assert!(cacheable);
+    assert_eq!(result.level, CapabilityLevel::Weak);
+    assert_eq!(result.score, 0.0);
+    assert_eq!(result.details, "Model emitted a malformed tool call");
+    assert_eq!(result.measured_level(), Some(CapabilityLevel::Weak));
+}
+
+#[test]
+fn resolve_probe_vision_image_too_large_is_measured_weak() {
+    let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Llm(
+        r#"{"error":{"code":400,"message":"image is too large"}}"#.into(),
+    ));
+    let (result, cacheable) = resolve_probe(err, "vision").expect("scored");
+    assert!(cacheable);
+    assert_eq!(result.level, CapabilityLevel::Weak);
+    assert_eq!(result.details, "Image exceeds the model size limit");
+    assert_eq!(result.measured_level(), Some(CapabilityLevel::Weak));
+}
+
+#[test]
 fn resolve_probe_vision_no_multimodal_is_measured_weak() {
     let err: Result<ProbeResult, ProbeError> = Err(ProbeError::Llm(
         r#"{"error":{"code":400,"message":"Multimodal data provided, but model does not support multimodal requests.","type":"invalid_request_error"}}"#

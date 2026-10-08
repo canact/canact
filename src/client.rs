@@ -51,6 +51,10 @@ pub enum ProbeFinish {
     Stop,
     ToolCalls,
     Length,
+    /// Provider refused for safety or policy. Not a capability score.
+    Safety,
+    /// The model emitted a broken tool call. A completed tool score.
+    Malformed,
     Other,
 }
 
@@ -67,14 +71,34 @@ pub enum ProbeFinish {
 /// | `stop`, `end_turn`, `eos` | [`ProbeFinish::Stop`] |
 /// | `tool_calls`, `tool_use`, `function_call` | [`ProbeFinish::ToolCalls`] |
 /// | `length`, `max_tokens` | [`ProbeFinish::Length`] |
-/// | anything else | [`ProbeFinish::Other`] |
+/// | `content_filter`, `content_filtered`, `refusal`, `guardrail_intervened`, `safety`, `recitation`, `blocklist`, `prohibited_content`, `spii`, `image_safety`, `language` | [`ProbeFinish::Safety`] |
+/// | `malformed_function_call` (any case) | [`ProbeFinish::Malformed`] |
+/// | anything else, including `other` and `OTHER` | [`ProbeFinish::Other`] |
+///
+/// Safety tokens and `malformed_function_call` are matched without case,
+/// so Gemini `SAFETY` and `MALFORMED_FUNCTION_CALL` count.
+/// `stop` stays exact: `STOP` is still [`ProbeFinish::Other`].
 #[must_use]
 pub fn finish_from_reason(reason: &str) -> ProbeFinish {
     match reason {
         "stop" | "end_turn" | "eos" => ProbeFinish::Stop,
         "tool_calls" | "tool_use" | "function_call" => ProbeFinish::ToolCalls,
         "length" | "max_tokens" => ProbeFinish::Length,
-        _ => ProbeFinish::Other,
+        _ => match reason.to_ascii_lowercase().as_str() {
+            "malformed_function_call" => ProbeFinish::Malformed,
+            "content_filter"
+            | "content_filtered"
+            | "refusal"
+            | "guardrail_intervened"
+            | "safety"
+            | "recitation"
+            | "blocklist"
+            | "prohibited_content"
+            | "spii"
+            | "image_safety"
+            | "language" => ProbeFinish::Safety,
+            _ => ProbeFinish::Other,
+        },
     }
 }
 
@@ -387,10 +411,35 @@ mod tests {
         assert_eq!(finish_from_reason("other"), ProbeFinish::Other);
         assert_eq!(finish_from_reason("STOP"), ProbeFinish::Other);
         assert_eq!(finish_from_reason(""), ProbeFinish::Other);
+        assert_eq!(finish_from_reason("OTHER"), ProbeFinish::Other);
+        assert_eq!(finish_from_reason("stop_sequence"), ProbeFinish::Other);
         assert_eq!(
             finish_from_reason("malformed_function_call"),
-            ProbeFinish::Other
+            ProbeFinish::Malformed
         );
+        assert_eq!(
+            finish_from_reason("MALFORMED_FUNCTION_CALL"),
+            ProbeFinish::Malformed
+        );
+    }
+
+    #[test]
+    fn finish_from_reason_safety_family_is_case_insensitive() {
+        for token in [
+            "content_filter",
+            "content_filtered",
+            "guardrail_intervened",
+            "refusal",
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+            "IMAGE_SAFETY",
+            "LANGUAGE",
+        ] {
+            assert_eq!(finish_from_reason(token), ProbeFinish::Safety, "{token}");
+        }
     }
 
     #[test]

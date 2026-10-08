@@ -210,7 +210,15 @@ pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value)
 }
 
 /// Length with no tool call is a short budget, not a 30-day Weak card.
+/// A safety stop is not a measurement. A malformed finish with no call
+/// is a completed tool failure, classified later by [`crate::resolve_probe`].
 pub fn refuse_truncated_tool_call(resp: &ProbeResponse) -> Result<(), ProbeError> {
+    if resp.finish == ProbeFinish::Safety {
+        return Err(ProbeError::Transient("provider safety stop".into()));
+    }
+    if resp.finish == ProbeFinish::Malformed && resp.tool_calls.is_empty() {
+        return Err(ProbeError::Llm("malformed_function_call".into()));
+    }
     if resp.finish == ProbeFinish::Length && resp.tool_calls.is_empty() {
         Err(ProbeError::Transient(
             "response truncated before a tool call".into(),
@@ -220,8 +228,11 @@ pub fn refuse_truncated_tool_call(resp: &ProbeResponse) -> Result<(), ProbeError
     }
 }
 
-/// Length plus a score below Strong is a truncated half-call, not a 30-day Medium.
+/// Length or a safety stop below a finished call is not a 30-day score.
 pub fn refuse_truncated_incomplete(finish: ProbeFinish, score: f32) -> Result<(), ProbeError> {
+    if finish == ProbeFinish::Safety {
+        return Err(ProbeError::Transient("provider safety stop".into()));
+    }
     if finish == ProbeFinish::Length && score < 1.0 {
         Err(ProbeError::Transient(
             "response truncated before a complete tool call".into(),
@@ -541,6 +552,53 @@ mod refuse_truncated_tests {
     }
 
     #[test]
+    fn refuse_truncated_tool_call_safety_is_transient() {
+        let resp = ProbeResponse {
+            text: String::new(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Safety,
+            usage: None,
+        };
+        let err = refuse_truncated_tool_call(&resp).expect_err("safety is not a score");
+        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
+    }
+
+    #[test]
+    fn refuse_truncated_tool_call_malformed_is_llm_error() {
+        let resp = ProbeResponse {
+            text: String::new(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Malformed,
+            usage: None,
+        };
+        let err = refuse_truncated_tool_call(&resp).expect_err("malformed");
+        assert!(
+            matches!(&err, ProbeError::Llm(msg) if msg.contains("malformed_function_call")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn content_filter_and_refusal_are_not_cacheable_weak() {
+        for token in ["content_filter", "refusal"] {
+            let resp = ProbeResponse {
+                text: "I must refuse".into(),
+                tool_calls: Vec::new(),
+                finish: crate::finish_from_reason(token),
+                usage: None,
+            };
+            let err = refuse_truncated_tool_call(&resp).expect_err(token);
+            let (row, cacheable) = crate::resolve_probe(Err(err), "tool_calling").expect(token);
+            assert!(!cacheable, "{token}");
+            assert!(
+                row.details.starts_with("Probe failed:"),
+                "{token}: {}",
+                row.details
+            );
+        }
+    }
+
+    #[test]
     fn refuse_truncated_tool_call_allows_stop_without_tools() {
         let resp = text_response("I would read the file");
         assert!(refuse_truncated_tool_call(&resp).is_ok());
@@ -565,6 +623,12 @@ mod refuse_truncated_tests {
     #[test]
     fn refuse_truncated_incomplete_allows_length_at_strong() {
         assert!(refuse_truncated_incomplete(ProbeFinish::Length, 1.0).is_ok());
+    }
+
+    #[test]
+    fn refuse_truncated_incomplete_safety_is_transient_at_strong() {
+        let err = refuse_truncated_incomplete(ProbeFinish::Safety, 1.0).expect_err("safety");
+        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
     }
 
     #[test]

@@ -120,6 +120,10 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
         flush_read_file_args(name, args, &mut best_read_file, &mut last_read_file_args);
     }
 
+    if finish == ProbeFinish::Malformed && best_read_file.is_none() && !got_other_tool {
+        return Err(ProbeError::Llm("malformed_function_call".into()));
+    }
+
     let (score, details) = if !got_any_chunk {
         (0.0, "Stream produced no chunks".to_string())
     } else if let Some(parsed) = best_read_file {
@@ -438,6 +442,25 @@ mod tests {
         ]);
         let result = probe_streaming_tool_calls(&llm).await.unwrap();
         assert_eq!(result.score, 0.5);
+    }
+
+    #[tokio::test]
+    async fn streaming_malformed_with_no_tool_chunks_is_llm_error() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::TextDelta {
+                text: String::new(),
+            }),
+            Ok(ProbeStreamChunk::Finished {
+                finish: ProbeFinish::Malformed,
+            }),
+        ]);
+        let err = probe_streaming_tool_calls(&llm)
+            .await
+            .expect_err("malformed stream is a completed tool failure");
+        assert!(
+            matches!(&err, ProbeError::Llm(msg) if msg.contains("malformed_function_call")),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

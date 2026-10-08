@@ -34,7 +34,10 @@ through 8192 and 16384.
 is `probes.json`. Entries last 30 days. The cache key includes the
 suite version (currently 97). `fromCache` is true only when this
 print came from that file. `cacheable` means the result may be
-stored. Do not paste the envelope over `probes.json`.
+stored. A context-window rejection keeps the last passing ladder
+rung, and the card stays cacheable. A provider safety stop is not
+a score, so the card is not stored. A malformed tool call is a
+completed Weak. Do not paste the envelope over `probes.json`.
 
 ## Envelope fields
 
