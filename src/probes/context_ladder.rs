@@ -221,7 +221,7 @@ fn recalls_protocol(text: &str) -> bool {
 fn recalls_heartbeat(text: &str) -> bool {
     let owned = text.to_lowercase();
     let lower = owned.as_str();
-    if contains_bounded(&lower, FACT_HEARTBEAT) || contains_bounded(&lower, "2,840") {
+    if contains_bounded(lower, FACT_HEARTBEAT) || contains_bounded(lower, "2,840") {
         return integer_is_planted_ms(lower);
     }
     let compact: String = lower
