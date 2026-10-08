@@ -174,6 +174,16 @@ fn fold_marker(s: &str) -> String {
 
 /// `needle` is present and not glued to a longer letter or digit.
 fn contains_bounded(hay: &str, needle: &str) -> bool {
+    contains_bounded_if(hay, needle, |c| c.is_ascii_alphanumeric())
+}
+
+/// `needle` is present and not glued to another digit. A following unit
+/// such as `ms` still counts.
+fn contains_digit_bounded(hay: &str, needle: &str) -> bool {
+    contains_bounded_if(hay, needle, |c| c.is_ascii_digit())
+}
+
+fn contains_bounded_if(hay: &str, needle: &str, continues: impl Fn(char) -> bool) -> bool {
     if needle.is_empty() {
         return false;
     }
@@ -182,14 +192,8 @@ fn contains_bounded(hay: &str, needle: &str) -> bool {
     while let Some(rel) = rest.find(needle) {
         let abs = offset + rel;
         let after = abs + needle.len();
-        let before_ok = hay[..abs]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !c.is_ascii_alphanumeric());
-        let after_ok = hay[after..]
-            .chars()
-            .next()
-            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        let before_ok = hay[..abs].chars().next_back().is_none_or(|c| !continues(c));
+        let after_ok = hay[after..].chars().next().is_none_or(|c| !continues(c));
         if before_ok && after_ok {
             return true;
         }
@@ -221,7 +225,7 @@ fn recalls_protocol(text: &str) -> bool {
 fn recalls_heartbeat(text: &str) -> bool {
     let owned = text.to_lowercase();
     let lower = owned.as_str();
-    if contains_bounded(lower, FACT_HEARTBEAT) || contains_bounded(lower, "2,840") {
+    if contains_digit_bounded(lower, FACT_HEARTBEAT) || contains_digit_bounded(lower, "2,840") {
         return integer_is_planted_ms(lower);
     }
     let compact: String = lower
@@ -550,6 +554,19 @@ mod tests {
         assert!(recalls_protocol("9.2.11"));
         assert!(!recalls_heartbeat("12840"));
         assert!(recalls_heartbeat("2840"));
+        assert!(
+            recalls_heartbeat("2840ms"),
+            "2840ms is the planted millisecond fact"
+        );
+        assert!(
+            recalls_heartbeat("2840 milliseconds"),
+            "2840 milliseconds is the planted fact"
+        );
+        assert!(!recalls_heartbeat("12840ms"), "12840ms is a longer integer");
+        assert!(
+            !recalls_heartbeat("2840s"),
+            "2840s is seconds, not milliseconds"
+        );
         assert!(
             !recalls_heartbeat("2.84 section"),
             "section is not the seconds abbreviation"
