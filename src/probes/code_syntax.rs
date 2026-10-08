@@ -18,7 +18,8 @@ use super::{refuse_truncated_incomplete, user_text};
 ///
 /// Scoring:
 /// - `1.0` - code has balanced delimiters, no obvious syntax errors,
-///   and contains the expected function signature
+///   and contains the expected function signature. Parentheses that
+///   sit only in a comment or string do not count.
 /// - `0.5` - code present and mostly correct but has minor issues
 ///   (unbalanced delimiters or missing return)
 /// - `0.0` - no code block found or prose-only response
@@ -58,9 +59,9 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let has_def = has_indented_merge_sorted_body(trimmed);
     let has_return = merge_sorted_body_has_return(&code_body);
 
-    let parens_balanced = count_char(trimmed, '(') == count_char(trimmed, ')');
-    let brackets_balanced = count_char(trimmed, '[') == count_char(trimmed, ']');
-    let braces_balanced = count_char(trimmed, '{') == count_char(trimmed, '}');
+    let parens_balanced = count_char(&code_body, '(') == count_char(&code_body, ')');
+    let brackets_balanced = count_char(&code_body, '[') == count_char(&code_body, ']');
+    let braces_balanced = count_char(&code_body, '{') == count_char(&code_body, '}');
     let delimiters_ok = parens_balanced && brackets_balanced && braces_balanced;
 
     let has_ellipsis = trimmed.lines().any(|l| {
@@ -606,6 +607,34 @@ def merge_sorted(a, b):
             "real return a + b must stay Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_comment_paren_stays_strong() {
+        let code = "def merge_sorted(a, b):\n    # compare (a[i]\n    return a + b\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a comment parenthesis must not drop a real function: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_unbalanced_call_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    return (a + b\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert!(
+            result.score < 1.0,
+            "a real unmatched parenthesis must stay visible after the comment strip: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
