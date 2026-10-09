@@ -142,7 +142,8 @@ jobs:
         if: >-
           github.event_name != 'pull_request' ||
           !startsWith(github.head_ref, 'release-please')
-        run: cargo test --locked --doc
+        # ProbeFinish doctests are behind feature runtime.
+        run: cargo test --locked --doc --features runtime
       - name: Release-please check
         if: >-
           github.event_name == 'pull_request' &&

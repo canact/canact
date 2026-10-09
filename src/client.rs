@@ -46,7 +46,56 @@ pub struct ProbeMessage {
 }
 
 /// Why the model stopped generating.
+///
+/// This enum is `non_exhaustive`. A later release, including a patch,
+/// may add a variant. A host outside this crate must keep a wildcard
+/// arm and score it like [`ProbeFinish::Other`]: a completed reply
+/// can be cached. Handle [`ProbeFinish::Safety`] on its own arm
+/// (transient, not a capability score). Handle an empty
+/// [`ProbeFinish::Malformed`] on its own arm (completed tool failure).
+///
+/// ```
+/// # #![deny(unreachable_patterns)]
+/// use canact::ProbeFinish;
+///
+/// fn is_length(finish: ProbeFinish) -> bool {
+///     match finish {
+///         ProbeFinish::Length => true,
+///         ProbeFinish::Stop
+///         | ProbeFinish::ToolCalls
+///         | ProbeFinish::Safety
+///         | ProbeFinish::Malformed
+///         | ProbeFinish::Other => false,
+///         _ => false,
+///     }
+/// }
+///
+/// assert!(!is_length(ProbeFinish::Stop));
+/// assert!(is_length(ProbeFinish::Length));
+/// ```
+///
+/// Listing every current variant, with no wildcard, does not compile
+/// outside this crate:
+///
+/// ```compile_fail
+/// # // When adding a variant, list it here. No wildcard arm.
+/// use canact::ProbeFinish;
+///
+/// fn label(finish: ProbeFinish) -> &'static str {
+///     match finish {
+///         ProbeFinish::Stop => "stop",
+///         ProbeFinish::ToolCalls => "tool_calls",
+///         ProbeFinish::Length => "length",
+///         ProbeFinish::Safety => "safety",
+///         ProbeFinish::Malformed => "malformed",
+///         ProbeFinish::Other => "other",
+///     }
+/// }
+///
+/// let _ = label(ProbeFinish::Stop);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProbeFinish {
     Stop,
     ToolCalls,
