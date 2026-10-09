@@ -161,6 +161,12 @@ and `needs_json_repair()` on the profile. `ProbeError::Auth` aborts
 the suite. Do not persist a Transient run. `ProbeCache` writes the
 on-disk `probes.json` file.
 
+`ProbeFinish` is `non_exhaustive`. Match it with a wildcard arm so a
+later patch can add a finish reason. Score that arm like `Other`:
+a completed reply can be cached. Handle `Safety` on its own arm
+(transient, not a capability score). Handle an empty `Malformed`
+on its own arm (completed tool failure).
+
 `OpenAiCompatClient` needs `runtime` and `openai`. The pin above
 stays `runtime` only, which is enough for `ProbeRunner`. The key
 below is `None` for local Ollama. Do not put a raw key in source.

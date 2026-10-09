@@ -143,7 +143,7 @@ class WorkflowTriggerTests(unittest.TestCase):
         for cmd in (
             "cargo clippy --locked --all-targets",
             "cargo nextest run --locked",
-            "cargo test --locked --doc",
+            "cargo test --locked --doc --features runtime",
             "cargo doc --locked --no-deps --all-features",
         ):
             idx = ci.index(cmd)
