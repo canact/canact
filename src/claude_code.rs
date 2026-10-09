@@ -182,7 +182,7 @@ mod tests {
                 .headers
                 .get("x-grok-client-version")
                 .map(String::as_str),
-            Some("0.1.202"),
+            Some("1.0.46"),
             "cli-chat-proxy returns HTTP 426 without a Grok CLI version"
         );
         assert_eq!(
@@ -220,7 +220,7 @@ mod tests {
                 .headers
                 .get("x-grok-client-version")
                 .map(String::as_str),
-            Some("0.1.202"),
+            Some("1.0.46"),
             "cli-chat-proxy returns HTTP 426 without a Grok CLI version"
         );
         let oauth = profile.oauth.expect("oauth");
