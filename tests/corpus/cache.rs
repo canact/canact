@@ -443,6 +443,64 @@ fn find_profile_hits_across_xai_aliases() {
 }
 
 #[test]
+fn find_profile_hits_across_grok_build_aliases() {
+    let mut cache = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "grok-4.7".into();
+    stored.provider = "grok-build".into();
+    cache.put(stored);
+    for requested in [
+        "xai-grok-build",
+        "cli-chat-proxy.grok.com",
+        "Grok-Build",
+        " xai-grok-build ",
+    ] {
+        assert!(
+            cache.find_profile("grok-4.7", requested).is_some(),
+            "probe --provider grok-build must hit export --provider {requested}"
+        );
+        assert_eq!(
+            cache.list_rows(Some(requested)).len(),
+            1,
+            "cache list --provider {requested}"
+        );
+    }
+    for requested in [
+        "grok",
+        "xai",
+        "api.x.ai",
+        "grok-build-messages",
+        "xai-grok-build-messages",
+    ] {
+        assert!(
+            cache.find_profile("grok-4.7", requested).is_none(),
+            "{requested} must not see the grok-build card"
+        );
+        assert!(
+            cache.list_rows(Some(requested)).is_empty(),
+            "cache list --provider {requested}"
+        );
+    }
+
+    let mut messages = ProbeCache::default();
+    let mut stored = sample_profile();
+    stored.model_id = "grok-4.7".into();
+    stored.provider = "grok-build-messages".into();
+    messages.put(stored);
+    assert!(
+        messages
+            .find_profile("grok-4.7", "xai-grok-build-messages")
+            .is_some()
+    );
+    assert!(messages.find_profile("grok-4.7", "grok-build").is_none());
+    assert!(
+        messages
+            .find_profile("grok-4.7", "cli-chat-proxy.grok.com")
+            .is_none()
+    );
+}
+
+#[test]
 fn find_profile_hits_across_anthropic_aliases() {
     let mut cache = ProbeCache::default();
     let mut stored = sample_profile();

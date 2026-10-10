@@ -2346,6 +2346,46 @@ fn cache_list_provider_family() {
     assert!(!stdout.contains("cache-list-port1234"), "{stdout}");
 }
 
+#[test]
+fn cache_list_grok_build_aliases_share_a_card() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let mut cache = ProbeCache::default();
+    cache.put(cache_list_profile("grok-4.7", "grok-build", 1_700_000_010));
+    cache.save(&cache_path).expect("save");
+    let path = cache_path.to_str().expect("utf8");
+    for provider in ["xai-grok-build", "cli-chat-proxy.grok.com", "GROK-BUILD"] {
+        let out = canact()
+            .args(["cache", "list", "--provider", provider, "--cache", path])
+            .output()
+            .expect("spawn cache list");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "{provider} stdout={stdout}\nstderr={stderr}"
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.starts_with("grok-4.7\tgrok-build\t")),
+            "{provider} missing stored row: {stdout}"
+        );
+    }
+    for provider in ["grok", "xai", "grok-build-messages"] {
+        let out = canact()
+            .args(["cache", "list", "--provider", provider, "--cache", path])
+            .output()
+            .expect("spawn cache list");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{provider}");
+        assert!(
+            !stdout.contains("grok-4.7"),
+            "{provider} must not list the grok-build card: {stdout}"
+        );
+    }
+}
+
 fn flatten_ws(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }

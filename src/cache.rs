@@ -1351,8 +1351,8 @@ impl ProbeCache {
 }
 
 fn providers_equivalent(stored: &str, requested: &str) -> bool {
-    let a = stored.to_ascii_lowercase();
-    let b = requested.to_ascii_lowercase();
+    let a = stored.trim().to_ascii_lowercase();
+    let b = requested.trim().to_ascii_lowercase();
     if a == b {
         return true;
     }
@@ -1401,6 +1401,14 @@ fn strip_normalized_provider_prefix<'a>(model_id: &'a str, provider: &str) -> Op
 }
 
 fn provider_family(provider: &str) -> &str {
+    // Messages is its own card. The chat labels share one card and
+    // must not match api.x.ai `grok`.
+    if crate::is_grok_build_messages_provider_label(provider) {
+        return "grok-build-messages";
+    }
+    if crate::is_grok_build_provider_label(provider) {
+        return "grok-build";
+    }
     if crate::is_groq_provider_label(provider) || provider.eq_ignore_ascii_case("groq.com") {
         return "groq";
     }
