@@ -3,6 +3,24 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.11.0](https://github.com/canact/canact/compare/v0.10.2...v0.11.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* ProbeFinish is non_exhaustive. A match outside this crate must keep a wildcard arm.
+
+### Features
+
+* mark ProbeFinish non_exhaustive ([#346](https://github.com/canact/canact/issues/346)) ([96765c6](https://github.com/canact/canact/commit/96765c61263a23be68c5ac00a58781e0e4c0f21f)), closes [#345](https://github.com/canact/canact/issues/345)
+
+
+### Bug Fixes
+
+* consume wiremux 0.10.6 ([#350](https://github.com/canact/canact/issues/350)) ([baff29b](https://github.com/canact/canact/commit/baff29b3adc4713b346ccada1e359a3549f63872))
+* share the grok-build cache card across its labels ([#349](https://github.com/canact/canact/issues/349)) ([06f30d9](https://github.com/canact/canact/commit/06f30d9f3b13c49fa3b6c65883610a9210c27d0d))
+* treat Gemini MAX_TOKENS as a length cut ([#348](https://github.com/canact/canact/issues/348)) ([118cbb8](https://github.com/canact/canact/commit/118cbb8574c8d4fe0ad4513aba93a71b153d3e2d))
+
 ## [0.10.2](https://github.com/canact/canact/compare/v0.10.1...v0.10.2) (2026-10-08)
 
 
