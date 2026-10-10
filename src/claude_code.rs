@@ -182,7 +182,7 @@ mod tests {
                 .headers
                 .get("x-grok-client-version")
                 .map(String::as_str),
-            Some("1.0.46"),
+            Some(wiremux_auth::GROK_CHAT_PROXY_CLIENT_VERSION),
             "cli-chat-proxy returns HTTP 426 without a Grok CLI version"
         );
         assert_eq!(
@@ -191,7 +191,7 @@ mod tests {
                 .headers
                 .get("x-grok-client-identifier")
                 .map(String::as_str),
-            Some("wiremux")
+            Some(wiremux_auth::GROK_CHAT_PROXY_CLIENT_IDENTIFIER)
         );
         let oauth = profile.oauth.expect("oauth");
         let client = oauth.client_id.as_deref().map(str::trim).unwrap_or("");
@@ -220,8 +220,16 @@ mod tests {
                 .headers
                 .get("x-grok-client-version")
                 .map(String::as_str),
-            Some("1.0.46"),
+            Some(wiremux_auth::GROK_CHAT_PROXY_CLIENT_VERSION),
             "cli-chat-proxy returns HTTP 426 without a Grok CLI version"
+        );
+        assert_eq!(
+            profile
+                .http
+                .headers
+                .get("x-grok-client-identifier")
+                .map(String::as_str),
+            Some(wiremux_auth::GROK_CHAT_PROXY_CLIENT_IDENTIFIER)
         );
         let oauth = profile.oauth.expect("oauth");
         let client = oauth.client_id.as_deref().map(str::trim).unwrap_or("");
