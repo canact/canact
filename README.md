@@ -100,6 +100,10 @@ probe error does not count. An unknown value exits 1.
 | `lmstudio` | `http://127.0.0.1:1234/v1` | none | none |
 | `vllm` | `http://127.0.0.1:8000/v1` | none | none |
 
+Cache list, matrix, and export treat the labels in one row as one
+card. On the grok-build row, the chat labels share a card and the
+messages labels share a different card.
+
 Auth, a missing model, and connect failures abort the
 suite. Timeouts and 429/5xx stay session-local and are not cached.
 
