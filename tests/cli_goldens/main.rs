@@ -2674,6 +2674,13 @@ fn dry_run_suite_all_lists_diagnostics() {
             "{name} leaked into {cheap_stdout}"
         );
     }
+    assert!(
+        !cheap_stdout.contains("is measured"),
+        "dry-run must not call an unparsed cap measured:\n{cheap_stdout}"
+    );
+    let note = "maxOutputTokens runs on every suite and is not listed below. A policy card stays skipped unless that request names a cap";
+    assert!(cheap_stdout.contains(note), "{cheap_stdout}");
+    assert!(stdout.contains(note), "{stdout}");
 }
 
 #[test]
