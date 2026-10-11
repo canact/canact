@@ -734,7 +734,9 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
         println!("suite: {}", suite.as_str());
         println!("context ladder: {ladder}");
         println!("xml_tool_calling runs unless native tool_calling is Strong");
-        println!("probe_max_output_tokens is measured and is not listed below");
+        println!(
+            "maxOutputTokens runs on every suite and is not listed below. A policy card stays skipped unless that request names a cap"
+        );
         for name in probes {
             println!("{name}");
         }
