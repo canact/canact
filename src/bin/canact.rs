@@ -704,6 +704,20 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
         eprintln!("error: {msg}");
         return Err(1);
     }
+    if let Some(model) = args
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        && let Some(msg) = control_character_message("--model", model)
+    {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
+    if let Some(msg) = control_character_message("provider", &provider) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
     let base_url = redact_base_url(&base_url);
     let probes = planned_probe_names(suite, args.vision);
     if args.json {

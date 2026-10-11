@@ -2532,6 +2532,68 @@ fn dry_run_cmd(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn dry_run_rejects_control_character_in_model() {
+    let bad = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--model",
+        "llama\u{1}3.2",
+        "--cheap",
+    ]);
+    let stdout = String::from_utf8_lossy(&bad.stdout);
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert_eq!(
+        bad.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--model must not contain a control character"),
+        "{stderr}"
+    );
+    assert!(!stdout.contains("tool_calling"), "{stdout}");
+
+    let provider = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama\u{1}",
+        "--model",
+        "llama3.2:3b",
+    ]);
+    let provider_stdout = String::from_utf8_lossy(&provider.stdout);
+    let provider_stderr = String::from_utf8_lossy(&provider.stderr);
+    assert_eq!(
+        provider.status.code(),
+        Some(1),
+        "stdout={provider_stdout}\nstderr={provider_stderr}"
+    );
+    assert!(
+        provider_stderr.contains("provider must not contain a control character"),
+        "{provider_stderr}"
+    );
+
+    let trimmed = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--model",
+        "llama3.2:3b\n",
+        "--cheap",
+    ]);
+    let trimmed_stdout = String::from_utf8_lossy(&trimmed.stdout);
+    let trimmed_stderr = String::from_utf8_lossy(&trimmed.stderr);
+    assert!(
+        trimmed.status.success(),
+        "stdout={trimmed_stdout}\nstderr={trimmed_stderr}"
+    );
+    assert!(trimmed_stdout.contains("tool_calling"), "{trimmed_stdout}");
+}
+
+#[test]
 fn dry_run_closed_port_does_not_connect() {
     let out = dry_run_cmd(&[
         "probe",
