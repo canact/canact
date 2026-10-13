@@ -630,7 +630,7 @@ mod tests {
     async fn pass_4k_fail_8k_is_4096() {
         let llm = LadderMock::new(None, Some(8192));
         let got = probe_effective_context_tokens(&llm, false).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, Some(4096));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 2);
@@ -666,7 +666,7 @@ mod tests {
     async fn pass_all_is_16384() {
         let llm = LadderMock::new(None, None);
         let got = probe_effective_context_tokens(&llm, false).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, Some(16384));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 3);
@@ -690,7 +690,7 @@ mod tests {
     async fn fail_4k_is_none() {
         let llm = LadderMock::new(None, Some(4096));
         let got = probe_effective_context_tokens(&llm, false).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, None);
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1);
@@ -728,7 +728,7 @@ mod tests {
     async fn advertised_4096_does_not_issue_8k_or_16k() {
         let llm = LadderMock::new(Some(4096), None);
         let got = probe_effective_context_tokens(&llm, false).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, Some(4096));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 1, "must not climb past advertised 4096");
@@ -739,7 +739,7 @@ mod tests {
     async fn advertised_8192_tries_4k_and_8k_not_16k() {
         let llm = LadderMock::new(Some(8192), None);
         let got = probe_effective_context_tokens(&llm, false).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, Some(8192));
         let calls = llm.recorded();
         assert_eq!(calls.len(), 2);
@@ -755,7 +755,7 @@ mod tests {
     async fn advertised_128k_with_4k_fail_is_none_not_advertised() {
         let llm = LadderMock::new(Some(128000), Some(4096));
         let got = probe_effective_context_tokens(&llm, false).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, None, "must not copy advertised 128000");
         assert_ne!(got.tokens, Some(128000));
         let calls = llm.recorded();
@@ -767,7 +767,7 @@ mod tests {
     async fn advertised_2000_still_tries_4k() {
         let llm = LadderMock::new(Some(2000), None);
         let got = probe_effective_context_tokens(&llm, false).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, Some(4096));
         assert_ne!(got.tokens, Some(2000));
         let calls = llm.recorded();
@@ -779,7 +779,7 @@ mod tests {
     async fn cheap_tries_4k_only() {
         let llm = LadderMock::new(None, None);
         let got = probe_effective_context_tokens(&llm, true).await;
-        assert!(got.error.is_ok(), "{:?}", got.error);
+        got.error.as_ref().expect("ladder error");
         assert_eq!(got.tokens, Some(4096));
         assert_eq!(got.recall_hits, 3);
         let calls = llm.recorded();
