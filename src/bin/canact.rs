@@ -278,13 +278,7 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         eprintln!("error: {msg}");
         return Err(1);
     }
-    let provider_hint = args
-        .provider
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("")
-        .to_owned();
+    let provider_hint = trimmed_provider_flag(args.provider.as_deref())?.to_owned();
     let first = match resolve_api_key(
         args.api_key.clone(),
         &provider_hint,
@@ -688,12 +682,7 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
             return Err(1);
         }
     };
-    let provider_hint = args
-        .provider
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("");
+    let provider_hint = trimmed_provider_flag(args.provider.as_deref())?;
     if let Some(msg) = invalid_explicit_base_url(args.base_url.as_deref()) {
         eprintln!("error: {msg}");
         return Err(1);
@@ -931,6 +920,23 @@ async fn resolve_model(
             Err(1)
         }
     }
+}
+
+/// `--provider` that is only whitespace is an error, not the OpenAI default.
+fn trimmed_provider_flag(raw: Option<&str>) -> Result<&str, u8> {
+    let Some(raw) = raw else {
+        return Ok("");
+    };
+    let provider = raw.trim();
+    if provider.is_empty() {
+        eprintln!("error: --provider is empty");
+        return Err(1);
+    }
+    if let Some(msg) = control_character_message("provider", provider) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
+    Ok(provider)
 }
 
 /// `--model` that is only whitespace is an error, not "pick the only server model".

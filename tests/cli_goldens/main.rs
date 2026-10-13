@@ -2607,6 +2607,52 @@ fn dry_run_cmd(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn dry_run_whitespace_provider_is_empty() {
+    let out = dry_run_cmd(&["probe", "--dry-run", "--provider", "   ", "--cheap"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("--provider is empty"), "{stderr}");
+    assert!(!stdout.contains("api.openai.com"), "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+}
+
+#[test]
+fn probe_whitespace_provider_does_not_connect() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = dry_run_cmd(&[
+        "probe",
+        "--cheap",
+        "--no-login",
+        "--provider",
+        " \t",
+        "--model",
+        "llama3.2:3b",
+        "--base-url",
+        "http://127.0.0.1:9/v1",
+        "--json",
+        "--cache",
+        cache_path.to_str().expect("utf8"),
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("--provider is empty"), "{stderr}");
+    assert!(!stderr.contains("failed to connect"), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!cache_path.exists());
+}
+
+#[test]
 fn dry_run_whitespace_model_is_empty() {
     let out = dry_run_cmd(&[
         "probe",
