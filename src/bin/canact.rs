@@ -128,7 +128,9 @@ struct ProbeArgs {
     #[arg(long)]
     json: bool,
 
-    /// Print the provider, base URL, suite, and probe names, then exit. Skips login, cache, and HTTP.
+    /// Print the provider, base URL, suite, context ladder, and probe names, then exit.
+    /// `--advertised-context` skips a later rung larger than that prior. The 4096 rung still runs.
+    /// Skips login, cache, and HTTP.
     #[arg(long)]
     dry_run: bool,
 
