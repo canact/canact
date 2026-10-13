@@ -1368,12 +1368,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp");
         let cache_path = dir.path().join("probes.json");
         let mut cache = ProbeCache::default();
-        cache.put_with_suite(
-            CapabilityProfile::unprobed("gpt-4o", "openai"),
-            SuiteTier::Policy,
-            false,
-            None,
-        );
+        cache
+            .put_with_suite(
+                CapabilityProfile::unprobed("gpt-4o", "openai"),
+                SuiteTier::Policy,
+                false,
+                None,
+            )
+            .expect("cache id");
         cache.save(&cache_path).expect("save");
         let cache_str = cache_path.to_str().expect("utf8");
         for advertised in [json!(-1), json!(0.5), json!("nope"), json!(null)] {
@@ -1400,10 +1402,14 @@ mod tests {
         let mut cache = ProbeCache::default();
         let mut omitted = CapabilityProfile::unprobed("gpt-4o", "openai");
         omitted.effective_context_tokens = Some(111);
-        cache.put_with_suite(omitted, SuiteTier::Policy, false, None);
+        cache
+            .put_with_suite(omitted, SuiteTier::Policy, false, None)
+            .expect("cache id");
         let mut padded = CapabilityProfile::unprobed("gpt-4o", "openai");
         padded.effective_context_tokens = Some(4096);
-        cache.put_with_suite(padded, SuiteTier::Policy, false, Some(4096));
+        cache
+            .put_with_suite(padded, SuiteTier::Policy, false, Some(4096))
+            .expect("cache id");
         cache.save(&cache_path).expect("save");
         let args = json!({
             "model": "gpt-4o",
@@ -1423,12 +1429,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp");
         let cache_path = dir.path().join("probes.json");
         let mut cache = ProbeCache::default();
-        cache.put_with_suite(
-            CapabilityProfile::unprobed("gpt-4o", "openai"),
-            SuiteTier::Policy,
-            false,
-            None,
-        );
+        cache
+            .put_with_suite(
+                CapabilityProfile::unprobed("gpt-4o", "openai"),
+                SuiteTier::Policy,
+                false,
+                None,
+            )
+            .expect("cache id");
         cache.save(&cache_path).expect("save");
         let args = json!({
             "model": "gpt-4o",
@@ -1457,7 +1465,9 @@ mod tests {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("gpt-4o", "openai");
         profile.effective_context_tokens = tokens;
-        cache.put_with_suite(profile, suite, vision, advertised);
+        cache
+            .put_with_suite(profile, suite, vision, advertised)
+            .expect("cache id");
         cache.save(&cache_path).expect("save");
         (dir, cache_path.to_str().expect("utf8").to_owned())
     }
@@ -1656,10 +1666,14 @@ mod tests {
         let mut cache = ProbeCache::default();
         let mut policy = CapabilityProfile::unprobed("gpt-4o", "openai");
         policy.effective_context_tokens = Some(111);
-        cache.put_with_suite(policy, SuiteTier::Policy, false, None);
+        cache
+            .put_with_suite(policy, SuiteTier::Policy, false, None)
+            .expect("cache id");
         let mut full = CapabilityProfile::unprobed("gpt-4o", "openai");
         full.effective_context_tokens = Some(999);
-        cache.put_with_suite(full, SuiteTier::Full, false, None);
+        cache
+            .put_with_suite(full, SuiteTier::Full, false, None)
+            .expect("cache id");
         cache.save(&cache_path).expect("save");
         let args = json!({
             "model": "gpt-4o",
@@ -1685,7 +1699,9 @@ mod tests {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("gpt-4o", "openai");
         profile.effective_context_tokens = Some(4242);
-        cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+        cache
+            .put_with_suite(profile, SuiteTier::Policy, false, None)
+            .expect("cache id");
         cache.save(&cache_path).expect("save");
         for cache_arg in ["", "   "] {
             let args = json!({
@@ -2236,7 +2252,9 @@ mod tests {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed(model, provider);
         profile.effective_context_tokens = Some(tokens);
-        cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+        cache
+            .put_with_suite(profile, SuiteTier::Policy, false, None)
+            .expect("cache id");
         cache.save(&cache_path).expect("save");
         (dir, cache_path.to_str().expect("utf8").to_owned())
     }
@@ -2494,7 +2512,9 @@ mod tests {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("gpt-4o", "openai");
         profile.effective_context_tokens = Some(tokens);
-        cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+        cache
+            .put_with_suite(profile, SuiteTier::Policy, false, None)
+            .expect("cache id");
         cache.save(path).expect("save");
         std::fs::read(path).expect("read")
     }

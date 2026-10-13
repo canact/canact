@@ -8,6 +8,7 @@
 /// Typed `thinking` / `reasoning` parts are already dropped; this
 /// strips the inline tag form so chain-of-thought is not scored as
 /// the answer. The stream fold path must keep the same strip.
+#[cfg_attr(not(feature = "runtime"), allow(dead_code))]
 #[must_use]
 pub fn strip_think_blocks(input: &str) -> String {
     const OPEN: &str = "<think>";

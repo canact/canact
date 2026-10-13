@@ -894,18 +894,25 @@ impl ProbeCache {
     }
 
     /// Store a profile under the current suite, default effort, and default knobs.
-    pub fn put(&mut self, profile: CapabilityProfile) {
-        self.put_with_knobs(profile, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, None);
+    ///
+    /// Trims the model id and provider. Returns [`ProbeError::Internal`]
+    /// when either is empty or still contains a control character, and
+    /// does not insert.
+    pub fn put(&mut self, profile: CapabilityProfile) -> Result<(), ProbeError> {
+        self.put_with_knobs(profile, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, None)?;
+        Ok(())
     }
 
     /// Store a profile under the current suite with explicit cheap/vision/context knobs.
+    ///
+    /// Same control-character refusal as [`Self::put`].
     pub fn put_with_knobs(
         &mut self,
         profile: CapabilityProfile,
         skip_expensive: bool,
         vision: bool,
         advertised: Option<u32>,
-    ) {
+    ) -> Result<(), ProbeError> {
         self.put_with_settings(
             profile,
             DEFAULT_PROBE_EFFORT,
@@ -913,10 +920,13 @@ impl ProbeCache {
             skip_expensive,
             vision,
             advertised,
-        );
+        )?;
+        Ok(())
     }
 
     /// Store a profile with explicit effort/suite/knob metadata.
+    ///
+    /// Same control-character refusal as [`Self::put`].
     pub fn put_with_settings(
         &mut self,
         profile: CapabilityProfile,
@@ -925,7 +935,8 @@ impl ProbeCache {
         skip_expensive: bool,
         vision: bool,
         advertised: Option<u32>,
-    ) {
+    ) -> Result<(), ProbeError> {
+        let profile = checked_profile(profile)?;
         let key = Self::cache_key_with_knobs(
             &profile.model_id,
             &profile.provider,
@@ -943,6 +954,7 @@ impl ProbeCache {
             grader_versions: current_grader_map(),
         };
         self.profiles.insert(key, entry);
+        Ok(())
     }
 
     /// Cached profiles for one provider, richest suite per model.
@@ -1049,13 +1061,15 @@ impl ProbeCache {
     }
 
     /// Store a profile under an explicit suite tier.
+    ///
+    /// Same control-character refusal as [`Self::put`].
     pub fn put_with_suite(
         &mut self,
         profile: CapabilityProfile,
         suite: SuiteTier,
         vision: bool,
         advertised: Option<u32>,
-    ) {
+    ) -> Result<(), ProbeError> {
         self.put_with_settings_suite(
             profile,
             DEFAULT_PROBE_EFFORT,
@@ -1063,7 +1077,7 @@ impl ProbeCache {
             suite,
             vision,
             advertised,
-        );
+        )
     }
 
     fn put_with_settings_suite(
@@ -1074,7 +1088,8 @@ impl ProbeCache {
         suite: SuiteTier,
         vision: bool,
         advertised: Option<u32>,
-    ) {
+    ) -> Result<(), ProbeError> {
+        let profile = checked_profile(profile)?;
         let key = Self::cache_key_with_suite(
             &profile.model_id,
             &profile.provider,
@@ -1092,6 +1107,7 @@ impl ProbeCache {
             grader_versions: current_grader_map(),
         };
         self.profiles.insert(key, entry);
+        Ok(())
     }
 
     /// Same as [`Self::get_with_suite`] when `tools` is `None`.
@@ -1176,6 +1192,8 @@ impl ProbeCache {
     }
 
     /// Same as [`Self::put_with_suite`] when `tools` is `None`.
+    ///
+    /// Same control-character refusal as [`Self::put`].
     #[cfg(feature = "runtime")]
     pub fn put_with_suite_tools(
         &mut self,
@@ -1184,11 +1202,12 @@ impl ProbeCache {
         vision: bool,
         advertised: Option<u32>,
         tools: Option<&[crate::client::ProbeTool]>,
-    ) {
+    ) -> Result<(), ProbeError> {
         let Some(tools) = tools else {
-            self.put_with_suite(profile, suite, vision, advertised);
-            return;
+            self.put_with_suite(profile, suite, vision, advertised)?;
+            return Ok(());
         };
+        let profile = checked_profile(profile)?;
         let key = Self::cache_key_with_suite_tools(
             &profile.model_id,
             &profile.provider,
@@ -1207,6 +1226,7 @@ impl ProbeCache {
             grader_versions: current_grader_map(),
         };
         self.profiles.insert(key, entry);
+        Ok(())
     }
 
     /// Fix stale tool rows whose provider text was "does not support tools".
@@ -1348,6 +1368,26 @@ impl ProbeCache {
         let now = unix_now();
         now.saturating_sub(entry.cached_at) < CACHE_TTL_SECS
     }
+}
+
+fn checked_profile(mut profile: CapabilityProfile) -> Result<CapabilityProfile, ProbeError> {
+    profile.model_id = profile.model_id.trim().to_owned();
+    profile.provider = profile.provider.trim().to_owned();
+    if profile.model_id.is_empty() {
+        return Err(ProbeError::Internal("model must not be empty".to_owned()));
+    }
+    if profile.provider.is_empty() {
+        return Err(ProbeError::Internal(
+            "provider must not be empty".to_owned(),
+        ));
+    }
+    if let Some(msg) = crate::text::control_character_message("model", &profile.model_id) {
+        return Err(ProbeError::Internal(msg));
+    }
+    if let Some(msg) = crate::text::control_character_message("provider", &profile.provider) {
+        return Err(ProbeError::Internal(msg));
+    }
+    Ok(profile)
 }
 
 fn providers_equivalent(stored: &str, requested: &str) -> bool {
@@ -1589,7 +1629,9 @@ mod tests {
     fn find_profile_and_advertised_reads_catalog_window() {
         let mut cache = ProbeCache::default();
         let profile = CapabilityProfile::unprobed("grok-window", "xai");
-        cache.put_with_knobs(profile, true, false, Some(1_000_000));
+        cache
+            .put_with_knobs(profile, true, false, Some(1_000_000))
+            .expect("cache id");
         let (got, advertised) = cache
             .find_profile_and_advertised("grok-window", "xai")
             .expect("row");
@@ -1600,7 +1642,9 @@ mod tests {
     #[test]
     fn find_profile_and_advertised_omits_default_ctxnone() {
         let mut cache = ProbeCache::default();
-        cache.put(CapabilityProfile::unprobed("m", "p"));
+        cache
+            .put(CapabilityProfile::unprobed("m", "p"))
+            .expect("cache id");
         let (_, advertised) = cache.find_profile_and_advertised("m", "p").expect("row");
         assert_eq!(advertised, None);
     }
@@ -1608,16 +1652,20 @@ mod tests {
     #[test]
     fn find_profile_and_advertised_prefers_newer_catalog_window() {
         let mut cache = ProbeCache::default();
-        cache.put(CapabilityProfile::unprobed("grok-window", "xai"));
+        cache
+            .put(CapabilityProfile::unprobed("grok-window", "xai"))
+            .expect("cache id");
         for entry in cache.profiles.values_mut() {
             entry.cached_at = 1;
         }
-        cache.put_with_knobs(
-            CapabilityProfile::unprobed("grok-window", "xai"),
-            true,
-            false,
-            Some(1_000_000),
-        );
+        cache
+            .put_with_knobs(
+                CapabilityProfile::unprobed("grok-window", "xai"),
+                true,
+                false,
+                Some(1_000_000),
+            )
+            .expect("cache id");
         let (_, advertised) = cache
             .find_profile_and_advertised("grok-window", "xai")
             .expect("row");
@@ -1627,14 +1675,16 @@ mod tests {
     #[test]
     fn stale_suite_version_reports_old_row() {
         let mut cache = ProbeCache::default();
-        cache.put_with_settings(
-            CapabilityProfile::unprobed("llama3.2:3b", "ollama"),
-            "unset",
-            PROBE_SUITE_VERSION - 1,
-            true,
-            false,
-            Some(131_072),
-        );
+        cache
+            .put_with_settings(
+                CapabilityProfile::unprobed("llama3.2:3b", "ollama"),
+                "unset",
+                PROBE_SUITE_VERSION - 1,
+                true,
+                false,
+                Some(131_072),
+            )
+            .expect("cache id");
         assert_eq!(
             cache.stale_suite_version("llama3.2:3b", "ollama"),
             Some(PROBE_SUITE_VERSION - 1)
@@ -1648,6 +1698,77 @@ mod tests {
             Some(PROBE_SUITE_VERSION - 1)
         );
         assert!(cache.find_profile("llama3.2:3b", "ollama").is_none());
+    }
+
+    #[test]
+    fn put_rejects_model_control_character_without_insert() {
+        let mut cache = ProbeCache::default();
+        let err = cache
+            .put(CapabilityProfile::unprobed("llama\n3", "ollama"))
+            .expect_err("newline");
+        assert!(
+            err.to_string()
+                .contains("model must not contain a control character"),
+            "{err}"
+        );
+        assert!(
+            cache.profiles.is_empty(),
+            "rejected model must not be stored"
+        );
+    }
+
+    #[test]
+    fn put_rejects_provider_nul_without_insert() {
+        let mut cache = ProbeCache::default();
+        let err = cache
+            .put(CapabilityProfile::unprobed("llama", "ollama\0"))
+            .expect_err("nul");
+        assert!(
+            err.to_string()
+                .contains("provider must not contain a control character"),
+            "{err}"
+        );
+        assert!(
+            cache.profiles.is_empty(),
+            "rejected provider must not be stored"
+        );
+    }
+
+    #[test]
+    fn put_trims_trailing_newline_only() {
+        let mut cache = ProbeCache::default();
+        cache
+            .put(CapabilityProfile::unprobed("llama\n", "ollama\n"))
+            .expect("cache id");
+        let got = cache.get("llama", "ollama").expect("trimmed id");
+        assert_eq!(got.model_id, "llama");
+        assert_eq!(got.provider, "ollama");
+    }
+
+    #[test]
+    fn put_rejects_whitespace_only_model_id() {
+        let mut cache = ProbeCache::default();
+        let err = cache
+            .put(CapabilityProfile::unprobed("\n", "ollama"))
+            .expect_err("blank model");
+        assert!(err.to_string().contains("model must not be empty"), "{err}");
+        assert!(cache.profiles.is_empty(), "blank model must not be stored");
+    }
+
+    #[test]
+    fn put_rejects_whitespace_only_provider() {
+        let mut cache = ProbeCache::default();
+        let err = cache
+            .put(CapabilityProfile::unprobed("llama", " \t"))
+            .expect_err("blank provider");
+        assert!(
+            err.to_string().contains("provider must not be empty"),
+            "{err}"
+        );
+        assert!(
+            cache.profiles.is_empty(),
+            "blank provider must not be stored"
+        );
     }
 }
 
@@ -1717,12 +1838,14 @@ mod caller_tool_cache_tests {
         assert_eq!(PROBE_SUITE_VERSION, 97);
 
         let mut cache = ProbeCache::default();
-        cache.put_with_suite(
-            CapabilityProfile::unprobed("m", "ollama"),
-            SuiteTier::Policy,
-            false,
-            Some(4096),
-        );
+        cache
+            .put_with_suite(
+                CapabilityProfile::unprobed("m", "ollama"),
+                SuiteTier::Policy,
+                false,
+                Some(4096),
+            )
+            .expect("cache id");
         assert!(
             cache
                 .get_with_suite("m", "ollama", SuiteTier::Policy, false, Some(4096))
@@ -1787,13 +1910,15 @@ mod caller_tool_cache_tests {
         );
 
         let mut cache = ProbeCache::default();
-        cache.put_with_suite_tools(
-            CapabilityProfile::unprobed("m", "p"),
-            SuiteTier::Policy,
-            false,
-            Some(4096),
-            Some(&list),
-        );
+        cache
+            .put_with_suite_tools(
+                CapabilityProfile::unprobed("m", "p"),
+                SuiteTier::Policy,
+                false,
+                Some(4096),
+                Some(&list),
+            )
+            .expect("cache id");
         assert!(
             cache
                 .get_with_suite_tools("m", "p", SuiteTier::Policy, false, Some(4096), Some(&list))
@@ -1826,5 +1951,29 @@ mod caller_tool_cache_tests {
                 .with_tool_digest(tools_digest(&rows)),
         );
         assert_eq!(envelope["toolSchema"], hex);
+    }
+
+    #[test]
+    fn put_with_suite_tools_rejects_model_control_character() {
+        let mut cache = ProbeCache::default();
+        let list = vec![sample_tool("alpha")];
+        let err = cache
+            .put_with_suite_tools(
+                CapabilityProfile::unprobed("llama\n3", "ollama"),
+                SuiteTier::Policy,
+                false,
+                None,
+                Some(&list),
+            )
+            .expect_err("newline");
+        assert!(
+            err.to_string()
+                .contains("model must not contain a control character"),
+            "{err}"
+        );
+        assert!(
+            cache.profiles.is_empty(),
+            "rejected tools row must not be stored"
+        );
     }
 }

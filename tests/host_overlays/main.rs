@@ -192,7 +192,9 @@ fn cli_export_aider_and_cline_from_cache() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample(CapabilityLevel::Strong, CapabilityLevel::Medium));
+    cache
+        .put(sample(CapabilityLevel::Strong, CapabilityLevel::Medium))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out_dir = dir.path().join("overlays");
 
@@ -250,7 +252,7 @@ fn cli_export_keeps_openrouter_openai_model() {
     let mut profile = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
     profile.model_id = "openai/gpt-4o".into();
     profile.provider = "openrouter".into();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out_dir = dir.path().join("overlays");
 
@@ -296,7 +298,7 @@ fn cli_export_normalizes_mixed_case_litellm_provider() {
     let mut profile = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
     profile.model_id = "gpt-4o".into();
     profile.provider = "OpenAI".into();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out_dir = dir.path().join("overlays");
 
@@ -363,7 +365,7 @@ fn cli_export_normalizes_lmstudio_vllm_litellm_providers() {
         let mut profile = sample(CapabilityLevel::Strong, CapabilityLevel::Medium);
         profile.model_id = model.into();
         profile.provider = provider.into();
-        cache.put(profile);
+        cache.put(profile).expect("cache id");
         cache.save(&cache_path).expect("save");
         let out_dir = dir.path().join("overlays");
 
@@ -501,7 +503,9 @@ fn cli_export_dir_expands_tilde() {
     std::fs::create_dir(&home).expect("home");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample(CapabilityLevel::Strong, CapabilityLevel::Medium));
+    cache
+        .put(sample(CapabilityLevel::Strong, CapabilityLevel::Medium))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
 
     let export = canact()

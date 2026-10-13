@@ -389,6 +389,73 @@ fn persist_does_not_write_when_cacheable_false() {
     assert!(cache.get("m", "p").is_none());
 }
 
+#[test]
+fn persist_rejects_model_control_character_without_writing() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("missing.json");
+    let mut profile = sample_profile();
+    profile.model_id = "llama\n3".to_owned();
+    let run = ProbeRun {
+        profile,
+        cacheable: true,
+        skip_expensive: false,
+        suite: SuiteTier::Full,
+        vision: false,
+        advertised_context_tokens: None,
+        tools: None,
+    };
+    let mut cache = ProbeCache::default();
+    let err = run.persist(&mut cache, &missing).expect_err("control");
+    assert!(
+        err.to_string()
+            .contains("model must not contain a control character"),
+        "{err}"
+    );
+    assert!(!missing.exists(), "cache file must not be created");
+    assert!(cache.profiles.is_empty(), "failed persist must not insert");
+
+    let existing = dir.path().join("probe-cache.json");
+    std::fs::write(&existing, "keep-me").expect("seed");
+    let err = run.persist(&mut cache, &existing).expect_err("control");
+    assert!(
+        err.to_string()
+            .contains("model must not contain a control character"),
+        "{err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&existing).expect("read"),
+        "keep-me",
+        "failed persist must not overwrite the cache file"
+    );
+}
+
+#[test]
+fn persist_rejects_provider_nul_without_writing() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    std::fs::write(&path, "keep-me").expect("seed");
+    let mut profile = sample_profile();
+    profile.provider = "ollama\0".to_owned();
+    let run = ProbeRun {
+        profile,
+        cacheable: true,
+        skip_expensive: false,
+        suite: SuiteTier::Full,
+        vision: false,
+        advertised_context_tokens: None,
+        tools: None,
+    };
+    let mut cache = ProbeCache::default();
+    let err = run.persist(&mut cache, &path).expect_err("nul");
+    assert!(
+        err.to_string()
+            .contains("provider must not contain a control character"),
+        "{err}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "keep-me");
+    assert!(cache.profiles.is_empty(), "failed persist must not insert");
+}
+
 struct TruncatedToolLlm;
 
 impl ProbeClient for TruncatedToolLlm {
