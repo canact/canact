@@ -64,6 +64,24 @@ pub struct ContextLadder {
     pub recall_hits: u8,
 }
 
+/// Rungs a live probe will request, smallest first.
+///
+/// `skip_expensive` keeps 4096 only. An advertised prior skips a later
+/// rung strictly larger than that prior. The 4096 rung is always included.
+pub fn planned_context_rungs(skip_expensive: bool, advertised: Option<u32>) -> Vec<u32> {
+    let mut rungs = Vec::new();
+    for &rung in &RUNGS {
+        if skip_expensive && rung > FIRST_RUNG {
+            break;
+        }
+        if advertised.is_some_and(|n| rung > n && rung != FIRST_RUNG) {
+            break;
+        }
+        rungs.push(rung);
+    }
+    rungs
+}
+
 /// Climb the 4k/8k/16k ladder. `skip_expensive` tries 4k only.
 ///
 /// Advertised tokens skip rungs strictly larger than the prior, except
@@ -77,15 +95,7 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
     let mut best: Option<u32> = None;
     let mut recall_hits = 0u8;
 
-    for &rung in &RUNGS {
-        if skip_expensive && rung > FIRST_RUNG {
-            break;
-        }
-        // Advertised may cap larger rungs; 4k is still live-tested.
-        if advertised.is_some_and(|n| rung > n && rung != FIRST_RUNG) {
-            break;
-        }
-
+    for rung in planned_context_rungs(skip_expensive, advertised) {
         let request = build_rung_request(llm.model_id(), rung);
         match llm.chat(request).await {
             Ok(response) => {
@@ -342,6 +352,19 @@ fn message_char_count(msg: &ProbeMessage) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planned_rungs_follow_suite_and_advertised_prior() {
+        assert_eq!(planned_context_rungs(true, Some(128_000)), vec![4096]);
+        assert_eq!(planned_context_rungs(false, None), vec![4096, 8192, 16384]);
+        assert_eq!(planned_context_rungs(false, Some(4096)), vec![4096]);
+        assert_eq!(planned_context_rungs(false, Some(8192)), vec![4096, 8192]);
+        assert_eq!(planned_context_rungs(false, Some(2000)), vec![4096]);
+        assert_eq!(
+            planned_context_rungs(false, Some(16_384)),
+            vec![4096, 8192, 16384]
+        );
+    }
     use crate::client::{CatalogPriors, ProbeClient, ProbeFinish, ProbeResponse, ProbeStreamChunk};
     use crate::error::ProbeError;
     use futures::Stream;
