@@ -79,8 +79,9 @@ Cloud hosts need a key before any HTTP call. The first match in
 this table wins. `--api-key` is visible in shell history and the
 process list; prefer an env var. `canact probe --no-login` skips
 stored Grok and Claude Code logins. Env vars still apply.
-`canact probe --dry-run` prints the provider, redacted base URL,
-suite, context ladder, and probe names, then exits. JSON adds
+`canact probe --dry-run` prints the provider, the model id when
+`--model` is set, redacted base URL, suite, context ladder, and
+probe names, then exits. JSON adds
 `contextLadder`. `--advertised-context` skips a later rung larger
 than that prior. The 4096 rung still runs. Dry-run does not read a
 login, the cache, or the network.

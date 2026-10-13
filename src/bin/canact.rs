@@ -128,7 +128,8 @@ struct ProbeArgs {
     #[arg(long)]
     json: bool,
 
-    /// Print the provider, base URL, suite, context ladder, and probe names, then exit.
+    /// Print the provider, the model id when `--model` is set, base URL, suite,
+    /// context ladder, and probe names, then exit.
     /// `--advertised-context` skips a later rung larger than that prior. The 4096 rung still runs.
     /// Skips login, cache, and HTTP.
     #[arg(long)]
@@ -706,16 +707,7 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
         eprintln!("error: {msg}");
         return Err(1);
     }
-    if let Some(model) = args
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        && let Some(msg) = control_character_message("--model", model)
-    {
-        eprintln!("error: {msg}");
-        return Err(1);
-    }
+    let model = trimmed_model_flag(args.model.as_deref())?;
     if let Some(msg) = control_character_message("provider", &provider) {
         eprintln!("error: {msg}");
         return Err(1);
@@ -724,13 +716,16 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
     let probes = planned_probe_names(suite, args.vision);
     let context_rungs = planned_context_rungs(suite.skip_expensive(), args.advertised_context);
     if args.json {
-        let plan = serde_json::json!({
+        let mut plan = serde_json::json!({
             "provider": provider,
             "baseUrl": base_url,
             "suite": suite.as_str(),
             "contextLadder": context_rungs,
             "probes": probes,
         });
+        if let Some(model) = model {
+            plan["model"] = serde_json::json!(model);
+        }
         match serde_json::to_string_pretty(&plan) {
             Ok(text) => {
                 println!("{text}");
@@ -748,6 +743,9 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
             .collect::<Vec<_>>()
             .join(", ");
         println!("provider: {provider}");
+        if let Some(model) = model {
+            println!("model: {model}");
+        }
         println!("baseUrl: {base_url}");
         println!("suite: {}", suite.as_str());
         println!("context ladder: {ladder}");
@@ -909,16 +907,7 @@ async fn resolve_model(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<String, u8> {
-    if let Some(model) = args
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        if let Some(msg) = control_character_message("--model", model) {
-            eprintln!("error: {msg}");
-            return Err(1);
-        }
+    if let Some(model) = trimmed_model_flag(args.model.as_deref())? {
         return Ok(model.to_owned());
     }
     match list_model_ids(base_url, api_key).await {
@@ -942,6 +931,23 @@ async fn resolve_model(
             Err(1)
         }
     }
+}
+
+/// `--model` that is only whitespace is an error, not "pick the only server model".
+fn trimmed_model_flag(raw: Option<&str>) -> Result<Option<&str>, u8> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let model = raw.trim();
+    if model.is_empty() {
+        eprintln!("error: --model is empty");
+        return Err(1);
+    }
+    if let Some(msg) = control_character_message("--model", model) {
+        eprintln!("error: {msg}");
+        return Err(1);
+    }
+    Ok(Some(model))
 }
 
 fn default_cache_path() -> PathBuf {

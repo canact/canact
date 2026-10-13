@@ -152,8 +152,9 @@ and leaves stdout empty. The file list stays in the
 [README](https://github.com/canact/canact/blob/main/README.md). See
 [#289](https://github.com/canact/canact/issues/289).
 
-`canact probe --dry-run` prints the provider, redacted base URL,
-suite, context ladder, and probe names, then exits. JSON adds
+`canact probe --dry-run` prints the provider, the model id when
+`--model` is set, redacted base URL, suite, context ladder, and
+probe names, then exits. JSON adds
 `contextLadder`. `--advertised-context` skips a later rung larger
 than that prior. The 4096 rung still runs. Dry-run does not read a
 login, the cache, or the network. See
