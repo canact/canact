@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn matrix_json_has_no_composite() {
         let mut cache = ProbeCache::default();
-        cache.put(profile());
+        cache.put(profile()).expect("cache id");
         let matrix = PlumbingMatrix::from_cache(&cache, "ollama");
         let value = serde_json::to_value(&matrix).unwrap();
         assert!(value.get("score").is_none(), "{value}");
@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn unfiltered_cache_omits_provider_field() {
         let mut cache = ProbeCache::default();
-        cache.put(profile());
+        cache.put(profile()).expect("cache id");
         let matrix = PlumbingMatrix::from_cache_filter(&cache, None);
         assert!(matrix.provider.is_empty());
         let value = serde_json::to_value(&matrix).unwrap();

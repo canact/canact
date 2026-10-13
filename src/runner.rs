@@ -105,6 +105,8 @@ impl ProbeRun {
     ///
     /// Returns `Ok(true)` when the 30-day cache was written, `Ok(false)`
     /// when persist was skipped because a required probe was transient.
+    /// A control character in the model id or provider is
+    /// [`ProbeError::Internal`] and the cache file is left untouched.
     pub fn persist(&self, cache: &mut ProbeCache, path: &Path) -> Result<bool, ProbeError> {
         if !self.cacheable {
             warn!("skipping probe cache persist: transient probe error");
@@ -116,7 +118,7 @@ impl ProbeRun {
             self.vision,
             self.advertised_context_tokens,
             self.tools.as_deref(),
-        );
+        )?;
         cache.save(path)?;
         Ok(true)
     }

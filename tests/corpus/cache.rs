@@ -73,7 +73,9 @@ fn unspecified_catalog_reuses_ctx_and_vision_row() {
     let mut cache = ProbeCache::default();
     let mut profile = sample_profile();
     profile.effective_context_tokens = Some(8192);
-    cache.put_with_knobs(profile, false, true, Some(200_000));
+    cache
+        .put_with_knobs(profile, false, true, Some(200_000))
+        .expect("cache id");
     assert!(
         cache.get_with_knobs("m", "p", false, false, None).is_none(),
         "default knobs must miss a catalog-filled key"
@@ -89,7 +91,9 @@ fn unspecified_catalog_reuses_ctx_and_vision_row() {
 #[test]
 fn unspecified_catalog_keeps_cheap_full_isolation() {
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(sample_profile(), true, true, Some(200_000));
+    cache
+        .put_with_knobs(sample_profile(), true, true, Some(200_000))
+        .expect("cache id");
     assert!(
         cache
             .find_profile_unspecified_catalog("m", "p", false)
@@ -97,7 +101,8 @@ fn unspecified_catalog_keeps_cheap_full_isolation() {
         "full lookup must not reuse a cheap catalog row"
     );
     let mut full = ProbeCache::default();
-    full.put_with_knobs(sample_profile(), false, true, Some(200_000));
+    full.put_with_knobs(sample_profile(), false, true, Some(200_000))
+        .expect("cache id");
     assert!(
         full.find_profile_unspecified_catalog("m", "p", true)
             .is_none(),
@@ -124,7 +129,7 @@ fn different_effort_is_different_key() {
 #[test]
 fn put_get_round_trip() {
     let mut cache = ProbeCache::default();
-    cache.put(sample_profile());
+    cache.put(sample_profile()).expect("cache id");
     let profile = cache
         .get("m", "p")
         .expect("profile under current suite/effort");
@@ -139,7 +144,9 @@ fn find_profile_sees_cheap_row() {
     let mut cache = ProbeCache::default();
     let mut profile = sample_profile();
     profile.effective_context_tokens = Some(8192);
-    cache.put_with_knobs(profile, true, false, None);
+    cache
+        .put_with_knobs(profile, true, false, None)
+        .expect("cache id");
     let found = cache.find_profile("m", "p").expect("cheap row");
     assert_eq!(found.effective_context_tokens, Some(8192));
 }
@@ -182,7 +189,9 @@ fn find_profile_prefers_newer_cached_at() {
 #[test]
 fn find_profile_with_cost_reports_cheap_row() {
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(sample_profile(), true, false, None);
+    cache
+        .put_with_knobs(sample_profile(), true, false, None)
+        .expect("cache id");
     let (_, cheap) = cache.find_profile_with_cost("m", "p").expect("cheap row");
     assert!(cheap, "fallback row must report cheap");
 }
@@ -190,14 +199,16 @@ fn find_profile_with_cost_reports_cheap_row() {
 #[test]
 fn get_misses_when_effort_differs() {
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(
-        sample_profile(),
-        "unset",
-        PROBE_SUITE_VERSION,
-        DEFAULT_SKIP_EXPENSIVE,
-        DEFAULT_VISION,
-        None,
-    );
+    cache
+        .put_with_settings(
+            sample_profile(),
+            "unset",
+            PROBE_SUITE_VERSION,
+            DEFAULT_SKIP_EXPENSIVE,
+            DEFAULT_VISION,
+            None,
+        )
+        .expect("cache id");
     assert!(
         cache
             .get_with_settings(
@@ -230,14 +241,16 @@ fn get_misses_when_effort_differs() {
 #[test]
 fn get_misses_when_suite_differs() {
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(
-        sample_profile(),
-        "unset",
-        6,
-        DEFAULT_SKIP_EXPENSIVE,
-        DEFAULT_VISION,
-        None,
-    );
+    cache
+        .put_with_settings(
+            sample_profile(),
+            "unset",
+            6,
+            DEFAULT_SKIP_EXPENSIVE,
+            DEFAULT_VISION,
+            None,
+        )
+        .expect("cache id");
     assert!(
         cache
             .get_with_settings(
@@ -265,7 +278,9 @@ fn find_profile_with_cost_and_advertised_reports_all_suite() {
         level: CapabilityLevel::Strong,
         details: "followed the system prompt".into(),
     };
-    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    cache
+        .put_with_suite(profile, SuiteTier::All, false, None)
+        .expect("cache id");
     let (found, suite) = cache
         .find_profile_with_cost_and_advertised("m", "p", None)
         .expect("all-suite row");
@@ -282,7 +297,9 @@ fn find_profile_with_cost_and_advertised_reports_all_suite() {
 #[test]
 fn find_profile_with_cost_and_advertised_policy_omits_placement() {
     let mut cache = ProbeCache::default();
-    cache.put_with_suite(sample_profile(), SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(sample_profile(), SuiteTier::Policy, false, None)
+        .expect("cache id");
     let (found, suite) = cache
         .find_profile_with_cost_and_advertised("m", "p", None)
         .expect("policy row");
@@ -298,7 +315,9 @@ fn find_profile_with_cost_and_advertised_policy_omits_placement() {
 #[test]
 fn find_profile_with_cost_and_advertised_keeps_isolation() {
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(sample_profile(), false, false, Some(2000));
+    cache
+        .put_with_knobs(sample_profile(), false, false, Some(2000))
+        .expect("cache id");
     assert!(
         cache.find_profile("m", "p").is_some(),
         "export may still use a loose advertised row"
@@ -317,7 +336,9 @@ fn find_profile_with_cost_and_advertised_keeps_isolation() {
     );
 
     let mut uncapped = ProbeCache::default();
-    uncapped.put_with_knobs(sample_profile(), false, false, None);
+    uncapped
+        .put_with_knobs(sample_profile(), false, false, None)
+        .expect("cache id");
     assert!(
         uncapped
             .find_profile_with_cost_and_advertised("m", "p", Some(2000))
@@ -338,7 +359,7 @@ fn find_profile_accepts_overlay_provider_aliases() {
     let mut openai = sample_profile();
     openai.model_id = "gpt-4o".into();
     openai.provider = "api.openai.com".into();
-    cache.put(openai);
+    cache.put(openai).expect("cache id");
     let hit = cache
         .find_profile("gpt-4o", "openai")
         .expect("--provider openai must find a row stored as api.openai.com");
@@ -353,7 +374,7 @@ fn find_profile_accepts_overlay_provider_aliases() {
     let mut openrouter = sample_profile();
     openrouter.model_id = "claude".into();
     openrouter.provider = "openrouter.ai".into();
-    cache.put(openrouter);
+    cache.put(openrouter).expect("cache id");
     let hit = cache
         .find_profile("claude", "openrouter")
         .expect("openrouter alias");
@@ -363,7 +384,7 @@ fn find_profile_accepts_overlay_provider_aliases() {
     let mut ollama = sample_profile();
     ollama.model_id = "qwen".into();
     ollama.provider = "127.0.0.1".into();
-    cache.put(ollama);
+    cache.put(ollama).expect("cache id");
     let hit = cache.find_profile("qwen", "ollama").expect("ollama alias");
     assert_eq!(hit.model_id, "qwen");
     assert_eq!(hit.provider, "127.0.0.1");
@@ -391,7 +412,7 @@ fn find_profile_hits_across_ollama_and_default_port() {
     let mut ollama = sample_profile();
     ollama.model_id = "qwen".into();
     ollama.provider = "ollama".into();
-    cache.put(ollama);
+    cache.put(ollama).expect("cache id");
     for requested in [
         "127.0.0.1:11434",
         "localhost:11434",
@@ -408,7 +429,7 @@ fn find_profile_hits_across_ollama_and_default_port() {
     let mut stored = sample_profile();
     stored.model_id = "qwen".into();
     stored.provider = "127.0.0.1:11434".into();
-    ported.put(stored);
+    ported.put(stored).expect("cache id");
     assert!(
         ported.find_profile("qwen", "ollama").is_some(),
         "row stored as 127.0.0.1:11434 must hit --provider ollama"
@@ -429,7 +450,7 @@ fn find_profile_hits_across_xai_aliases() {
     let mut stored = sample_profile();
     stored.model_id = "grok-4".into();
     stored.provider = "xai".into();
-    cache.put(stored);
+    cache.put(stored).expect("cache id");
     for requested in ["api.x.ai", "grok", "x.ai"] {
         assert!(
             cache.find_profile("grok-4", requested).is_some(),
@@ -448,7 +469,7 @@ fn find_profile_hits_across_grok_build_aliases() {
     let mut stored = sample_profile();
     stored.model_id = "grok-4.7".into();
     stored.provider = "grok-build".into();
-    cache.put(stored);
+    cache.put(stored).expect("cache id");
     for requested in [
         "xai-grok-build",
         "cli-chat-proxy.grok.com",
@@ -486,7 +507,7 @@ fn find_profile_hits_across_grok_build_aliases() {
     let mut stored = sample_profile();
     stored.model_id = "grok-4.7".into();
     stored.provider = "grok-build-messages".into();
-    messages.put(stored);
+    messages.put(stored).expect("cache id");
     assert!(
         messages
             .find_profile("grok-4.7", "xai-grok-build-messages")
@@ -506,7 +527,7 @@ fn find_profile_hits_across_anthropic_aliases() {
     let mut stored = sample_profile();
     stored.model_id = "claude-haiku-4-5-20251001".into();
     stored.provider = "claude".into();
-    cache.put(stored);
+    cache.put(stored).expect("cache id");
     for requested in ["anthropic", "api.anthropic.com", "claude"] {
         assert!(
             cache
@@ -535,7 +556,7 @@ fn find_profile_hits_across_groq_aliases() {
     let mut stored = sample_profile();
     stored.model_id = "llama-3.1-8b-instant".into();
     stored.provider = "groq".into();
-    cache.put(stored);
+    cache.put(stored).expect("cache id");
     for requested in ["api.groq.com", "groq"] {
         assert!(
             cache
@@ -558,7 +579,7 @@ fn find_profile_hits_across_openai_codex_aliases() {
     let mut stored = sample_profile();
     stored.model_id = "gpt-5".into();
     stored.provider = "openai-codex".into();
-    cache.put(stored);
+    cache.put(stored).expect("cache id");
     for requested in ["codex", "OpenAI-Codex", "openai-codex"] {
         assert!(
             cache.find_profile("gpt-5", requested).is_some(),
@@ -583,7 +604,7 @@ fn find_profile_hits_across_bedrock_aliases() {
     let mut stored = sample_profile();
     stored.model_id = "amazon.nova-lite-v1:0".into();
     stored.provider = "amazon-bedrock".into();
-    cache.put(stored);
+    cache.put(stored).expect("cache id");
     for requested in ["bedrock", "bedrock-runtime.us-east-1.amazonaws.com"] {
         assert!(
             cache
@@ -606,7 +627,7 @@ fn loopback_url_port_does_not_share_ollama_row() {
     let mut ollama = sample_profile();
     ollama.model_id = "qwen".into();
     ollama.provider = "ollama".into();
-    cache.put(ollama);
+    cache.put(ollama).expect("cache id");
 
     let derived = provider_from_base_url("http://127.0.0.1:1234/v1");
     assert_eq!(
@@ -627,7 +648,7 @@ fn loopback_url_port_does_not_share_ollama_row() {
     let mut lmstudio = sample_profile();
     lmstudio.model_id = "qwen".into();
     lmstudio.provider = "lmstudio".into();
-    cache.put(lmstudio);
+    cache.put(lmstudio).expect("cache id");
     assert!(
         cache.find_profile("qwen", "lmstudio").is_some(),
         "--provider lmstudio isolation stays"
@@ -644,7 +665,7 @@ fn find_profile_treats_all_zeros_as_ollama() {
     let mut zeros = sample_profile();
     zeros.model_id = "qwen".into();
     zeros.provider = "0.0.0.0".into();
-    cache.put(zeros);
+    cache.put(zeros).expect("cache id");
     assert!(
         cache.find_profile("qwen", "ollama").is_some(),
         "--provider ollama must find a row stored as 0.0.0.0"
@@ -657,7 +678,7 @@ fn find_profile_strips_normalized_provider_prefix() {
     let mut profile = sample_profile();
     profile.model_id = "anthropic/claude-3.5-sonnet".into();
     profile.provider = "openrouter".into();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     assert!(
         cache
             .find_profile("openrouter/anthropic/claude-3.5-sonnet", "openrouter")
@@ -684,7 +705,7 @@ fn find_profile_strips_stored_host_prefix_via_stored_family() {
     let mut ollama = sample_profile();
     ollama.model_id = "localhost/qwen".into();
     ollama.provider = "localhost".into();
-    cache.put(ollama);
+    cache.put(ollama).expect("cache id");
     assert!(
         cache.find_profile("qwen", "ollama").is_some(),
         "stored localhost/qwen under localhost must hit --model qwen --provider ollama"
@@ -693,7 +714,7 @@ fn find_profile_strips_stored_host_prefix_via_stored_family() {
     let mut openai = sample_profile();
     openai.model_id = "api.openai.com/gpt-4o".into();
     openai.provider = "api.openai.com".into();
-    cache.put(openai);
+    cache.put(openai).expect("cache id");
     assert!(
         cache.find_profile("gpt-4o", "openai").is_some(),
         "stored api.openai.com/gpt-4o under api.openai.com must hit --model gpt-4o --provider openai"
@@ -706,7 +727,7 @@ fn find_profile_matches_when_stored_has_provider_prefix() {
     let mut profile = sample_profile();
     profile.model_id = "openrouter/anthropic/claude-3.5-sonnet".into();
     profile.provider = "openrouter".into();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     assert!(
         cache
             .find_profile("anthropic/claude-3.5-sonnet", "openrouter")
@@ -734,13 +755,17 @@ fn get_with_knobs_accepts_provider_aliases_without_cheap_fallback() {
     vision.model_id = "gpt-4o".into();
     vision.provider = "api.openai.com".into();
     vision.effective_context_tokens = Some(128000);
-    cache.put_with_knobs(vision, false, true, None);
+    cache
+        .put_with_knobs(vision, false, true, None)
+        .expect("cache id");
 
     let mut cheap = sample_profile();
     cheap.model_id = "gpt-4o".into();
     cheap.provider = "api.openai.com".into();
     cheap.effective_context_tokens = Some(4096);
-    cache.put_with_knobs(cheap, true, false, None);
+    cache
+        .put_with_knobs(cheap, true, false, None)
+        .expect("cache id");
 
     let hit = cache
         .get_with_knobs("gpt-4o", "openai", false, true, None)
@@ -761,7 +786,9 @@ fn get_with_knobs_accepts_provider_aliases_without_cheap_fallback() {
 #[test]
 fn advertised_cache_misses_on_different_cap() {
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(sample_profile(), false, false, None);
+    cache
+        .put_with_knobs(sample_profile(), false, false, None)
+        .expect("cache id");
     assert!(
         cache.get_with_knobs("m", "p", false, false, None).is_some(),
         "uncapped put must hit uncapped get"
@@ -777,7 +804,9 @@ fn advertised_cache_misses_on_different_cap() {
 #[test]
 fn cheap_cache_misses_on_full_and_vision() {
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(sample_profile(), true, false, None);
+    cache
+        .put_with_knobs(sample_profile(), true, false, None)
+        .expect("cache id");
     assert!(
         cache.get_with_knobs("m", "p", true, false, None).is_some(),
         "cheap/novision must hit its own entry"
@@ -799,7 +828,7 @@ fn cheap_cache_misses_on_full_and_vision() {
 #[test]
 fn get_entry_returns_metadata() {
     let mut cache = ProbeCache::default();
-    cache.put(sample_profile());
+    cache.put(sample_profile()).expect("cache id");
     let entry = cache.get_entry("m", "p").expect("entry");
     assert_eq!(entry.reasoning_effort, DEFAULT_PROBE_EFFORT);
     assert_eq!(entry.probe_suite_version, PROBE_SUITE_VERSION);
@@ -831,7 +860,7 @@ fn put_then_load_round_trip() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample_profile());
+    cache.put(sample_profile()).expect("cache id");
     cache.save(&path).expect("save");
     let loaded = ProbeCache::load(&path).expect("load");
     let profile = loaded.get("m", "p").expect("hit after reload");
@@ -850,12 +879,12 @@ fn save_overwrites_existing_file_and_leaves_no_bak() {
     let mut first = ProbeCache::default();
     let mut a = sample_profile();
     a.model_id = "first".into();
-    first.put(a);
+    first.put(a).expect("cache id");
     first.save(&path).expect("first save");
     let mut second = ProbeCache::default();
     let mut b = sample_profile();
     b.model_id = "second".into();
-    second.put(b);
+    second.put(b).expect("cache id");
     second.save(&path).expect("overwrite existing dest");
     let bak = path.with_extension("bak");
     assert!(
@@ -876,7 +905,7 @@ fn put_then_load_preserves_effective_context_tokens() {
     let mut cache = ProbeCache::default();
     let mut profile = sample_profile();
     profile.effective_context_tokens = Some(8192);
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&path).expect("save");
     let loaded = ProbeCache::load(&path).expect("load");
     let got = loaded.get("m", "p").expect("hit after reload");
@@ -891,7 +920,7 @@ fn put_then_load_preserves_probed_context_floor() {
     let mut profile = sample_profile();
     profile.effective_context_tokens = None;
     profile.probed_context_floor = Some(4096);
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&path).expect("save");
     let loaded = ProbeCache::load(&path).expect("load");
     let got = loaded.get("m", "p").expect("hit after reload");
@@ -916,7 +945,7 @@ fn load_migrates_stale_no_tools_v7_to_weak_and_persists() {
     profile.multi_turn_task_sequencing = stale("multi_turn_task_sequencing");
     profile.json_output = stale("json_output");
     let mut cache = ProbeCache::default();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&path).expect("save stale v7");
 
     let loaded = ProbeCache::load(&path).expect("load migrates");
@@ -954,12 +983,12 @@ fn save_keeps_newer_other_model_row() {
     let mut a = ProbeCache::default();
     let mut pa = sample_profile();
     pa.model_id = "a".into();
-    a.put(pa);
+    a.put(pa).expect("cache id");
     a.save(&path).expect("save a");
     let mut b = ProbeCache::default();
     let mut pb = sample_profile();
     pb.model_id = "b".into();
-    b.put(pb);
+    b.put(pb).expect("cache id");
     b.save(&path).expect("save b merges a");
     let loaded = ProbeCache::load(&path).expect("load");
     assert!(
@@ -1061,7 +1090,7 @@ fn load_keeps_migrated_profile_when_save_fails() {
         details: "Probe failed: LLM error: does not support tools".to_owned(),
     };
     let mut cache = ProbeCache::default();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&path).expect("save stale");
 
     // save() writes path.with_extension("tmp-<pid>"); a directory there blocks rewrite.
@@ -1105,7 +1134,7 @@ fn stale_vision_grader_keeps_tool_calling() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample_profile());
+    cache.put(sample_profile()).expect("cache id");
     for entry in cache.profiles.values_mut() {
         entry.grader_versions.insert("vision".into(), 0);
     }
@@ -1127,7 +1156,7 @@ fn stale_vision_grader_v1_resets_only_vision() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample_profile());
+    cache.put(sample_profile()).expect("cache id");
     for entry in cache.profiles.values_mut() {
         entry.grader_versions.insert("vision".into(), 1);
     }
@@ -1143,7 +1172,7 @@ fn stale_unified_diff_grader_v1_resets_only_that_dim() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample_profile());
+    cache.put(sample_profile()).expect("cache id");
     for entry in cache.profiles.values_mut() {
         entry.grader_versions.insert("unified_diff".into(), 1);
     }
@@ -1163,7 +1192,7 @@ fn stale_max_tokens_compliance_grader_resets_only_that_dim() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample_profile());
+    cache.put(sample_profile()).expect("cache id");
     for entry in cache.profiles.values_mut() {
         entry
             .grader_versions
@@ -1185,14 +1214,16 @@ fn matrix_profiles_skips_stale_suite_version() {
     let mut cache = ProbeCache::default();
     let mut stale = sample_profile();
     stale.tool_calling.details = "v96".into();
-    cache.put_with_settings(
-        stale,
-        "unset",
-        PROBE_SUITE_VERSION - 1,
-        DEFAULT_SKIP_EXPENSIVE,
-        DEFAULT_VISION,
-        None,
-    );
+    cache
+        .put_with_settings(
+            stale,
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            DEFAULT_SKIP_EXPENSIVE,
+            DEFAULT_VISION,
+            None,
+        )
+        .expect("cache id");
     let rows = cache.matrix_profiles("p");
     assert!(
         rows.is_empty(),
@@ -1208,17 +1239,21 @@ fn matrix_profiles_skips_stale_full_when_current_policy_exists() {
     let mut cache = ProbeCache::default();
     let mut stale = sample_profile();
     stale.tool_calling.details = "v96".into();
-    cache.put_with_settings(
-        stale,
-        "unset",
-        PROBE_SUITE_VERSION - 1,
-        false,
-        DEFAULT_VISION,
-        None,
-    );
+    cache
+        .put_with_settings(
+            stale,
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            false,
+            DEFAULT_VISION,
+            None,
+        )
+        .expect("cache id");
     let mut current = sample_profile();
     current.tool_calling.details = "policy".into();
-    cache.put_with_suite(current, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(current, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
     let rows = cache.matrix_profiles("p");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].tool_calling.details, "policy");
@@ -1229,10 +1264,14 @@ fn matrix_profiles_prefers_all_suite() {
     let mut cache = ProbeCache::default();
     let mut policy = sample_profile();
     policy.tool_calling.details = "policy".into();
-    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(policy, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
     let mut all = sample_profile();
     all.tool_calling.details = "all".into();
-    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    cache
+        .put_with_suite(all, canact::SuiteTier::All, false, None)
+        .expect("cache id");
     let rows = cache.matrix_profiles("p");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].tool_calling.details, "all");
@@ -1245,12 +1284,16 @@ fn matrix_profiles_collapses_provider_prefixed_model_id() {
     policy.model_id = "qwen".into();
     policy.provider = "localhost".into();
     policy.tool_calling.details = "policy".into();
-    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(policy, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
     let mut all = sample_profile();
     all.model_id = "localhost/qwen".into();
     all.provider = "localhost".into();
     all.tool_calling.details = "all".into();
-    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    cache
+        .put_with_suite(all, canact::SuiteTier::All, false, None)
+        .expect("cache id");
     let rows = cache.matrix_profiles("ollama");
     assert_eq!(
         rows.len(),
@@ -1268,12 +1311,16 @@ fn matrix_profiles_collapses_openrouter_vendor_prefix() {
     policy.model_id = "anthropic/claude-3.5-sonnet".into();
     policy.provider = "openrouter".into();
     policy.tool_calling.details = "policy".into();
-    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(policy, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
     let mut all = sample_profile();
     all.model_id = "openrouter/anthropic/claude-3.5-sonnet".into();
     all.provider = "openrouter".into();
     all.tool_calling.details = "all".into();
-    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    cache
+        .put_with_suite(all, canact::SuiteTier::All, false, None)
+        .expect("cache id");
     let rows = cache.matrix_profiles("openrouter");
     assert_eq!(
         rows.len(),
@@ -1291,12 +1338,16 @@ fn matrix_profiles_collapses_trailing_space_model_id() {
     policy.model_id = "llama3.2:3b ".into();
     policy.provider = "ollama".into();
     policy.tool_calling.details = "policy".into();
-    cache.put_with_suite(policy, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(policy, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
     let mut all = sample_profile();
     all.model_id = "llama3.2:3b".into();
     all.provider = "ollama".into();
     all.tool_calling.details = "all".into();
-    cache.put_with_suite(all, canact::SuiteTier::All, false, None);
+    cache
+        .put_with_suite(all, canact::SuiteTier::All, false, None)
+        .expect("cache id");
     let rows = cache.matrix_profiles("ollama");
     assert_eq!(
         rows.len(),
@@ -1313,11 +1364,15 @@ fn matrix_entries_none_includes_every_provider() {
     let mut grok = sample_profile();
     grok.model_id = "grok-4".into();
     grok.provider = "grok".into();
-    cache.put_with_suite(grok, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(grok, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
     let mut ollama = sample_profile();
     ollama.model_id = "llama3.2:3b".into();
     ollama.provider = "ollama".into();
-    cache.put_with_suite(ollama, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(ollama, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
     let all = cache.matrix_entries(None);
     assert_eq!(all.len(), 2, "{all:?}");
     assert_eq!(cache.matrix_entries(Some("grok")).len(), 1);
@@ -1330,7 +1385,7 @@ fn find_profile_matches_trailing_space_model_id() {
     let mut stored = sample_profile();
     stored.model_id = "llama3.2:3b ".into();
     stored.provider = "ollama".into();
-    cache.put(stored);
+    cache.put(stored).expect("cache id");
     assert!(
         cache.find_profile("llama3.2:3b", "ollama").is_some(),
         "export --model llama3.2:3b must hit a stored trailing-space row"
@@ -1344,12 +1399,22 @@ fn find_profile_and_advertised_prefers_exact_model_id() {
     spaced.model_id = "llama3.2:3b ".into();
     spaced.provider = "ollama".into();
     spaced.tool_calling.details = "spaced".into();
-    cache.put_with_suite(spaced, canact::SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(spaced, canact::SuiteTier::Policy, false, None)
+        .expect("cache id");
+    // `put` trims. Old cache files can still hold the trailing space.
+    {
+        let entry = cache.profiles.values_mut().next().expect("spaced row");
+        entry.profile.model_id = "llama3.2:3b ".into();
+        entry.cached_at = entry.cached_at.saturating_add(60);
+    }
     let mut exact = sample_profile();
     exact.model_id = "llama3.2:3b".into();
     exact.provider = "ollama".into();
     exact.tool_calling.details = "exact".into();
-    cache.put_with_suite(exact, canact::SuiteTier::All, false, None);
+    cache
+        .put_with_suite(exact, canact::SuiteTier::All, false, None)
+        .expect("cache id");
     let (got, _) = cache
         .find_profile_and_advertised("llama3.2:3b", "ollama")
         .expect("row");
@@ -1362,7 +1427,9 @@ fn find_profile_and_advertised_prefers_exact_model_id() {
 #[test]
 fn suite_all_key_is_isolated_from_full() {
     let mut cache = ProbeCache::default();
-    cache.put_with_suite(sample_profile(), canact::SuiteTier::All, false, None);
+    cache
+        .put_with_suite(sample_profile(), canact::SuiteTier::All, false, None)
+        .expect("cache id");
     assert!(
         cache
             .get_with_suite("m", "p", canact::SuiteTier::All, false, None)

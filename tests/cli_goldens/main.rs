@@ -138,12 +138,14 @@ fn probe_padded_advertised_context_parses() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
-        true,
-        false,
-        Some(4096),
-    );
+    cache
+        .put_with_knobs(
+            cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+            true,
+            false,
+            Some(4096),
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let out = canact()
         .args([
@@ -243,10 +245,14 @@ fn probe_padded_suite_parses_full() {
     let mut cache = ProbeCache::default();
     let mut policy = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
     policy.effective_context_tokens = Some(111);
-    cache.put_with_suite(policy, SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(policy, SuiteTier::Policy, false, None)
+        .expect("cache id");
     let mut full = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
     full.effective_context_tokens = Some(999);
-    cache.put_with_suite(full, SuiteTier::Full, false, None);
+    cache
+        .put_with_suite(full, SuiteTier::Full, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let out = canact()
         .args([
@@ -335,7 +341,9 @@ fn probe_cached_weak_tools_exits_2_and_explains() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cached_profile(CapabilityLevel::Weak, CapabilityLevel::Weak));
+    cache
+        .put(cached_profile(CapabilityLevel::Weak, CapabilityLevel::Weak))
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
 
     let out = canact()
@@ -371,12 +379,14 @@ fn probe_cheap_cache_is_not_returned_on_full() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        cached_profile(CapabilityLevel::Weak, CapabilityLevel::Weak),
-        true,
-        false,
-        None,
-    );
+    cache
+        .put_with_knobs(
+            cached_profile(CapabilityLevel::Weak, CapabilityLevel::Weak),
+            true,
+            false,
+            None,
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save cheap cache");
     let cache_str = cache_path.to_str().expect("utf8 cache path");
 
@@ -472,7 +482,9 @@ fn probe_whitespace_cache_uses_default_path() {
     let mut profile = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong);
     profile.model_id = "whitespace-cache-model".to_owned();
     profile.effective_context_tokens = Some(4242);
-    cache.put_with_knobs(profile, true, false, None);
+    cache
+        .put_with_knobs(profile, true, false, None)
+        .expect("cache id");
     seed_default_cache_locations(home.path(), &xdg, &cache);
     let out = canact()
         .env("HOME", home.path())
@@ -510,12 +522,14 @@ fn probe_json_from_cache(args: &[&str], cheap: bool, advertised: Option<u32>) ->
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
-        cheap,
-        false,
-        advertised,
-    );
+    cache
+        .put_with_knobs(
+            cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+            cheap,
+            false,
+            advertised,
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let cache_str = cache_path.to_str().expect("utf8 cache path");
     let mut cmd_args = vec![
@@ -547,12 +561,14 @@ fn probe_json_trims_model_whitespace_for_cache_hit() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
-        true,
-        false,
-        None,
-    );
+    cache
+        .put_with_knobs(
+            cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+            true,
+            false,
+            None,
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let cache_str = cache_path.to_str().expect("utf8 cache path");
     let out = canact()
@@ -584,12 +600,14 @@ fn probe_json_trims_provider_whitespace_for_cache_hit() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
-        true,
-        false,
-        None,
-    );
+    cache
+        .put_with_knobs(
+            cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+            true,
+            false,
+            None,
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let cache_str = cache_path.to_str().expect("utf8 cache path");
     let out = canact()
@@ -652,7 +670,9 @@ fn probe_json_all_suite_emits_constraint_placement() {
         level: CapabilityLevel::Weak,
         details: "ignored the system prompt".to_owned(),
     };
-    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    cache
+        .put_with_suite(profile, SuiteTier::All, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let out = canact()
         .args([
@@ -700,7 +720,9 @@ fn probe_json_policy_fallback_reports_all_row_suite() {
         level: CapabilityLevel::Strong,
         details: "followed the system prompt".to_owned(),
     };
-    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    cache
+        .put_with_suite(profile, SuiteTier::All, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let out = canact()
         .args([
@@ -744,12 +766,14 @@ fn probe_json_reuses_catalog_filled_row_without_flags() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
-        false,
-        true,
-        Some(200_000),
-    );
+    cache
+        .put_with_knobs(
+            cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+            false,
+            true,
+            Some(200_000),
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let out = canact()
         .args([
@@ -1058,7 +1082,9 @@ fn probe_ollama_uses_full_cache_row_when_cheap() {
     profile.model_id = "qwen2.5-coder".to_owned();
     profile.provider = "ollama".to_owned();
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(profile, false, false, None);
+    cache
+        .put_with_knobs(profile, false, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1094,10 +1120,12 @@ fn export_aider_writes_cwd_when_dir_omitted() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cached_profile(
-        CapabilityLevel::Strong,
-        CapabilityLevel::Medium,
-    ));
+    cache
+        .put(cached_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+        ))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .current_dir(dir.path())
@@ -1141,7 +1169,9 @@ fn export_all_writes_aider_and_cline() {
         .expect("measured floor");
     assert_ne!(recommended, 128_000);
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(profile, false, false, Some(128_000));
+    cache
+        .put_with_knobs(profile, false, false, Some(128_000))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .current_dir(dir.path())
@@ -1252,10 +1282,12 @@ fn export_whitespace_dir_writes_cwd() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cached_profile(
-        CapabilityLevel::Strong,
-        CapabilityLevel::Medium,
-    ));
+    cache
+        .put(cached_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+        ))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .current_dir(dir.path())
@@ -1337,10 +1369,12 @@ fn export_padded_model_and_provider_still_match() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cached_profile(
-        CapabilityLevel::Strong,
-        CapabilityLevel::Medium,
-    ));
+    cache
+        .put(cached_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+        ))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .current_dir(dir.path())
@@ -1375,7 +1409,7 @@ fn export_cline_without_advertised_window_omits_token_fields() {
     profile.effective_context_tokens = Some(8192);
     profile.probed_context_floor = Some(8192);
     let mut cache = ProbeCache::default();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1408,7 +1442,7 @@ fn export_aider_without_advertised_window_omits_token_fields() {
     profile.effective_context_tokens = Some(8192);
     profile.probed_context_floor = Some(8192);
     let mut cache = ProbeCache::default();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1440,10 +1474,12 @@ fn export_dir_file_explains_not_os_error_17() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cached_profile(
-        CapabilityLevel::Strong,
-        CapabilityLevel::Medium,
-    ));
+    cache
+        .put(cached_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+        ))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let as_file = dir.path().join("notadir");
     std::fs::write(&as_file, b"nope").expect("file");
@@ -1481,10 +1517,12 @@ fn export_dir_parent_file_explains_not_os_error() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cached_profile(
-        CapabilityLevel::Strong,
-        CapabilityLevel::Medium,
-    ));
+    cache
+        .put(cached_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Medium,
+        ))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let as_file = dir.path().join("notadir");
     std::fs::write(&as_file, b"nope").expect("file");
@@ -1532,8 +1570,8 @@ fn matrix_without_provider_lists_every_cached_row() {
     let mut ollama = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
     ollama.model_id = "llama3.2:3b".to_owned();
     ollama.provider = "ollama".to_owned();
-    cache.put(grok);
-    cache.put(ollama);
+    cache.put(grok).expect("cache id");
+    cache.put(ollama).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args(["matrix", "--cache", cache_path.to_str().expect("utf8")])
@@ -1565,8 +1603,8 @@ fn matrix_provider_grok_filters_mixed_cache() {
     let mut ollama = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
     ollama.model_id = "llama3.2:3b".to_owned();
     ollama.provider = "ollama".to_owned();
-    cache.put(grok);
-    cache.put(ollama);
+    cache.put(grok).expect("cache id");
+    cache.put(ollama).expect("cache id");
     cache.save(&cache_path).expect("save");
     let path = cache_path.to_str().expect("utf8");
     for provider_arg in ["grok", " grok "] {
@@ -1599,8 +1637,8 @@ fn matrix_whitespace_provider_lists_every_cached_row() {
     let mut ollama = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
     ollama.model_id = "llama3.2:3b".to_owned();
     ollama.provider = "ollama".to_owned();
-    cache.put(grok);
-    cache.put(ollama);
+    cache.put(grok).expect("cache id");
+    cache.put(ollama).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1628,7 +1666,7 @@ fn matrix_missing_provider_fails_closed() {
     let mut grok = cached_profile(CapabilityLevel::Strong, CapabilityLevel::Medium);
     grok.model_id = "grok-4-fast-non-reasoning".to_owned();
     grok.provider = "grok".to_owned();
-    cache.put(grok);
+    cache.put(grok).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1723,8 +1761,8 @@ fn matrix_prints_json_without_score() {
     let mut b = cached_profile(CapabilityLevel::Weak, CapabilityLevel::Medium);
     b.model_id = "beta".to_owned();
     b.provider = "ollama".to_owned();
-    cache.put(a);
-    cache.put(b);
+    cache.put(a).expect("cache id");
+    cache.put(b).expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1765,7 +1803,9 @@ fn matrix_policy_row_skips_unmeasured_output_and_placement() {
         details: "Skipped: diagnostic suite (use --suite=all)".into(),
     };
     let mut cache = ProbeCache::default();
-    cache.put_with_suite(profile, SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(profile, SuiteTier::Policy, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1804,7 +1844,9 @@ fn matrix_full_row_omitted_output_cap_is_fail() {
         details: "Skipped: diagnostic suite (use --suite=all)".into(),
     };
     let mut cache = ProbeCache::default();
-    cache.put_with_suite(profile, SuiteTier::Full, false, None);
+    cache
+        .put_with_suite(profile, SuiteTier::Full, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1932,11 +1974,13 @@ fn export_uses_cached_advertised_window() {
     older.provider = "xai".to_owned();
     let newer = older.clone();
     let mut cache = ProbeCache::default();
-    cache.put(older);
+    cache.put(older).expect("cache id");
     for entry in cache.profiles.values_mut() {
         entry.cached_at = 1;
     }
-    cache.put_with_knobs(newer, true, false, Some(1_000_000));
+    cache
+        .put_with_knobs(newer, true, false, Some(1_000_000))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -1972,14 +2016,16 @@ fn export_stale_suite_explains_rerun() {
     profile.model_id = "llama3.2:3b".to_owned();
     profile.provider = "ollama".to_owned();
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(
-        profile,
-        "unset",
-        PROBE_SUITE_VERSION - 1,
-        true,
-        false,
-        Some(131_072),
-    );
+    cache
+        .put_with_settings(
+            profile,
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            true,
+            false,
+            Some(131_072),
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -2020,14 +2066,16 @@ fn matrix_stale_suite_explains_rerun() {
     profile.model_id = "llama3.2:3b".to_owned();
     profile.provider = "ollama".to_owned();
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(
-        profile,
-        "unset",
-        PROBE_SUITE_VERSION - 1,
-        true,
-        false,
-        Some(131_072),
-    );
+    cache
+        .put_with_settings(
+            profile,
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            true,
+            false,
+            Some(131_072),
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -2063,14 +2111,16 @@ fn matrix_without_provider_stale_only_explains_rerun() {
     profile.model_id = "llama3.2:3b".to_owned();
     profile.provider = "ollama".to_owned();
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(
-        profile,
-        "unset",
-        PROBE_SUITE_VERSION - 1,
-        true,
-        false,
-        Some(131_072),
-    );
+    cache
+        .put_with_settings(
+            profile,
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            true,
+            false,
+            Some(131_072),
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args(["matrix", "--cache", cache_path.to_str().expect("utf8")])
@@ -2103,15 +2153,17 @@ fn matrix_without_provider_skips_stale_and_keeps_current() {
     ollama.model_id = "llama3.2:3b".to_owned();
     ollama.provider = "ollama".to_owned();
     let mut cache = ProbeCache::default();
-    cache.put(grok);
-    cache.put_with_settings(
-        ollama,
-        "unset",
-        PROBE_SUITE_VERSION - 1,
-        true,
-        false,
-        Some(131_072),
-    );
+    cache.put(grok).expect("cache id");
+    cache
+        .put_with_settings(
+            ollama,
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            true,
+            false,
+            Some(131_072),
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args(["matrix", "--cache", cache_path.to_str().expect("utf8")])
@@ -2241,22 +2293,26 @@ fn cache_list_prints_current_and_marks_stale() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_settings(
-        cache_list_profile("cache-list-current", "ollama", 1_700_000_000),
-        "unset",
-        PROBE_SUITE_VERSION,
-        false,
-        false,
-        None,
-    );
-    cache.put_with_settings(
-        cache_list_profile("cache-list-old", "ollama", 1_600_000_000),
-        "unset",
-        PROBE_SUITE_VERSION - 1,
-        false,
-        false,
-        None,
-    );
+    cache
+        .put_with_settings(
+            cache_list_profile("cache-list-current", "ollama", 1_700_000_000),
+            "unset",
+            PROBE_SUITE_VERSION,
+            false,
+            false,
+            None,
+        )
+        .expect("cache id");
+    cache
+        .put_with_settings(
+            cache_list_profile("cache-list-old", "ollama", 1_600_000_000),
+            "unset",
+            PROBE_SUITE_VERSION - 1,
+            false,
+            false,
+            None,
+        )
+        .expect("cache id");
     for entry in cache.profiles.values_mut() {
         if entry.profile.model_id == "cache-list-old" {
             entry.cached_at = 1;
@@ -2310,16 +2366,20 @@ fn cache_list_provider_family() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cache_list_profile(
-        "cache-list-loopback",
-        "localhost:11434",
-        1_700_000_001,
-    ));
-    cache.put(cache_list_profile(
-        "cache-list-port1234",
-        "127.0.0.1:1234",
-        1_700_000_002,
-    ));
+    cache
+        .put(cache_list_profile(
+            "cache-list-loopback",
+            "localhost:11434",
+            1_700_000_001,
+        ))
+        .expect("cache id");
+    cache
+        .put(cache_list_profile(
+            "cache-list-port1234",
+            "127.0.0.1:1234",
+            1_700_000_002,
+        ))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let out = canact()
         .args([
@@ -2351,7 +2411,9 @@ fn cache_list_grok_build_aliases_share_a_card() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(cache_list_profile("grok-4.7", "grok-build", 1_700_000_010));
+    cache
+        .put(cache_list_profile("grok-4.7", "grok-build", 1_700_000_010))
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
     let path = cache_path.to_str().expect("utf8");
     for provider in ["xai-grok-build", "cli-chat-proxy.grok.com", "GROK-BUILD"] {
@@ -2795,12 +2857,14 @@ fn probe_cache_hit_prints_cache_hit_on_stderr() {
     let dir = tempfile::tempdir().expect("temp dir");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(
-        cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
-        true,
-        false,
-        None,
-    );
+    cache
+        .put_with_knobs(
+            cached_profile(CapabilityLevel::Strong, CapabilityLevel::Strong),
+            true,
+            false,
+            None,
+        )
+        .expect("cache id");
     cache.save(&cache_path).expect("save cache");
     let cache_str = cache_path.to_str().expect("utf8");
     let human = canact()

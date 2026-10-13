@@ -5,6 +5,7 @@ mod endpoint;
 mod error;
 mod matrix;
 mod report;
+mod text;
 mod tool_digest;
 mod types;
 
@@ -42,8 +43,6 @@ mod client;
 mod probes;
 #[cfg(feature = "runtime")]
 mod runner;
-#[cfg(feature = "runtime")]
-mod text;
 
 #[cfg(feature = "runtime")]
 pub use client::{

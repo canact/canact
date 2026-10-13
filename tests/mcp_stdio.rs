@@ -90,7 +90,7 @@ fn mcp_probe_model_returns_host_policy_from_cache() {
     let dir = tempfile::tempdir().expect("temp");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put(sample());
+    cache.put(sample()).expect("cache id");
     cache.save(&cache_path).expect("save");
 
     let mut child = canact_cmd()
@@ -196,7 +196,7 @@ fn mcp_cached_weak_tools_is_not_error() {
         details: "test".to_owned(),
     };
     let mut cache = ProbeCache::default();
-    cache.put(profile);
+    cache.put(profile).expect("cache id");
     cache.save(&cache_path).expect("save");
 
     let mut child = canact_cmd()
@@ -317,7 +317,9 @@ fn mcp_policy_fallback_reports_all_row_suite() {
         level: CapabilityLevel::Strong,
         details: "followed the system prompt".to_owned(),
     };
-    cache.put_with_suite(profile, SuiteTier::All, false, None);
+    cache
+        .put_with_suite(profile, SuiteTier::All, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
 
     let mut child = canact_cmd()
@@ -380,7 +382,9 @@ fn mcp_policy_only_row_omits_constraint_placement() {
     let dir = tempfile::tempdir().expect("temp");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_suite(sample(), SuiteTier::Policy, false, None);
+    cache
+        .put_with_suite(sample(), SuiteTier::Policy, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
 
     let mut child = canact_cmd()
@@ -446,7 +450,9 @@ fn mcp_full_does_not_return_cheap_cache() {
     let dir = tempfile::tempdir().expect("temp");
     let cache_path = dir.path().join("probes.json");
     let mut cache = ProbeCache::default();
-    cache.put_with_knobs(sample(), true, false, None);
+    cache
+        .put_with_knobs(sample(), true, false, None)
+        .expect("cache id");
     cache.save(&cache_path).expect("save");
 
     let mut child = canact_cmd()
