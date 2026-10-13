@@ -601,14 +601,14 @@ mod refuse_truncated_tests {
     #[test]
     fn refuse_truncated_tool_call_allows_stop_without_tools() {
         let resp = text_response("I would read the file");
-        assert!(refuse_truncated_tool_call(&resp).is_ok());
+        refuse_truncated_tool_call(&resp).expect("stop without tools");
     }
 
     #[test]
     fn refuse_truncated_tool_call_allows_length_with_tools() {
         let mut resp = tool_call_response();
         resp.finish = ProbeFinish::Length;
-        assert!(refuse_truncated_tool_call(&resp).is_ok());
+        refuse_truncated_tool_call(&resp).expect("length with tools");
     }
 
     #[test]
@@ -622,7 +622,7 @@ mod refuse_truncated_tests {
 
     #[test]
     fn refuse_truncated_incomplete_allows_length_at_strong() {
-        assert!(refuse_truncated_incomplete(ProbeFinish::Length, 1.0).is_ok());
+        refuse_truncated_incomplete(ProbeFinish::Length, 1.0).expect("length at strong");
     }
 
     #[test]
@@ -633,7 +633,7 @@ mod refuse_truncated_tests {
 
     #[test]
     fn refuse_truncated_incomplete_allows_stop_below_strong() {
-        assert!(refuse_truncated_incomplete(ProbeFinish::Stop, 0.5).is_ok());
+        refuse_truncated_incomplete(ProbeFinish::Stop, 0.5).expect("stop below strong");
     }
 }
 

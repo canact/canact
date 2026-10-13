@@ -431,10 +431,21 @@ mod tests {
     }
 
     #[test]
-    fn empty_provider_has_no_rows() {
+    fn empty_cache_has_no_rows() {
         let cache = ProbeCache::default();
         let matrix = PlumbingMatrix::from_cache(&cache, "ollama");
         assert!(matrix.rows.is_empty());
+    }
+
+    #[test]
+    fn blank_provider_lists_every_cached_row() {
+        let mut cache = ProbeCache::default();
+        cache.put(profile()).expect("cache id");
+        for provider in ["", "  ", "\t"] {
+            let matrix = PlumbingMatrix::from_cache(&cache, provider);
+            assert!(matrix.provider.is_empty(), "{provider:?} {matrix:?}");
+            assert_eq!(matrix.rows.len(), 1, "{provider:?}");
+        }
     }
 
     #[test]
