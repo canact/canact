@@ -896,7 +896,8 @@ impl ProbeCache {
     /// Store a profile under the current suite, default effort, and default knobs.
     ///
     /// Trims the model id and provider. Returns [`ProbeError::Internal`]
-    /// when either still contains a control character, and does not insert.
+    /// when either is empty or still contains a control character, and
+    /// does not insert.
     pub fn put(&mut self, profile: CapabilityProfile) -> Result<(), ProbeError> {
         self.put_with_knobs(profile, DEFAULT_SKIP_EXPENSIVE, DEFAULT_VISION, None)?;
         Ok(())
@@ -1372,6 +1373,14 @@ impl ProbeCache {
 fn checked_profile(mut profile: CapabilityProfile) -> Result<CapabilityProfile, ProbeError> {
     profile.model_id = profile.model_id.trim().to_owned();
     profile.provider = profile.provider.trim().to_owned();
+    if profile.model_id.is_empty() {
+        return Err(ProbeError::Internal("model must not be empty".to_owned()));
+    }
+    if profile.provider.is_empty() {
+        return Err(ProbeError::Internal(
+            "provider must not be empty".to_owned(),
+        ));
+    }
     if let Some(msg) = crate::text::control_character_message("model", &profile.model_id) {
         return Err(ProbeError::Internal(msg));
     }
@@ -1734,6 +1743,32 @@ mod tests {
         let got = cache.get("llama", "ollama").expect("trimmed id");
         assert_eq!(got.model_id, "llama");
         assert_eq!(got.provider, "ollama");
+    }
+
+    #[test]
+    fn put_rejects_whitespace_only_model_id() {
+        let mut cache = ProbeCache::default();
+        let err = cache
+            .put(CapabilityProfile::unprobed("\n", "ollama"))
+            .expect_err("blank model");
+        assert!(err.to_string().contains("model must not be empty"), "{err}");
+        assert!(cache.profiles.is_empty(), "blank model must not be stored");
+    }
+
+    #[test]
+    fn put_rejects_whitespace_only_provider() {
+        let mut cache = ProbeCache::default();
+        let err = cache
+            .put(CapabilityProfile::unprobed("llama", " \t"))
+            .expect_err("blank provider");
+        assert!(
+            err.to_string().contains("provider must not be empty"),
+            "{err}"
+        );
+        assert!(
+            cache.profiles.is_empty(),
+            "blank provider must not be stored"
+        );
     }
 }
 
