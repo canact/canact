@@ -2578,6 +2578,19 @@ fn no_login_still_uses_env() {
     assert!(!stdout.contains(dummy), "{stdout}");
 }
 
+#[test]
+fn probe_help_mentions_the_context_ladder() {
+    let out = dry_run_cmd(&["probe", "--help"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("context ladder"), "{stdout}");
+    assert!(
+        stdout.contains("skips a later rung larger than that prior"),
+        "{stdout}"
+    );
+}
+
 fn dry_run_cmd(args: &[&str]) -> std::process::Output {
     canact()
         .args(args)
