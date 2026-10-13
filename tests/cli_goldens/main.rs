@@ -2607,6 +2607,94 @@ fn dry_run_cmd(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn dry_run_whitespace_model_is_empty() {
+    let out = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--model",
+        " \t",
+        "--cheap",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("--model is empty"), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+}
+
+#[test]
+fn dry_run_prints_the_model_id() {
+    let out = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--model",
+        "llama 3",
+        "--cheap",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("model: llama 3\n"), "{stdout}");
+
+    let json = dry_run_cmd(&[
+        "probe",
+        "--json",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--model",
+        "llama 3",
+        "--cheap",
+    ]);
+    let json_stdout = String::from_utf8_lossy(&json.stdout);
+    assert!(json.status.success(), "{json_stdout}");
+    let value: serde_json::Value = serde_json::from_str(json_stdout.trim()).expect("json");
+    assert_eq!(value["model"], "llama 3", "{value}");
+}
+
+#[test]
+fn probe_whitespace_model_does_not_connect() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = dry_run_cmd(&[
+        "probe",
+        "--cheap",
+        "--no-login",
+        "--provider",
+        "openai",
+        "--model",
+        "   ",
+        "--base-url",
+        "http://127.0.0.1:9/v1",
+        "--json",
+        "--cache",
+        cache_path.to_str().expect("utf8"),
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("--model is empty"), "{stderr}");
+    assert!(!stderr.contains("failed to connect"), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        !cache_path.exists(),
+        "must not write a cache for an empty model"
+    );
+}
+
+#[test]
 fn dry_run_rejects_control_character_in_model() {
     let bad = dry_run_cmd(&[
         "probe",
