@@ -61,7 +61,7 @@ pub use text::{control_character_message, strip_think_blocks};
 pub use tool_digest::probe_tools_digest;
 
 #[cfg(feature = "runtime")]
-pub use probes::{OVERSIZE_MAX_TOKENS, parse_max_output_cap};
+pub use probes::{OVERSIZE_MAX_TOKENS, parse_max_output_cap, planned_context_rungs};
 
 #[cfg(all(feature = "runtime", feature = "openai"))]
 mod adapters;

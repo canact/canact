@@ -28,7 +28,8 @@ list.
 
 The context ladder climbs 4096, then 8192, then 16384. `--cheap` and
 `--suite=policy` stop after 4096. `--full` and `--suite=all` continue
-through 8192 and 16384.
+through 8192 and 16384. `--advertised-context` skips a later rung
+larger than that prior. The 4096 rung still runs.
 
 `canact probe --json` prints the host-policy envelope. The cache file
 is `probes.json`. Entries last 30 days. The cache key includes the
@@ -152,8 +153,10 @@ and leaves stdout empty. The file list stays in the
 [#289](https://github.com/canact/canact/issues/289).
 
 `canact probe --dry-run` prints the provider, redacted base URL,
-suite, and probe names, then exits. It does not read a login, the
-cache, or the network. See
+suite, context ladder, and probe names, then exits. JSON adds
+`contextLadder`. `--advertised-context` skips a later rung larger
+than that prior. The 4096 rung still runs. Dry-run does not read a
+login, the cache, or the network. See
 [#290](https://github.com/canact/canact/issues/290).
 
 `canact probe --fail-on weak` exits 2 when a finished row is Weak.

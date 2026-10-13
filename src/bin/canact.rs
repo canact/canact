@@ -9,11 +9,11 @@ use canact::{
     ProbeRun, ProbeRunner, ProbeTool, SuiteTier, claude_code_access_token,
     control_character_message, finalize_key_route, invalid_explicit_base_url,
     is_bedrock_provider_label, is_groq_provider_label, list_model_ids, looks_cheap,
-    missing_cloud_key_message, missing_model_message, planned_probe_names, present_base_url,
-    present_secret, probe_endpoint_without_key, probe_tools_digest, redact_base_url,
-    refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog, run_mcp_stdio_with,
-    shipped_profile_base_conflict, should_load_claude_code_login, should_load_xai_oauth,
-    with_route_error_label, xai_oauth_access_token,
+    missing_cloud_key_message, missing_model_message, planned_context_rungs, planned_probe_names,
+    present_base_url, present_secret, probe_endpoint_without_key, probe_tools_digest,
+    redact_base_url, refuse_cloud_without_key, resolve_api_key_from, resolve_host_catalog,
+    run_mcp_stdio_with, shipped_profile_base_conflict, should_load_claude_code_login,
+    should_load_xai_oauth, with_route_error_label, xai_oauth_access_token,
 };
 use clap::{Parser, Subcommand};
 
@@ -720,11 +720,13 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
     }
     let base_url = redact_base_url(&base_url);
     let probes = planned_probe_names(suite, args.vision);
+    let context_rungs = planned_context_rungs(suite.skip_expensive(), args.advertised_context);
     if args.json {
         let plan = serde_json::json!({
             "provider": provider,
             "baseUrl": base_url,
             "suite": suite.as_str(),
+            "contextLadder": context_rungs,
             "probes": probes,
         });
         match serde_json::to_string_pretty(&plan) {
@@ -738,11 +740,11 @@ fn run_dry_run(args: &ProbeArgs) -> Result<(), u8> {
             }
         }
     } else {
-        let ladder = if suite.skip_expensive() {
-            "4096"
-        } else {
-            "4096, 8192, 16384"
-        };
+        let ladder = context_rungs
+            .iter()
+            .map(|rung| rung.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         println!("provider: {provider}");
         println!("baseUrl: {base_url}");
         println!("suite: {}", suite.as_str());

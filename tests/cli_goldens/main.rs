@@ -2727,13 +2727,14 @@ fn dry_run_json_is_only_the_plan() {
     let keys: std::collections::BTreeSet<_> = obj.keys().cloned().collect();
     assert_eq!(
         keys,
-        ["baseUrl", "probes", "provider", "suite"]
+        ["baseUrl", "contextLadder", "probes", "provider", "suite"]
             .into_iter()
             .map(str::to_owned)
             .collect()
     );
     assert_eq!(value["provider"], "ollama", "{value}");
     assert_eq!(value["suite"], "policy", "{value}");
+    assert_eq!(value["contextLadder"], serde_json::json!([4096]), "{value}");
     assert!(value["baseUrl"].is_string(), "{value}");
     let probes = value["probes"].as_array().expect("probes");
     assert!(probes.iter().any(|name| name == "tool_calling"), "{value}");
@@ -2805,6 +2806,78 @@ fn dry_run_suite_all_lists_diagnostics() {
     let note = "maxOutputTokens runs on every suite and is not listed below. A policy card stays skipped unless that request names a cap";
     assert!(cheap_stdout.contains(note), "{cheap_stdout}");
     assert!(stdout.contains(note), "{stdout}");
+}
+
+#[test]
+fn dry_run_advertised_context_caps_the_ladder() {
+    let capped = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--suite=full",
+        "--advertised-context",
+        "4096",
+    ]);
+    let stdout = String::from_utf8_lossy(&capped.stdout);
+    let stderr = String::from_utf8_lossy(&capped.stderr);
+    assert!(capped.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("context ladder: 4096\n"), "{stdout}");
+    assert!(!stdout.contains("8192"), "{stdout}");
+    assert!(!stdout.contains("16384"), "{stdout}");
+
+    let mid = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--suite=all",
+        "--advertised-context",
+        "8192",
+    ]);
+    let mid_stdout = String::from_utf8_lossy(&mid.stdout);
+    let mid_stderr = String::from_utf8_lossy(&mid.stderr);
+    assert!(
+        mid.status.success(),
+        "stdout={mid_stdout}\nstderr={mid_stderr}"
+    );
+    assert!(
+        mid_stdout.contains("context ladder: 4096, 8192\n"),
+        "{mid_stdout}"
+    );
+    assert!(!mid_stdout.contains("16384"), "{mid_stdout}");
+
+    let below = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--suite=full",
+        "--advertised-context",
+        "2000",
+    ]);
+    let below_stdout = String::from_utf8_lossy(&below.stdout);
+    assert!(below.status.success(), "{below_stdout}");
+    assert!(
+        below_stdout.contains("context ladder: 4096\n"),
+        "{below_stdout}"
+    );
+    assert!(!below_stdout.contains("8192"), "{below_stdout}");
+
+    let json = dry_run_cmd(&[
+        "probe",
+        "--json",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--suite=full",
+        "--advertised-context",
+        "4096",
+    ]);
+    let json_stdout = String::from_utf8_lossy(&json.stdout);
+    assert!(json.status.success(), "{json_stdout}");
+    let value: serde_json::Value = serde_json::from_str(json_stdout.trim()).expect("json");
+    assert_eq!(value["contextLadder"], serde_json::json!([4096]), "{value}");
 }
 
 #[test]
