@@ -257,6 +257,7 @@ fn cli_explicit_base_url(raw: Option<&str>) -> bool {
 }
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
+    reject_blank_base_url_flag(args.base_url.as_deref())?;
     let fail_on = match parse_fail_on(args.fail_on.as_deref()) {
         Ok(bar) => bar,
         Err(msg) => {
@@ -920,6 +921,18 @@ async fn resolve_model(
             Err(1)
         }
     }
+}
+
+/// `--base-url` that is only whitespace is an error, not the provider default.
+fn reject_blank_base_url_flag(raw: Option<&str>) -> Result<(), u8> {
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    if raw.trim().is_empty() {
+        eprintln!("error: --base-url is empty");
+        return Err(1);
+    }
+    Ok(())
 }
 
 /// `--provider` that is only whitespace is an error, not the OpenAI default.

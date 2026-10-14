@@ -2607,6 +2607,60 @@ fn dry_run_cmd(args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn dry_run_whitespace_base_url_is_empty() {
+    let out = dry_run_cmd(&[
+        "probe",
+        "--dry-run",
+        "--provider",
+        "ollama",
+        "--base-url",
+        "   ",
+        "--cheap",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("--base-url is empty"), "{stderr}");
+    assert!(!stdout.contains("11434"), "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+}
+
+#[test]
+fn probe_whitespace_base_url_does_not_connect() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("probes.json");
+    let out = dry_run_cmd(&[
+        "probe",
+        "--cheap",
+        "--no-login",
+        "--provider",
+        "ollama",
+        "--model",
+        "llama3.2:3b",
+        "--base-url",
+        " \t",
+        "--json",
+        "--cache",
+        cache_path.to_str().expect("utf8"),
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("--base-url is empty"), "{stderr}");
+    assert!(!stderr.contains("tool_calling"), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!cache_path.exists());
+}
+
+#[test]
 fn dry_run_whitespace_provider_is_empty() {
     let out = dry_run_cmd(&["probe", "--dry-run", "--provider", "   ", "--cheap"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
