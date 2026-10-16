@@ -5,7 +5,7 @@ use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    has_visible_arg_text, nonempty_string_arg_any, refuse_truncated_incomplete,
+    has_visible_arg_text, nonempty_string_arg_any, refuse_truncated_incomplete_text,
     refuse_truncated_tool_call, system_text, user_text,
 };
 
@@ -120,7 +120,7 @@ Available tools:
         (0.0, "No <tool_call> tags in response".to_string())
     };
 
-    refuse_truncated_incomplete(finish, score)?;
+    refuse_truncated_incomplete_text(finish, score, &text)?;
     Ok(ProbeResult {
         name: "xml_tool_calling".to_string(),
         score,

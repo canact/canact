@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{refuse_truncated_incomplete, user_text};
+use super::{refuse_truncated_incomplete_text, user_text};
 
 /// Probe whether the model produces syntactically valid code.
 ///
@@ -43,7 +43,7 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let trimmed = code.trim();
 
     if trimmed.is_empty() {
-        refuse_truncated_incomplete(response.finish, 0.0)?;
+        refuse_truncated_incomplete_text(response.finish, 0.0, &response.text)?;
         return Ok(ProbeResult {
             name: "code_syntax".to_string(),
             score: 0.0,
@@ -106,7 +106,7 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
         )
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "code_syntax".to_string(),
         score,

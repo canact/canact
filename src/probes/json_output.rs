@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{extract_json_from_text, refuse_truncated_incomplete, user_text};
+use super::{extract_json_from_text, refuse_truncated_incomplete_text, user_text};
 
 /// Probe whether the model can produce structured JSON output.
 ///
@@ -32,7 +32,7 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let response = llm.chat(request).await?;
     let (score, details) = score_json_text(&response.text);
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "json_output".to_string(),
         score,
@@ -86,7 +86,7 @@ pub async fn probe_instruction_following<C: ProbeClient>(
         (0.0, format!("Verbose response ({word_count} words)"))
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "instruction_following".to_string(),
         score,

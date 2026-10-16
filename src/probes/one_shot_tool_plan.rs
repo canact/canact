@@ -18,7 +18,7 @@ use crate::client::{ProbeClient, ProbeRequest, ProbeToolCall};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    nonempty_string_arg, nonempty_string_arg_any, refuse_truncated_incomplete,
+    nonempty_string_arg, nonempty_string_arg_any, refuse_truncated_incomplete_text,
     refuse_truncated_tool_call, tool, user_text,
 };
 
@@ -171,7 +171,7 @@ pub async fn probe_one_shot_tool_plan<C: ProbeClient>(llm: &C) -> Result<ProbeRe
         (0.0, "No tool calls, text-only response".to_string())
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "one_shot_tool_plan".to_string(),
         score,

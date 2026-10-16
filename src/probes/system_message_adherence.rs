@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{refuse_truncated_incomplete, system_text, user_text};
+use super::{refuse_truncated_incomplete_text, system_text, user_text};
 
 /// Probe system-over-user priority with a format prefix.
 ///
@@ -95,7 +95,7 @@ pub async fn probe_system_message_adherence<C: ProbeClient>(
         )
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "system_message_adherence".to_string(),
         score,

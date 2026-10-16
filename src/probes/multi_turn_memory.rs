@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{assistant_text, refuse_truncated_incomplete, user_text};
+use super::{assistant_text, refuse_truncated_incomplete_text, user_text};
 
 /// Probe whether the model retains facts across a 3-turn conversation.
 ///
@@ -81,7 +81,7 @@ pub async fn probe_multi_turn_memory<C: ProbeClient>(llm: &C) -> Result<ProbeRes
         (0.0, "No recall of the secret code".to_string())
     };
 
-    refuse_truncated_incomplete(recall_resp.finish, score)?;
+    refuse_truncated_incomplete_text(recall_resp.finish, score, &recall_resp.text)?;
     Ok(ProbeResult {
         name: "multi_turn_memory".to_string(),
         score,
