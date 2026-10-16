@@ -7,7 +7,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeFinish, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{refuse_truncated_incomplete, user_text};
+use super::{refuse_truncated_incomplete_text, user_text};
 
 /// Probe whether the model respects `max_tokens` output limits.
 ///
@@ -33,10 +33,10 @@ pub async fn probe_max_tokens_compliance<C: ProbeClient>(
 
     let response = llm.chat(request).await?;
     if response.finish == ProbeFinish::Safety {
-        refuse_truncated_incomplete(response.finish, 0.0)?;
+        refuse_truncated_incomplete_text(response.finish, 0.0, &response.text)?;
     }
     if response.finish == ProbeFinish::Length && response.text.trim().is_empty() {
-        refuse_truncated_incomplete(response.finish, 0.0)?;
+        refuse_truncated_incomplete_text(response.finish, 0.0, &response.text)?;
     }
     let char_count = response.text.len();
 

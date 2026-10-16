@@ -8,7 +8,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{refuse_truncated_incomplete, system_text, user_text};
+use super::{refuse_truncated_incomplete_text, system_text, user_text};
 
 /// Filler text to pad the context. Each block is ~200 tokens.
 const FILLER_BLOCK: &str = "\
@@ -81,7 +81,7 @@ pub async fn probe_context_faithfulness<C: ProbeClient>(
         "{correct}/3 facts recalled: port={has_port}, version={has_version}, timeout={has_timeout}"
     );
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "context_faithfulness".to_string(),
         score,

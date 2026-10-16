@@ -10,7 +10,8 @@ use crate::client::{ProbeClient, ProbeRequest, ProbeTool};
 use crate::types::{ProbeResult, classify};
 
 use super::{
-    has_visible_arg_text, refuse_truncated_incomplete, refuse_truncated_tool_call, tool, user_text,
+    has_visible_arg_text, refuse_truncated_incomplete_text, refuse_truncated_tool_call, tool,
+    user_text,
 };
 
 /// First usable `path`, otherwise `file_path`. A blank or non-string `path`
@@ -149,7 +150,7 @@ pub async fn probe_parallel_tool_scale_with<C: ProbeClient>(
         )
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "parallel_tool_scale".to_string(),
         score,

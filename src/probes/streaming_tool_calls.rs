@@ -9,7 +9,7 @@ use crate::client::{ProbeClient, ProbeFinish, ProbeRequest, ProbeStreamChunk};
 use crate::types::{ProbeResult, classify};
 use futures::StreamExt;
 
-use super::{nonempty_string_arg_any, refuse_truncated_incomplete, tool, user_text};
+use super::{nonempty_string_arg_any, refuse_truncated_incomplete_text, tool, user_text};
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
 
@@ -62,6 +62,7 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
     let mut got_other_tool = false;
     let mut got_any_chunk = false;
     let mut finish = ProbeFinish::Stop;
+    let mut refusal_text = String::new();
 
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
@@ -95,6 +96,9 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                             slot.1.push_str(delta);
                         }
                     }
+                    ProbeStreamChunk::TextDelta { text } => {
+                        refusal_text.push_str(text);
+                    }
                     ProbeStreamChunk::ToolCallEnd => {
                         for (name, args) in slots.values() {
                             flush_read_file_args(
@@ -106,7 +110,6 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                         }
                         slots.clear();
                     }
-                    _ => {}
                 }
             }
             Err(err) => {
@@ -153,7 +156,7 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
         )
     };
 
-    refuse_truncated_incomplete(finish, score)?;
+    refuse_truncated_incomplete_text(finish, score, &refusal_text)?;
     Ok(ProbeResult {
         name: "streaming_tool_calls".to_string(),
         score,

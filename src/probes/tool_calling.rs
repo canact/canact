@@ -6,7 +6,7 @@ use crate::types::{CapabilityLevel, ProbeResult, classify};
 
 use super::{
     has_visible_arg_text, nonempty_string_arg, nonempty_string_arg_any,
-    refuse_truncated_incomplete, refuse_truncated_tool_call, tool, user_text,
+    refuse_truncated_incomplete_text, refuse_truncated_tool_call, tool, user_text,
 };
 
 const FORCEFUL_READ_FILE: &str = "Immediately call the read_file tool with path /tmp/test.txt. Do not describe what you would do. Do not ask for confirmation.";
@@ -52,7 +52,7 @@ pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, 
 
     let (score, details) = score_read_file_calls(&response.tool_calls);
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "tool_calling".to_string(),
         score,
@@ -253,7 +253,7 @@ pub async fn probe_complex_tool_calling<C: ProbeClient>(
         (0.0, "No tool calls in response".to_string())
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "complex_tool_calling".to_string(),
         score,
@@ -312,7 +312,7 @@ pub async fn probe_nested_arguments<C: ProbeClient>(llm: &C) -> Result<ProbeResu
     let calls = &response.tool_calls;
     let (score, details) = score_nested_edit_calls(calls);
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "nested_arguments".to_string(),
         score,
@@ -617,7 +617,7 @@ pub async fn probe_tool_selection_with<C: ProbeClient>(
         .iter()
         .any(|c| matches!(c.name.as_str(), "edit_file" | "search" | "run_command"));
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &response.text)?;
     Ok(ProbeResult {
         name: "tool_selection".to_string(),
         score,

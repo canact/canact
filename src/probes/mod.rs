@@ -211,12 +211,43 @@ pub(crate) fn tool(name: &str, description: &str, parameters: serde_json::Value)
     }
 }
 
+pub(crate) fn safety_stop_message(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "provider safety stop".to_string();
+    }
+    const MAX_CHARS: usize = 240;
+    let mut short = String::new();
+    let mut extra = false;
+    for (i, ch) in trimmed.chars().enumerate() {
+        if i == MAX_CHARS {
+            extra = true;
+            break;
+        }
+        if ch.is_control() || ch == '\u{2028}' || ch == '\u{2029}' {
+            if !short.ends_with(' ') {
+                short.push(' ');
+            }
+            continue;
+        }
+        short.push(ch);
+    }
+    if extra {
+        short.push_str("...");
+    }
+    format!("provider safety stop: {short}")
+}
+
+pub(crate) fn safety_stop_error(text: &str) -> ProbeError {
+    ProbeError::Transient(safety_stop_message(text))
+}
+
 /// Length with no tool call is a short budget, not a 30-day Weak card.
 /// A safety stop is not a measurement. A malformed finish with no call
 /// is a completed tool failure, classified later by [`crate::resolve_probe`].
 pub fn refuse_truncated_tool_call(resp: &ProbeResponse) -> Result<(), ProbeError> {
     if resp.finish == ProbeFinish::Safety {
-        return Err(ProbeError::Transient("provider safety stop".into()));
+        return Err(safety_stop_error(&resp.text));
     }
     if resp.finish == ProbeFinish::Malformed && resp.tool_calls.is_empty() {
         return Err(ProbeError::Llm("malformed_function_call".into()));
@@ -232,8 +263,17 @@ pub fn refuse_truncated_tool_call(resp: &ProbeResponse) -> Result<(), ProbeError
 
 /// Length or a safety stop below a finished call is not a 30-day score.
 pub fn refuse_truncated_incomplete(finish: ProbeFinish, score: f32) -> Result<(), ProbeError> {
+    refuse_truncated_incomplete_text(finish, score, "")
+}
+
+/// Same check as [`refuse_truncated_incomplete`], keeping a refusal explanation.
+pub fn refuse_truncated_incomplete_text(
+    finish: ProbeFinish,
+    score: f32,
+    text: &str,
+) -> Result<(), ProbeError> {
     if finish == ProbeFinish::Safety {
-        return Err(ProbeError::Transient("provider safety stop".into()));
+        return Err(safety_stop_error(text));
     }
     if finish == ProbeFinish::Length && score < 1.0 {
         Err(ProbeError::Transient(
@@ -562,7 +602,39 @@ mod refuse_truncated_tests {
             usage: None,
         };
         let err = refuse_truncated_tool_call(&resp).expect_err("safety is not a score");
-        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg == "provider safety stop"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn refuse_truncated_tool_call_safety_keeps_explanation() {
+        let resp = ProbeResponse {
+            text: "  I can't help with that.  ".into(),
+            tool_calls: Vec::new(),
+            finish: ProbeFinish::Safety,
+            usage: None,
+        };
+        let err = refuse_truncated_tool_call(&resp).expect_err("safety keeps the explanation");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg == "provider safety stop: I can't help with that."),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn safety_stop_message_flattens_control_chars() {
+        let message = super::safety_stop_message("no\npe\r\nmore");
+        assert_eq!(message, "provider safety stop: no pe more");
+    }
+
+    #[test]
+    fn safety_stop_message_caps_long_explanation() {
+        let text = "a".repeat(241);
+        let message = super::safety_stop_message(&text);
+        let expected = format!("provider safety stop: {}...", "a".repeat(240));
+        assert_eq!(message, expected);
     }
 
     #[test]
@@ -594,6 +666,11 @@ mod refuse_truncated_tests {
             assert!(!cacheable, "{token}");
             assert!(
                 row.details.starts_with("Probe failed:"),
+                "{token}: {}",
+                row.details
+            );
+            assert!(
+                row.details.contains("I must refuse"),
                 "{token}: {}",
                 row.details
             );
@@ -630,7 +707,10 @@ mod refuse_truncated_tests {
     #[test]
     fn refuse_truncated_incomplete_safety_is_transient_at_strong() {
         let err = refuse_truncated_incomplete(ProbeFinish::Safety, 1.0).expect_err("safety");
-        assert!(matches!(err, ProbeError::Transient(_)), "{err:?}");
+        assert!(
+            matches!(err, ProbeError::Transient(ref msg) if msg == "provider safety stop"),
+            "{err:?}"
+        );
     }
 
     #[test]

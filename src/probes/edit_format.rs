@@ -4,7 +4,7 @@ use crate::ProbeError;
 use crate::client::{ProbeClient, ProbeRequest};
 use crate::types::{ProbeResult, classify};
 
-use super::{refuse_truncated_incomplete, system_text, user_text};
+use super::{refuse_truncated_incomplete_text, system_text, user_text};
 
 /// Probe whether the model can produce valid SEARCH/REPLACE edit blocks.
 ///
@@ -122,7 +122,7 @@ Rename the function `greet` to `welcome` and change the greeting from \
         (0.0, "No SEARCH/REPLACE markers in response".to_string())
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &text)?;
     Ok(ProbeResult {
         name: "search_replace".to_string(),
         score,
@@ -230,7 +230,7 @@ Rename the function `greet` to `welcome` and change the greeting from \
         (0.0, "Not a recognizable unified diff".to_string())
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &text)?;
     Ok(ProbeResult {
         name: "unified_diff".to_string(),
         score,

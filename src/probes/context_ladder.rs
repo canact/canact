@@ -13,7 +13,7 @@ use crate::client::{
     ProbeClient, ProbeContent, ProbeContentPart, ProbeFinish, ProbeMessage, ProbeRequest,
 };
 
-use super::{system_text, user_text};
+use super::{safety_stop_error, system_text, user_text};
 
 /// Token rungs, smallest first.
 const RUNGS: [u32; 3] = [4096, 8192, 16384];
@@ -102,7 +102,7 @@ pub async fn probe_effective_context_tokens<C: ProbeClient>(
                 if response.finish == ProbeFinish::Safety {
                     return ContextLadder {
                         tokens: best,
-                        error: Err(ProbeError::Transient("provider safety stop".into())),
+                        error: Err(safety_stop_error(&response.text)),
                         recall_hits,
                     };
                 }

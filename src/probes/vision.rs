@@ -6,7 +6,7 @@ use crate::client::{
 };
 use crate::types::{ProbeResult, classify};
 
-use super::refuse_truncated_incomplete;
+use super::refuse_truncated_incomplete_text;
 
 /// Minimal 16x16 PNG with "BL" text pattern (white on black), base64-encoded.
 /// Used as the test image for the vision capability probe.
@@ -137,7 +137,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
         (0.0, "Did not use the image (generic reply)".to_string())
     };
 
-    refuse_truncated_incomplete(response.finish, score)?;
+    refuse_truncated_incomplete_text(response.finish, score, &text)?;
     Ok(ProbeResult {
         name: "vision".to_string(),
         score,
