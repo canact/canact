@@ -224,6 +224,12 @@ pub(crate) fn safety_stop_message(text: &str) -> String {
             extra = true;
             break;
         }
+        if ch.is_control() || ch == '\u{2028}' || ch == '\u{2029}' {
+            if !short.ends_with(' ') {
+                short.push(' ');
+            }
+            continue;
+        }
         short.push(ch);
     }
     if extra {
@@ -615,6 +621,12 @@ mod refuse_truncated_tests {
             matches!(err, ProbeError::Transient(ref msg) if msg == "provider safety stop: I can't help with that."),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn safety_stop_message_flattens_control_chars() {
+        let message = super::safety_stop_message("no\npe\r\nmore");
+        assert_eq!(message, "provider safety stop: no pe more");
     }
 
     #[test]
