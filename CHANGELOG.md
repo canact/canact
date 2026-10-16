@@ -3,6 +3,25 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.0](https://github.com/canact/canact/compare/v0.11.0...v0.12.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* ProbeCache put methods return Result.
+
+### Bug Fixes
+
+* cap the dry-run context ladder at the advertised prior ([#362](https://github.com/canact/canact/issues/362)) ([3e52e3b](https://github.com/canact/canact/commit/3e52e3b9b70dee9b7a43d1e5a45966f5edcf3104))
+* consume wiremux 0.11.1 ([#357](https://github.com/canact/canact/issues/357)) ([d7eb074](https://github.com/canact/canact/commit/d7eb0740f71f2e88f7d43073dd7416d1c1e49ea2))
+* consume wiremux 0.11.3 ([#367](https://github.com/canact/canact/issues/367)) ([9756569](https://github.com/canact/canact/commit/9756569596a3f2b04f6badd05ca5ee532dd1337e))
+* describe the dry-run context ladder in probe help ([#363](https://github.com/canact/canact/issues/363)) ([3c07e1d](https://github.com/canact/canact/commit/3c07e1d54f8b655906c0712fe8a6c4467212830f))
+* keep provider refusal text on probe results ([#368](https://github.com/canact/canact/issues/368)) ([618ba11](https://github.com/canact/canact/commit/618ba1198a0d94aabbd96ec31797f749c6ec07f1))
+* reject a whitespace-only probe base URL ([#366](https://github.com/canact/canact/issues/366)) ([f22ea60](https://github.com/canact/canact/commit/f22ea605a8225022f229a622794c5ff71c0250ec))
+* reject a whitespace-only probe model id ([#364](https://github.com/canact/canact/issues/364)) ([a024645](https://github.com/canact/canact/commit/a024645f914d5bc1679b6742576538f673b4e20b))
+* reject a whitespace-only probe provider ([#365](https://github.com/canact/canact/issues/365)) ([6e917d1](https://github.com/canact/canact/commit/6e917d1def4f92234935fe090b56b057bc7e3ad9))
+* reject control characters before cache persist ([#359](https://github.com/canact/canact/issues/359)) ([0ae968a](https://github.com/canact/canact/commit/0ae968ac618552a9b3d3b6e7d4472f0cb45594a0))
+
 ## [0.11.0](https://github.com/canact/canact/compare/v0.10.2...v0.11.0) (2026-10-11)
 
 
