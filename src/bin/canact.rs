@@ -598,7 +598,13 @@ fn run_cache_list(args: CacheListArgs) -> Result<(), u8> {
 fn one_field(value: &str) -> String {
     value
         .chars()
-        .map(|c| if c.is_control() { '?' } else { c })
+        .map(|c| {
+            if c.is_control() || c == '\u{2028}' || c == '\u{2029}' {
+                '?'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -1179,6 +1185,22 @@ mod tests {
         assert_eq!(line.lines().count(), 1, "{line}");
         assert!(!line.contains('\0'), "{line}");
         assert!(line.contains("llama?3"), "{line}");
+    }
+
+    #[test]
+    fn cache_list_line_replaces_unicode_line_separators() {
+        let row = CacheListRow {
+            model_id: "llama\u{2028}3".to_owned(),
+            provider: "ol\u{2029}lama".to_owned(),
+            suite: SuiteTier::Policy,
+            probed_at: 1,
+            stale: false,
+        };
+        let line = format_cache_list_line(&row);
+        assert!(!line.contains('\u{2028}'), "{line}");
+        assert!(!line.contains('\u{2029}'), "{line}");
+        assert!(line.contains("llama?3"), "{line}");
+        assert!(line.contains("ol?lama"), "{line}");
     }
 
     #[test]

@@ -91,7 +91,9 @@ impl AiderOverlay {
 
     /// JSON object Aider loads as `local_model_metadata`.
     pub fn metadata_json(&self) -> String {
-        serde_json::to_string_pretty(&self.metadata).unwrap_or_else(|_| "{}".to_owned())
+        let raw = serde_json::to_string_pretty(&self.metadata).unwrap_or_else(|_| "{}".to_owned());
+        raw.replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
     }
 
     pub(crate) fn files(&self) -> Vec<OverlayFiles> {
@@ -124,6 +126,8 @@ fn yaml_scalar(s: &str) -> String {
                 '\n' => escaped.push_str("\\n"),
                 '\r' => escaped.push_str("\\r"),
                 '\t' => escaped.push_str("\\t"),
+                '\u{2028}' => escaped.push_str("\\u2028"),
+                '\u{2029}' => escaped.push_str("\\u2029"),
                 other if other.is_control() => {}
                 other => escaped.push(other),
             }
@@ -150,6 +154,26 @@ mod tests {
         assert!(yaml.contains("llama\\n3"), "{yaml}");
         assert!(!yaml.contains('\0'), "{yaml}");
         assert_eq!(yaml.lines().filter(|l| l.starts_with("- name:")).count(), 1);
+    }
+
+    #[test]
+    fn settings_yaml_escapes_unicode_line_separators() {
+        let mut p = sample_profile(
+            CapabilityLevel::Strong,
+            CapabilityLevel::Strong,
+            CapabilityLevel::Strong,
+        );
+        p.model_id = "llama\u{2028}3\u{2029}b".to_owned();
+        let yaml = AiderOverlay::from_profile(&p, None).settings_yaml();
+        assert!(yaml.contains("llama\\u20283\\u2029b"), "{yaml}");
+        assert!(!yaml.contains('\u{2028}'), "{yaml}");
+        assert!(!yaml.contains('\u{2029}'), "{yaml}");
+        assert_eq!(yaml.lines().filter(|l| l.starts_with("- name:")).count(), 1);
+        let json = AiderOverlay::from_profile(&p, None).metadata_json();
+        assert!(json.contains("\\u2028"), "{json}");
+        assert!(json.contains("\\u2029"), "{json}");
+        assert!(!json.contains('\u{2028}'), "{json}");
+        assert!(!json.contains('\u{2029}'), "{json}");
     }
 
     #[test]
