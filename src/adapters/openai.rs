@@ -441,6 +441,8 @@ fn ir_request(req: &ProbeRequest) -> IrRequest {
         match msg.role {
             ProbeRole::System => items.push(IrItem::System {
                 text: content_text(&msg.content),
+                prompt_cache_breakpoint: None,
+                content_parts: Vec::new(),
             }),
             ProbeRole::User => items.push(IrItem::User {
                 parts: content_parts(&msg.content),
@@ -459,7 +461,7 @@ fn ir_request(req: &ProbeRequest) -> IrRequest {
                 }
                 let parts = content_parts(&msg.content);
                 if !parts.is_empty() {
-                    items.push(IrItem::Assistant { parts });
+                    items.push(IrItem::Assistant { parts, phase: None });
                 }
             }
             ProbeRole::Tool => {
@@ -1553,6 +1555,44 @@ mod tests {
             resolve_probe(Err(err), "tool_calling").expect("incomplete stream stays scored");
         assert_eq!(result.level, CapabilityLevel::Medium);
         assert!(!cacheable);
+    }
+
+    #[test]
+    fn ir_request_leaves_cache_breakpoint_and_phase_unset() {
+        let req = ProbeRequest {
+            messages: vec![
+                ProbeMessage {
+                    role: ProbeRole::System,
+                    content: ProbeContent::Text("be brief".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                ProbeMessage {
+                    role: ProbeRole::Assistant,
+                    content: ProbeContent::Text("ok".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ],
+            tools: Vec::new(),
+            model: "m".into(),
+            temperature: None,
+            max_tokens: None,
+        };
+        let ir = ir_request(&req);
+        assert!(matches!(
+            ir.items.first(),
+            Some(IrItem::System {
+                text,
+                prompt_cache_breakpoint: None,
+                content_parts,
+            }) if text == "be brief" && content_parts.is_empty()
+        ));
+        assert!(matches!(
+            ir.items.get(1),
+            Some(IrItem::Assistant { parts, phase: None })
+                if matches!(parts.as_slice(), [IrPart::Text(text)] if text == "ok")
+        ));
     }
 
     #[test]
