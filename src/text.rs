@@ -32,16 +32,18 @@ pub fn strip_think_blocks(input: &str) -> String {
     out
 }
 
-/// `Some` when `value` contains a newline, NUL, or other control character.
+/// `Some` when `value` contains a newline, NUL, other control character,
+/// or a Unicode line separator (`U+2028`, `U+2029`).
 ///
 /// Model ids and provider labels are printed into cache-list rows and
-/// Aider YAML. A control character splits those records.
+/// Aider YAML. A line break splits those records. `U+2028` and `U+2029`
+/// are not `char::is_control`.
 #[must_use]
 pub fn control_character_message(field: &str, value: &str) -> Option<String> {
     value
         .chars()
-        .find(|c| c.is_control())
-        .map(|_| format!("{field} must not contain a control character"))
+        .find(|c| c.is_control() || *c == '\u{2028}' || *c == '\u{2029}')
+        .map(|_| format!("{field} must not contain a control character or line separator"))
 }
 
 #[cfg(test)]
@@ -91,6 +93,8 @@ mod tests {
                 .contains("model")
         );
         assert!(control_character_message("provider", "ollama\0").is_some());
+        assert!(control_character_message("model", "llama\u{2028}3").is_some());
+        assert!(control_character_message("provider", "ollama\u{2029}x").is_some());
         assert_eq!(control_character_message("model", "  gpt-4o  "), None);
     }
 }
