@@ -1570,6 +1570,8 @@ fn current_grader_map() -> BTreeMap<String, u32> {
 
 /// Reset dimensions whose stored grader version is not current.
 ///
+/// The stored epoch is advanced in the same pass. Otherwise every later
+/// load treats the row as stale and rewrites the file again.
 /// An empty map means every dimension is already current.
 fn apply_grader_freshness(entry: &mut CacheEntry) -> bool {
     if entry.grader_versions.is_empty() {
@@ -1584,8 +1586,9 @@ fn apply_grader_freshness(entry: &mut CacheEntry) -> bool {
         }
         if let Some(pr) = entry.profile.dimension_result_mut(name) {
             *pr = default_probe_named(name);
-            changed = true;
         }
+        entry.grader_versions.insert((*name).to_string(), current);
+        changed = true;
     }
     changed
 }

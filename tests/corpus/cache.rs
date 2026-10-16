@@ -1152,6 +1152,36 @@ fn stale_vision_grader_keeps_tool_calling() {
 }
 
 #[test]
+fn stale_grader_version_is_current_after_load() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    cache.put(sample_profile()).expect("cache id");
+    for entry in cache.profiles.values_mut() {
+        entry.grader_versions.insert("vision".into(), 0);
+    }
+    cache.save(&path).expect("save");
+    let loaded = ProbeCache::load(&path).expect("load");
+    let entry = loaded.profiles.values().next().expect("entry");
+    assert_eq!(
+        entry.grader_versions.get("vision").copied(),
+        Some(2),
+        "migrated vision grader must stay at the current epoch"
+    );
+    let again = ProbeCache::load(&path).expect("second load");
+    let again_entry = again.profiles.values().next().expect("entry");
+    assert_eq!(again_entry.grader_versions.get("vision").copied(), Some(2));
+    assert!(
+        again
+            .get("m", "p")
+            .expect("hit")
+            .vision
+            .is_unprobed_default(),
+        "second load must not bring back the stale vision score"
+    );
+}
+
+#[test]
 fn stale_vision_grader_v1_resets_only_vision() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");
