@@ -100,15 +100,19 @@ pub async fn probe_streaming_tool_calls<C: ProbeClient>(
                         refusal_text.push_str(text);
                     }
                     ProbeStreamChunk::ToolCallEnd => {
-                        for (name, args) in slots.values() {
-                            flush_read_file_args(
-                                name,
-                                args,
-                                &mut best_read_file,
-                                &mut last_read_file_args,
-                            );
+                        // No index on this chunk. Flush only a lone open slot so
+                        // a parallel call can keep receiving argument deltas.
+                        if slots.len() <= 1 {
+                            for (name, args) in slots.values() {
+                                flush_read_file_args(
+                                    name,
+                                    args,
+                                    &mut best_read_file,
+                                    &mut last_read_file_args,
+                                );
+                            }
+                            slots.clear();
                         }
-                        slots.clear();
                     }
                 }
             }
@@ -340,6 +344,34 @@ mod tests {
             result.score, 1.0,
             "index-0 read_file args must not mix into write_file: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn streaming_parallel_end_keeps_later_read_file_args() {
+        let llm = StreamMockLlm::new(vec![
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "c0".to_string(),
+                name: "read_file".to_string(),
+                index: 0,
+            }),
+            Ok(ProbeStreamChunk::ToolCallStart {
+                id: "c1".to_string(),
+                name: "write_file".to_string(),
+                index: 1,
+            }),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: r#"{"path":"#.to_string(),
+                index: 0,
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+            Ok(ProbeStreamChunk::ToolCallArgDelta {
+                delta: r#""/tmp/test.txt"}"#.to_string(),
+                index: 0,
+            }),
+            Ok(ProbeStreamChunk::ToolCallEnd),
+        ]);
+        let result = probe_streaming_tool_calls(&llm).await.unwrap();
+        assert_eq!(result.score, 1.0, "{result:?}");
     }
 
     #[tokio::test]

@@ -170,6 +170,11 @@ pub enum ProbeStreamChunk {
         /// Same slot as the matching [`Self::ToolCallStart`].
         index: u32,
     },
+    /// One output item finished.
+    ///
+    /// This chunk does not name an index. A caller that has another
+    /// call open must keep that call's argument deltas. Clearing every
+    /// slot drops the rest of a parallel call.
     ToolCallEnd,
     /// Terminal finish reason from the provider. Missing means Stop.
     Finished {
