@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.10.4.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.11.3.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -540,7 +540,8 @@ fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
     let mut usage = None;
     for event in events {
         match event {
-            IrStreamEvent::TextDelta { text: delta } => text.push_str(&delta),
+            IrStreamEvent::TextDelta { text: delta }
+            | IrStreamEvent::RefusalDelta { text: delta } => text.push_str(&delta),
             IrStreamEvent::ToolCallStart {
                 id, name, index, ..
             } => match slots.entry(index) {
@@ -632,7 +633,9 @@ fn push_call(out: &mut Vec<ProbeToolCall>, (id, name, args): (String, String, St
 
 fn stream_chunk(event: IrStreamEvent) -> Option<ProbeStreamChunk> {
     match event {
-        IrStreamEvent::TextDelta { text } if !text.is_empty() => {
+        IrStreamEvent::TextDelta { text } | IrStreamEvent::RefusalDelta { text }
+            if !text.is_empty() =>
+        {
             Some(ProbeStreamChunk::TextDelta { text })
         }
         IrStreamEvent::ToolCallStart {
@@ -1731,6 +1734,36 @@ mod tests {
                 .and_then(Value::as_str),
             Some("/tmp/b"),
             "{resp:?}"
+        );
+    }
+
+    #[test]
+    fn fold_events_keeps_refusal_text() {
+        let events = vec![
+            IrStreamEvent::RefusalDelta {
+                text: "I can't help with that.".into(),
+            },
+            IrStreamEvent::FinishReason {
+                reason: "refusal".into(),
+                vendor: None,
+            },
+        ];
+        let response = fold_events(events);
+        assert_eq!(response.text, "I can't help with that.");
+        assert_eq!(response.finish, ProbeFinish::Safety);
+    }
+
+    #[test]
+    fn stream_chunk_keeps_refusal_text() {
+        assert_eq!(
+            stream_chunk(IrStreamEvent::RefusalDelta { text: "no".into() }),
+            Some(ProbeStreamChunk::TextDelta { text: "no".into() })
+        );
+        assert_eq!(
+            stream_chunk(IrStreamEvent::RefusalDelta {
+                text: String::new()
+            }),
+            None
         );
     }
 
