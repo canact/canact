@@ -3,6 +3,15 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.1](https://github.com/canact/canact/compare/v0.12.0...v0.12.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* consume wiremux 0.11.4 ([#370](https://github.com/canact/canact/issues/370)) ([6057c4e](https://github.com/canact/canact/commit/6057c4e9ee858435d620dc98fdb9242dd3c3bf5f))
+* keep a streamed tool call open when another call ends ([#372](https://github.com/canact/canact/issues/372)) ([1cbd75e](https://github.com/canact/canact/commit/1cbd75e0b851233142c0999449b81e0b03337e60))
+* persist the current grader epoch after cache migration ([#373](https://github.com/canact/canact/issues/373)) ([4f0ee67](https://github.com/canact/canact/commit/4f0ee67440edb89064e42d8672169c6337a35445))
+
 ## [0.12.0](https://github.com/canact/canact/compare/v0.11.0...v0.12.0) (2026-10-16)
 
 
