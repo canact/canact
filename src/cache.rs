@@ -1370,23 +1370,33 @@ impl ProbeCache {
     }
 }
 
-fn checked_profile(mut profile: CapabilityProfile) -> Result<CapabilityProfile, ProbeError> {
-    profile.model_id = profile.model_id.trim().to_owned();
-    profile.provider = profile.provider.trim().to_owned();
-    if profile.model_id.is_empty() {
+pub(crate) fn validate_probe_identity(
+    model: &str,
+    provider: &str,
+) -> Result<(String, String), ProbeError> {
+    let model = model.trim().to_owned();
+    let provider = provider.trim().to_owned();
+    if model.is_empty() {
         return Err(ProbeError::Internal("model must not be empty".to_owned()));
     }
-    if profile.provider.is_empty() {
+    if provider.is_empty() {
         return Err(ProbeError::Internal(
             "provider must not be empty".to_owned(),
         ));
     }
-    if let Some(msg) = crate::text::control_character_message("model", &profile.model_id) {
+    if let Some(msg) = crate::text::control_character_message("model", &model) {
         return Err(ProbeError::Internal(msg));
     }
-    if let Some(msg) = crate::text::control_character_message("provider", &profile.provider) {
+    if let Some(msg) = crate::text::control_character_message("provider", &provider) {
         return Err(ProbeError::Internal(msg));
     }
+    Ok((model, provider))
+}
+
+fn checked_profile(mut profile: CapabilityProfile) -> Result<CapabilityProfile, ProbeError> {
+    let (model, provider) = validate_probe_identity(&profile.model_id, &profile.provider)?;
+    profile.model_id = model;
+    profile.provider = provider;
     Ok(profile)
 }
 
@@ -1555,7 +1565,8 @@ pub fn current_grader_version(name: &str) -> u32 {
     match name {
         "max_tokens_compliance" => 2,
         "context_faithfulness" => 2,
-        "vision" => 2,
+        // 3: probe image is 32x32 (1024 pixels). Epoch 2 scored the 16x16 image.
+        "vision" => 3,
         "unified_diff" => 2,
         _ => DEFAULT_GRADER_VERSION,
     }
@@ -1611,6 +1622,39 @@ fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_probe_identity_trims_and_rejects_blank_or_control() {
+        assert!(validate_probe_identity("  ", "ollama").is_err());
+        assert!(validate_probe_identity("llama", "  ").is_err());
+        assert!(validate_probe_identity("lla\nma", "ollama").is_err());
+        let (model, provider) = validate_probe_identity("  llama ", " ollama ").expect("trim");
+        assert_eq!(model, "llama");
+        assert_eq!(provider, "ollama");
+    }
+
+    #[test]
+    fn vision_grader_epoch_3_resets_an_epoch_2_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.vision.details = "NONE from 16x16".to_owned();
+        profile.vision.level = CapabilityLevel::Weak;
+        profile.vision.score = 0.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry.grader_versions.insert("vision".to_owned(), 2);
+        entry.profile.vision.details = "NONE from 16x16".to_owned();
+        entry.profile.vision.level = CapabilityLevel::Weak;
+        entry.profile.vision.score = 0.0;
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(entry.grader_versions.get("vision").copied(), Some(3));
+        assert!(
+            entry.profile.vision.details.starts_with("Not probed"),
+            "{}",
+            entry.profile.vision.details
+        );
+    }
 
     #[test]
     fn save_succeeds_when_existing_file_is_not_json() {

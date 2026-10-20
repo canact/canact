@@ -71,8 +71,8 @@ impl OpenAiCompatClient {
         catalog: CatalogPriors,
     ) -> Result<Self, ProbeError> {
         let base_url = trim_slash(base_url.into());
-        let model_id = model_id.into();
-        let provider = provider.into();
+        let (model_id, provider) =
+            crate::cache::validate_probe_identity(&model_id.into(), &provider.into())?;
         let wire = wire_client_for(&base_url, api_key.as_deref(), &provider)?;
         Ok(Self {
             wire,

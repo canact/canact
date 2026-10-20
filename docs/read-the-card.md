@@ -76,17 +76,26 @@ or `single`.
 
 ## Exit code 2
 
-When a tool probe completed below Medium, canact prints the envelope
-on stdout first, then this line on stderr, then exits 2. A
-`Probe failed:` row (timeout, rate limit, vendor `please wait`) is
-not that result. The process exits 0 and `cacheable` is false.
+Exit 2 from the tool gate happens only when native tool calling and
+XML tool calling both completed below Medium. canact prints the
+envelope on stdout first, then this line on stderr:
 
 ```text
-error: cannot use tools (native and XML both failed to complete)
+error: cannot use tools (native and XML tool calling both completed below Medium)
 ```
 
-JSON on stdout is still valid. A shell with `set -e` stops on that
-exit code.
+One finished Weak row is not enough for exit 2. If either tool
+probe is `Probe failed:` (timeout, rate limit, vendor `please wait`),
+the process exits 0. `cacheable` is false. Stderr says
+`warning: probe run incomplete; not cached`. When neither tool probe
+completed, the human table says
+`Can use tools: unknown (tool probes did not finish)` and does not
+say XML fallback is needed. When native tool calling completed Weak,
+the table says XML fallback is needed even if XML did not finish.
+`needsXmlFallback` follows that same rule.
+
+`--fail-on` can still exit 2 for a different finished row. JSON on
+stdout is still valid. A shell with `set -e` stops on exit 2.
 
 ## Library
 
@@ -164,4 +173,7 @@ login, the cache, or the network. See
 
 `canact probe --fail-on weak` exits 2 when a finished row is Weak.
 `--fail-on degraded` also exits 2 for Medium. A skipped row or a
-probe error does not count. An unknown value exits 1.
+probe error does not count. An unknown value exits 1. Without
+`--fail-on`, exit 2 is only when native and XML tool calling both
+completed below Medium. A run whose tool probes did not finish
+exits 0, is not cached, and says so on stderr.

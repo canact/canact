@@ -338,7 +338,10 @@ fn synthesized_medium_does_not_open_host_policy() {
         details: "Probe failed: 429".to_string(),
     };
     assert!(!profile.supports_vision());
-    assert!(profile.needs_xml_fallback());
+    assert!(
+        !profile.needs_xml_fallback(),
+        "a Probe failed tool row is not a completed Weak"
+    );
     assert!(
         !profile.needs_json_repair(),
         "transient JSON must not turn repair on"
@@ -371,7 +374,10 @@ fn can_use_tools_false_when_xml_is_transient_medium() {
         details: "Probe failed: timeout".to_string(),
     };
     assert!(!profile.can_use_tools());
-    assert!(profile.tool_gate_error().is_some());
+    assert!(
+        profile.tool_gate_error().is_none(),
+        "one unfinished tool probe must not exit 2"
+    );
 }
 
 #[test]

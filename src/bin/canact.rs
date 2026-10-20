@@ -258,6 +258,7 @@ fn cli_explicit_base_url(raw: Option<&str>) -> bool {
 
 async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
     reject_blank_base_url_flag(args.base_url.as_deref())?;
+    trimmed_model_flag(args.model.as_deref())?;
     let fail_on = match parse_fail_on(args.fail_on.as_deref()) {
         Ok(bar) => bar,
         Err(msg) => {
@@ -461,8 +462,10 @@ async fn run_probe(args: ProbeArgs) -> Result<(), u8> {
         }
     };
 
-    if let Err(err) = run.persist(&mut cache, &cache_path) {
-        eprintln!("warning: failed to save probe cache: {err}");
+    match run.persist(&mut cache, &cache_path) {
+        Ok(true) => {}
+        Ok(false) => eprintln!("warning: probe run incomplete; not cached"),
+        Err(err) => eprintln!("warning: failed to save probe cache: {err}"),
     }
 
     emit_run(&run, args.json, args.verbose, fail_on)

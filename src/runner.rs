@@ -250,6 +250,7 @@ impl<C: ProbeClient> ProbeRunner<C> {
 
     /// Run all probes and report whether the profile is safe to cache.
     pub async fn run_detailed(&self) -> Result<ProbeRun, ProbeError> {
+        crate::cache::validate_probe_identity(self.client.model_id(), self.client.provider())?;
         let sem = Arc::new(Semaphore::new(self.concurrency));
 
         let tool_fut = Self::gated(&sem, probes::probe_tool_calling(&self.client));
@@ -624,6 +625,15 @@ fn image_too_large_message(err: &str) -> bool {
 
 const MALFORMED_TOOL_DETAILS: &str = "Model emitted a malformed tool call";
 
+fn is_provider_safety_stop(err: &ProbeError) -> bool {
+    match err {
+        ProbeError::Transient(msg) => {
+            msg == "provider safety stop" || msg.starts_with("provider safety stop:")
+        }
+        _ => false,
+    }
+}
+
 /// Resolve a probe result and whether it is safe to write into the 30-day cache.
 ///
 /// Auth and unreachable hosts abort the suite (`Err`). Definitive "does
@@ -642,10 +652,17 @@ pub fn resolve_probe(
         Err(err) => {
             let err_msg = err.to_string();
             let is_tool_probe = TOOL_PROBE_NAMES.contains(&name);
-            let tools_not_supported = err_msg.contains("does not support tools");
-            let vision_not_supported = name == "vision" && no_multimodal_message(&err_msg);
-            let image_too_large = name == "vision" && image_too_large_message(&err_msg);
-            let malformed_tool = is_tool_probe
+            // Refusal text is inside the safety-stop message. Do not let
+            // that prose match "does not support tools" or "image too large"
+            // and become a cached Weak card.
+            let safety_stop = is_provider_safety_stop(&err);
+            let tools_not_supported = !safety_stop && err_msg.contains("does not support tools");
+            let vision_not_supported =
+                !safety_stop && name == "vision" && no_multimodal_message(&err_msg);
+            let image_too_large =
+                !safety_stop && name == "vision" && image_too_large_message(&err_msg);
+            let malformed_tool = !safety_stop
+                && is_tool_probe
                 && err_msg
                     .to_ascii_lowercase()
                     .contains("malformed_function_call");
@@ -853,5 +870,41 @@ mod window_cache_tests {
         let floor = take_ladder(&mut cacheable, ladder).expect("floor");
         assert_eq!(floor, Some(4096));
         assert!(!cacheable);
+    }
+}
+
+#[cfg(test)]
+mod safety_stop_cache_tests {
+    use super::resolve_probe;
+    use crate::error::ProbeError;
+    use crate::types::CapabilityLevel;
+
+    #[test]
+    fn safety_stop_prose_is_not_a_cached_no_tools_score() {
+        let err = ProbeError::Transient(
+            "provider safety stop: this model does not support tools for that request".into(),
+        );
+        let (result, cacheable) = resolve_probe(Err(err), "tool_calling").expect("scored row");
+        assert!(result.is_synthesized_error(), "{}", result.details);
+        assert!(!cacheable);
+        assert_ne!(result.details, "Model does not support tools");
+    }
+
+    #[test]
+    fn safety_stop_prose_is_not_a_cached_image_limit() {
+        let err =
+            ProbeError::Transient("provider safety stop: the image is too large to accept".into());
+        let (result, cacheable) = resolve_probe(Err(err), "vision").expect("scored row");
+        assert!(result.is_synthesized_error(), "{}", result.details);
+        assert!(!cacheable);
+    }
+
+    #[test]
+    fn plain_no_tools_error_stays_a_cached_weak() {
+        let err = ProbeError::Llm("model does not support tools".into());
+        let (result, cacheable) = resolve_probe(Err(err), "tool_calling").expect("scored row");
+        assert!(cacheable);
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(result.details, "Model does not support tools");
     }
 }

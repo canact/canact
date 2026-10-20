@@ -59,12 +59,14 @@ impl CapabilityProfile {
             "Edit format (probe ladder):",
             self.best_edit_format()
         );
-        let _ = writeln!(
-            out,
-            "{:<28}{}",
-            "Can use tools:",
-            if self.can_use_tools() { "yes" } else { "no" }
-        );
+        let tools = if self.can_use_tools() {
+            "yes"
+        } else if self.tool_gate_error().is_some() {
+            "no"
+        } else {
+            "unknown (tool probes did not finish)"
+        };
+        let _ = writeln!(out, "{:<28}{tools}", "Can use tools:");
         let _ = writeln!(
             out,
             "{:<28}{}",
@@ -106,7 +108,7 @@ impl CapabilityProfile {
             };
             let _ = writeln!(out, "{:<28}{value}", "Constraint placement:");
         }
-        if self.needs_xml_fallback() {
+        if self.tool_calling.measured_level() == Some(crate::types::CapabilityLevel::Weak) {
             let _ = writeln!(out, "{:<28}XML fallback needed", "");
         }
         if self.needs_json_repair() {
@@ -115,22 +117,27 @@ impl CapabilityProfile {
         out
     }
 
-    /// Stderr line when a finished tool probe is below Medium.
+    /// Stderr line when both tool probes completed below Medium.
     ///
-    /// A synthesized `Probe failed:` row is not a capability score.
-    /// Exit 2 stays for a completed Weak native or XML result. An
-    /// unfinished pair (vendor `please wait`, timeout) does not use
-    /// this line.
+    /// One finished Weak row is not enough. The other probe may still
+    /// be a `Probe failed:` timeout or vendor error. Exit 2 is only
+    /// for a pair of completed scores that both sit below Medium.
     pub fn tool_gate_error(&self) -> Option<&'static str> {
         if self.can_use_tools() {
             return None;
         }
-        let finished = self.tool_calling.measured_level().is_some()
-            || self.xml_tool_calling.measured_level().is_some();
-        if finished {
-            Some("error: cannot use tools (native and XML both failed to complete)")
-        } else {
-            None
+        let native = self.tool_calling.measured_level();
+        let xml = self.xml_tool_calling.measured_level();
+        match (native, xml) {
+            (Some(native), Some(xml))
+                if native < crate::types::CapabilityLevel::Medium
+                    && xml < crate::types::CapabilityLevel::Medium =>
+            {
+                Some(
+                    "error: cannot use tools (native and XML tool calling both completed below Medium)",
+                )
+            }
+            _ => None,
         }
     }
 }
@@ -228,15 +235,43 @@ mod tests {
         profile.xml_tool_calling = unfinished("xml_tool_calling");
         assert!(!profile.can_use_tools());
         assert!(profile.tool_gate_error().is_none());
+        let table = profile.format_human_table(false);
+        assert!(
+            table.contains("unknown (tool probes did not finish)"),
+            "{table}"
+        );
+        assert!(!table.contains("XML fallback needed"), "{table}");
+        assert!(!profile.needs_xml_fallback());
     }
 
     #[test]
-    fn tool_gate_exit_2_when_a_tool_probe_completed_weak() {
+    fn tool_gate_skips_exit_2_when_only_xml_finished_weak() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        profile.tool_calling = unfinished("tool_calling");
+        profile.xml_tool_calling = weak("xml_tool_calling");
+        assert!(!profile.can_use_tools());
+        assert!(
+            profile.tool_gate_error().is_none(),
+            "a rate limit on native must not exit 2 because XML finished Weak"
+        );
+    }
+
+    #[test]
+    fn tool_gate_exit_2_when_both_tool_probes_completed_weak() {
         let mut profile = CapabilityProfile::unprobed("m", "p");
         profile.tool_calling = weak("tool_calling");
-        profile.xml_tool_calling = unfinished("xml_tool_calling");
+        profile.xml_tool_calling = weak("xml_tool_calling");
         assert!(!profile.can_use_tools());
-        let msg = profile.tool_gate_error().expect("finished weak");
+        let msg = profile.tool_gate_error().expect("both weak");
         assert!(msg.contains("cannot use tools"), "{msg}");
+        assert!(msg.contains("both completed below Medium"), "{msg}");
+        let table = profile.format_human_table(false);
+        assert!(
+            table
+                .lines()
+                .any(|line| line.contains("Can use tools:") && line.trim_end().ends_with("no")),
+            "{table}"
+        );
+        assert!(table.contains("XML fallback needed"), "{table}");
     }
 }

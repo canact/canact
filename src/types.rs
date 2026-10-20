@@ -541,8 +541,11 @@ impl CapabilityProfile {
     }
 
     /// Whether the host should use XML-tag fallback for tool calls.
+    ///
+    /// True only when native tool calling completed Weak. An unfinished
+    /// `Probe failed:` row is not a Weak measurement.
     pub fn needs_xml_fallback(&self) -> bool {
-        completed_level(&self.tool_calling) == CapabilityLevel::Weak
+        self.tool_calling.measured_level() == Some(CapabilityLevel::Weak)
     }
 
     /// Whether JSON output should be wrapped in a repair layer.
