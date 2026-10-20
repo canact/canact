@@ -1,6 +1,6 @@
 //! Probe adapter over `wiremux` `WireClient`.
 //!
-//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.11.4.
+//! HTTP, SSE, catalog, and vendor error classes live in wiremux 0.11.7.
 //! This module maps [`ProbeRequest`] to IR and [`wiremux::ClientError`] to
 //! [`ProbeError`]. Never log `Authorization`.
 
@@ -96,7 +96,7 @@ impl ProbeClient for OpenAiCompatClient {
                 .send(ir_request(&req))
                 .await
                 .map_err(map_client_error)?;
-            Ok(fold_events(events))
+            scored_completion(events)
         }
     }
 
@@ -108,7 +108,7 @@ impl ProbeClient for OpenAiCompatClient {
             .stream(ir_request(&req))
             .filter_map(|item| async move {
                 match item {
-                    Ok(event) => stream_chunk(event).map(Ok),
+                    Ok(event) => map_stream_event(event).transpose(),
                     Err(err) => Some(Err(map_client_error(err))),
                 }
             })
@@ -528,6 +528,31 @@ fn content_parts(content: &ProbeContent) -> Vec<IrPart> {
             })
             .collect(),
     }
+}
+
+/// A Responses `failed` turn is not a capability score.
+///
+/// Wiremux keeps encrypted reasoning on that turn and omits the vendor
+/// message. Those protocol events are not probe text.
+fn scored_completion(events: Vec<IrStreamEvent>) -> Result<ProbeResponse, ProbeError> {
+    if events.iter().any(finish_is_failed) {
+        return Err(ProbeError::Transient("response failed".into()));
+    }
+    Ok(fold_events(events))
+}
+
+fn map_stream_event(event: IrStreamEvent) -> Result<Option<ProbeStreamChunk>, ProbeError> {
+    if finish_is_failed(&event) {
+        return Err(ProbeError::Transient("response failed".into()));
+    }
+    Ok(stream_chunk(event))
+}
+
+fn finish_is_failed(event: &IrStreamEvent) -> bool {
+    matches!(
+        event,
+        IrStreamEvent::FinishReason { reason, .. } if reason.eq_ignore_ascii_case("failed")
+    )
 }
 
 fn fold_events(events: Vec<IrStreamEvent>) -> ProbeResponse {
@@ -1814,6 +1839,47 @@ mod tests {
                 .and_then(Value::as_str),
             Some("/tmp/b"),
             "{resp:?}"
+        );
+    }
+
+    #[test]
+    fn responses_failed_encrypted_leaf_is_not_a_score() {
+        use wiremux::{Wire, decode_response, parse_profile_str};
+
+        let profile = parse_profile_str(
+            "schema_version = 1\nid = \"codex\"\nwire = \"responses\"\nbase_url = \"https://api.openai.com\"\nchat_path = \"/v1/responses\"\nauth_scheme = \"bearer\"\n",
+        )
+        .expect("responses profile");
+        let body = br#"{"status":"failed","output":[{"type":"reasoning","encrypted_content":"enc-xyz"}],"error":{"message":"please wait","code":"server_error"}}"#;
+        let events = decode_response(Wire::Responses, body, &profile).expect("kept leaf stays");
+        let err = scored_completion(events).expect_err("failed turn is not a score");
+        match err {
+            ProbeError::Transient(msg) => {
+                assert!(msg.contains("response failed"), "{msg}");
+                assert!(!msg.contains("please wait"), "{msg}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_failed_finish_is_transient() {
+        let err = map_stream_event(IrStreamEvent::FinishReason {
+            reason: "failed".into(),
+            vendor: None,
+        })
+        .expect_err("failed finish");
+        assert!(matches!(err, ProbeError::Transient(msg) if msg == "response failed"));
+        let chunk = map_stream_event(IrStreamEvent::FinishReason {
+            reason: "stop".into(),
+            vendor: None,
+        })
+        .expect("stop");
+        assert_eq!(
+            chunk,
+            Some(ProbeStreamChunk::Finished {
+                finish: ProbeFinish::Stop,
+            })
         );
     }
 }
