@@ -3,6 +3,16 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.2](https://github.com/canact/canact/compare/v0.12.1...v0.12.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* close review gaps in the tool gate, cache, and MCP ([#381](https://github.com/canact/canact/issues/381)) ([9a89370](https://github.com/canact/canact/commit/9a893705b18da49d9d92cd4340dc7a8ae1e3423c))
+* consume wiremux 0.11.7 ([#377](https://github.com/canact/canact/issues/377)) ([2901d1a](https://github.com/canact/canact/commit/2901d1a1a6740b5f6a18dc0778b3315c929cf5fb))
+* do not exit 2 when tool probes did not complete ([#380](https://github.com/canact/canact/issues/380)) ([42e5d73](https://github.com/canact/canact/commit/42e5d73eae60ee82ab5696e82eaa761445cc0113))
+* enlarge the vision probe image and patch quinn-proto ([#379](https://github.com/canact/canact/issues/379)) ([a4d417a](https://github.com/canact/canact/commit/a4d417ae097d482a3d617cdeb28b44976818fc8a))
+
 ## [0.12.1](https://github.com/canact/canact/compare/v0.12.0...v0.12.1) (2026-10-16)
 
 
