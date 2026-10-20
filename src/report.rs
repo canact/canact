@@ -115,12 +115,22 @@ impl CapabilityProfile {
         out
     }
 
-    /// Stderr line when a finished probe must exit 2 (`!can_use_tools`).
+    /// Stderr line when a finished tool probe is below Medium.
+    ///
+    /// A synthesized `Probe failed:` row is not a capability score.
+    /// Exit 2 stays for a completed Weak native or XML result. An
+    /// unfinished pair (vendor `please wait`, timeout) does not use
+    /// this line.
     pub fn tool_gate_error(&self) -> Option<&'static str> {
         if self.can_use_tools() {
-            None
-        } else {
+            return None;
+        }
+        let finished = self.tool_calling.measured_level().is_some()
+            || self.xml_tool_calling.measured_level().is_some();
+        if finished {
             Some("error: cannot use tools (native and XML both failed to complete)")
+        } else {
+            None
         }
     }
 }
@@ -189,5 +199,44 @@ mod tests {
         let quiet = profile.format_human_table(false);
         assert!(quiet.contains("use --verbose for the rest."), "{quiet}");
         assert!(!quiet.contains("use --verbose for all."), "{quiet}");
+    }
+
+    fn unfinished(name: &str) -> ProbeResult {
+        ProbeResult {
+            name: name.to_owned(),
+            score: 0.5,
+            max_score: 1.0,
+            level: CapabilityLevel::Medium,
+            details: "Probe failed: transient error: please wait".to_owned(),
+        }
+    }
+
+    fn weak(name: &str) -> ProbeResult {
+        ProbeResult {
+            name: name.to_owned(),
+            score: 0.1,
+            max_score: 1.0,
+            level: CapabilityLevel::Weak,
+            details: "no tool call".to_owned(),
+        }
+    }
+
+    #[test]
+    fn tool_gate_skips_exit_2_when_tool_probes_did_not_complete() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        profile.tool_calling = unfinished("tool_calling");
+        profile.xml_tool_calling = unfinished("xml_tool_calling");
+        assert!(!profile.can_use_tools());
+        assert!(profile.tool_gate_error().is_none());
+    }
+
+    #[test]
+    fn tool_gate_exit_2_when_a_tool_probe_completed_weak() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        profile.tool_calling = weak("tool_calling");
+        profile.xml_tool_calling = unfinished("xml_tool_calling");
+        assert!(!profile.can_use_tools());
+        let msg = profile.tool_gate_error().expect("finished weak");
+        assert!(msg.contains("cannot use tools"), "{msg}");
     }
 }
