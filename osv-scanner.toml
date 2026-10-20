@@ -1,0 +1,15 @@
+# Scorecard's Vulnerabilities check runs osv-scanner, which does not
+# read deny.toml. Keep these ids in sync with deny.toml [advisories].
+# https://google.github.io/osv-scanner/configuration/
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0370"
+reason = "zvariant folded into zbus 6; keyring 4.2 stays on zbus 5"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0371"
+reason = "zbus_names folded into zbus 6; keyring 4.2 stays on zbus 5"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0372"
+reason = "zvariant_derive folded into zbus 6; keyring 4.2 stays on zbus 5"
