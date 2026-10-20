@@ -8,10 +8,12 @@ use crate::types::{ProbeResult, classify};
 
 use super::refuse_truncated_incomplete_text;
 
-/// Minimal 16x16 PNG with "BL" text pattern (white on black), base64-encoded.
-/// Used as the test image for the vision capability probe.
-const PROBE_IMAGE_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAIklEQVR4nGNgYGD4jwQYkAAaF7sELj\
-     bFGoaQk3BJjYIhBwBFt1ykBOQgDQAAAABJRU5ErkJggg==";
+/// 32x32 PNG with "BL" text pattern (white on black), base64-encoded.
+///
+/// 1024 pixels. A 16x16 image is 256 pixels, and xAI rejects that body
+/// (`below the minimum of 512 pixels`). The suite then skips the cache
+/// write on every run. Nearest-neighbor scale of the original glyph.
+const PROBE_IMAGE_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAOElEQVR42mNgAIP/OAADDoBfFqcGmltAufioBYM+kkdT0WgqIkI9Tl00t2AUjIJRMApGwSgY4gAAqlNynHySeC4AAAAASUVORK5CYII=";
 
 /// User text for [`probe_vision`].
 ///
@@ -423,6 +425,73 @@ mod tests {
 
     use crate::probes::test_support::*;
     use crate::types::CapabilityLevel;
+
+    fn decode_standard_b64(input: &str) -> Vec<u8> {
+        fn val(byte: u8) -> u8 {
+            match byte {
+                b'A'..=b'Z' => byte - b'A',
+                b'a'..=b'z' => byte - b'a' + 26,
+                b'0'..=b'9' => byte - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                _ => 0xff,
+            }
+        }
+        let bytes: Vec<u8> = input
+            .bytes()
+            .filter(|byte| !byte.is_ascii_whitespace())
+            .collect();
+        assert!(
+            bytes.len().is_multiple_of(4),
+            "base64 length {} is not a multiple of 4",
+            bytes.len()
+        );
+        let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+        for chunk in bytes.chunks_exact(4) {
+            let pad = usize::from(chunk[2] == b'=') + usize::from(chunk[3] == b'=');
+            let a = val(chunk[0]);
+            let b = val(chunk[1]);
+            let c = if chunk[2] == b'=' { 0 } else { val(chunk[2]) };
+            let d = if chunk[3] == b'=' { 0 } else { val(chunk[3]) };
+            assert!(a < 64 && b < 64 && c < 64 && d < 64, "bad base64");
+            let n =
+                (u32::from(a) << 18) | (u32::from(b) << 12) | (u32::from(c) << 6) | u32::from(d);
+            out.push((n >> 16) as u8);
+            if pad < 2 {
+                out.push((n >> 8) as u8);
+            }
+            if pad < 1 {
+                out.push(n as u8);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn standard_b64_decoder_round_trips_known_vectors() {
+        assert_eq!(decode_standard_b64("YQ=="), b"a");
+        assert_eq!(decode_standard_b64("YWI="), b"ab");
+        assert_eq!(decode_standard_b64("YWJj"), b"abc");
+    }
+
+    /// xAI rejects a vision body under 512 pixels and the suite then
+    /// skips the cache write. The fixture must clear that floor.
+    #[test]
+    fn vision_probe_image_meets_pixel_floor() {
+        let bytes = decode_standard_b64(PROBE_IMAGE_BASE64);
+        assert!(
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "vision fixture is not a PNG"
+        );
+        assert_eq!(&bytes[12..16], b"IHDR");
+        let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+        let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+        let pixels = u64::from(width) * u64::from(height);
+        assert!(
+            pixels >= 512,
+            "vision fixture is {width}x{height} ({pixels} pixels); providers reject under 512"
+        );
+    }
 
     #[test]
     fn vision_user_text_is_constrained_not_open_question() {
