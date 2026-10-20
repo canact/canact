@@ -59,7 +59,10 @@ than that prior. The 4096 rung still runs. Dry-run does not read a
 login, the cache, or the network.
 `canact probe --fail-on weak` exits 2 when a finished row is Weak.
 `--fail-on degraded` also exits 2 for Medium. A skipped row or a
-probe error does not count. An unknown value exits 1.
+probe error does not count. An unknown value exits 1. Without
+`--fail-on`, exit 2 is only when native and XML tool calling both
+completed below Medium. A run whose tool probes did not finish
+exits 0, is not cached, and says so on stderr.
 
 | Provider label | Default URL when `--base-url` is omitted | What is tried, first match wins | Stored login |
 | --- | --- | --- | --- |

@@ -193,8 +193,18 @@ fn handle_tools_call(params: &Value, policy: &McpServerOptions) -> Result<Value,
     }))
 }
 
+fn reject_blank_mcp_provider(args: &Value) -> Result<(), String> {
+    match args.get("provider") {
+        None => Ok(()),
+        Some(Value::String(raw)) if raw.trim().is_empty() => Err("provider is empty".to_owned()),
+        Some(Value::String(_)) => Ok(()),
+        Some(_) => Err("provider must be a string".to_owned()),
+    }
+}
+
 async fn probe_model_args(args: &Value, policy: &McpServerOptions) -> Result<Value, String> {
     parse_mcp_tools(args.get("tools"))?;
+    reject_blank_mcp_provider(args)?;
     reject_invalid_explicit_base_urls(args, policy)?;
     let provider_given = args
         .get("provider")
@@ -1203,6 +1213,17 @@ mod tests {
         let _env = IsolatedApiKeyEnv::set_openai("sk-mcp-padded-lookup");
         let named = mcp_named_or_route_key(Some(" OPENAI_API_KEY "), "openai");
         assert_eq!(named.as_deref(), Some("sk-mcp-padded-lookup"));
+    }
+
+    #[test]
+    fn mcp_whitespace_provider_is_empty() {
+        let blank = json!({"model": "llama3", "provider": "  "});
+        assert_eq!(
+            super::reject_blank_mcp_provider(&blank).expect_err("blank"),
+            "provider is empty"
+        );
+        let absent = json!({"model": "llama3"});
+        assert!(super::reject_blank_mcp_provider(&absent).is_ok());
     }
 
     #[test]

@@ -205,7 +205,7 @@ fields are in [Read the card](docs/read-the-card.md).
 |-------|---------|
 | `maxTools` | Strong is JSON `null` (no cap). Medium is 20. Weak or not completed is 10. Read `toolSelectionStatus` before treating 10 as measured Weak. |
 | `probeLadderEditFormat` | Search/replace, unified diff, or whole file |
-| `needsXmlFallback` | Native tools were Weak |
+| `needsXmlFallback` | Native tool calling completed Weak. An unfinished probe is false. |
 | `needsJsonRepair` | Completed JSON score is Medium or weaker |
 | `useStreamingForToolCalls` | Streaming tool-call probe completed Medium or stronger |
 | `supportsNestedToolArgs` | Nested-argument probe completed Medium or stronger |

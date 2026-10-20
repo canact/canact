@@ -854,6 +854,39 @@ const CHAT_OK_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","conten
 const CHAT_SSE_BODY: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 const MAX_HTTP_BYTES: usize = 8 * 1024 * 1024;
 
+const CHAT_ERR_BODY: &str =
+    r#"{"error":{"message":"please wait","type":"server_error","code":"server_error"}}"#;
+const CHAT_ERR_SSE: &str = "data: {\"error\":{\"message\":\"please wait\",\"type\":\"server_error\",\"code\":\"server_error\"}}\n\n";
+
+fn spawn_chat_error() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            thread::spawn(move || respond_chat_error(stream));
+        }
+    });
+    format!("http://{addr}/v1")
+}
+
+fn respond_chat_error(mut stream: TcpStream) {
+    let _ = stream.set_nodelay(true);
+    let raw = read_http_request(&mut stream);
+    let (content_type, body) = if request_is_stream(&raw) {
+        ("text/event-stream", CHAT_ERR_SSE)
+    } else {
+        ("application/json", CHAT_ERR_BODY)
+    };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body.as_bytes());
+    let _ = stream.flush();
+}
+
 fn spawn_chat_ok() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -3233,6 +3266,74 @@ fn probe_progress_prints_names_on_stderr() {
     assert!(!stderr.contains("one_shot_tool_plan"), "{stderr}");
     assert!(!stderr.contains("cache hit"), "{stderr}");
     assert!(!stdout.contains("fromCache"), "{stdout}");
+}
+
+#[test]
+fn probe_vendor_please_wait_does_not_exit_2() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_str = dir.path().join("empty.json");
+    let base = spawn_chat_error();
+    let out = dry_run_cmd(&[
+        "probe",
+        "--json",
+        "--cheap",
+        "--force",
+        "--no-login",
+        "--provider",
+        "localmock",
+        "--model",
+        "m",
+        "--base-url",
+        &base,
+        "--no-vision",
+        "--cache",
+        cache_str.to_str().expect("utf8"),
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stderr.contains("warning: probe run incomplete; not cached"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("cannot use tools"), "{stderr}");
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("envelope");
+    assert_eq!(value["cacheable"], false, "{value}");
+    assert_eq!(value["canUseTools"], false, "{value}");
+    assert_eq!(value["needsXmlFallback"], false, "{value}");
+    let details = value["probes"]["toolCalling"]["details"]
+        .as_str()
+        .unwrap_or("");
+    assert!(details.contains("please wait"), "{details}");
+}
+
+#[test]
+fn probe_whitespace_model_on_openai_is_empty_before_the_key_check() {
+    let out = dry_run_cmd(&[
+        "probe",
+        "--no-login",
+        "--provider",
+        "openai",
+        "--model",
+        "   ",
+        "--cheap",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.contains("--model is empty"), "{stderr}");
+    assert!(
+        !stderr.contains("API key") && !stderr.contains("OPENAI_API_KEY"),
+        "{stderr}"
+    );
 }
 
 #[test]

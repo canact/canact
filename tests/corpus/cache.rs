@@ -1165,12 +1165,12 @@ fn stale_grader_version_is_current_after_load() {
     let entry = loaded.profiles.values().next().expect("entry");
     assert_eq!(
         entry.grader_versions.get("vision").copied(),
-        Some(2),
+        Some(3),
         "migrated vision grader must stay at the current epoch"
     );
     let again = ProbeCache::load(&path).expect("second load");
     let again_entry = again.profiles.values().next().expect("entry");
-    assert_eq!(again_entry.grader_versions.get("vision").copied(), Some(2));
+    assert_eq!(again_entry.grader_versions.get("vision").copied(), Some(3));
     assert!(
         again
             .get("m", "p")
