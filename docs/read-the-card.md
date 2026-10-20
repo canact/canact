@@ -76,8 +76,10 @@ or `single`.
 
 ## Exit code 2
 
-When the model cannot use tools, canact prints the envelope on
-stdout first, then this line on stderr, then exits 2:
+When a tool probe completed below Medium, canact prints the envelope
+on stdout first, then this line on stderr, then exits 2. A
+`Probe failed:` row (timeout, rate limit, vendor `please wait`) is
+not that result. The process exits 0 and `cacheable` is false.
 
 ```text
 error: cannot use tools (native and XML both failed to complete)
