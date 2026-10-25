@@ -116,61 +116,93 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     })
 }
 
+/// `#` starts a comment only outside a Python string. A quote can span
+/// lines, so a per-line split would treat a `#` inside that quote as a
+/// comment and then swallow the rest of the function.
 fn strip_hash_comments(text: &str) -> String {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with('#') {
-                return None;
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(quote) = python_string_open(text, i) {
+            let end = skip_python_string(text, i, quote);
+            out.push_str(&text[i..end]);
+            i = end;
+            continue;
+        }
+        if bytes[i] == b'#' {
+            let line_start = out.rfind('\n').map_or(0, |pos| pos + 1);
+            let only_indent = out[line_start..].chars().all(|ch| ch == ' ' || ch == '\t');
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
             }
-            Some(line.split_once('#').map(|(code, _)| code).unwrap_or(line))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            if only_indent {
+                out.truncate(line_start);
+                if i < bytes.len() && bytes[i] == b'\n' {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        let ch = text[i..].chars().next().expect("char");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn python_string_open(text: &str, i: usize) -> Option<&'static str> {
+    let rest = text.get(i..)?;
+    if rest.starts_with("\"\"\"") {
+        Some("\"\"\"")
+    } else if rest.starts_with("'''") {
+        Some("'''")
+    } else if rest.starts_with('"') {
+        Some("\"")
+    } else if rest.starts_with('\'') {
+        Some("'")
+    } else {
+        None
+    }
+}
+
+/// Index just past the string that opens at `i`. An unclosed string
+/// runs through the end of `text`.
+fn skip_python_string(text: &str, i: usize, quote: &str) -> usize {
+    let mut j = i + quote.len();
+    let bytes = text.as_bytes();
+    if quote.len() == 1 {
+        let closer = quote.as_bytes()[0];
+        while j < bytes.len() {
+            let b = bytes[j];
+            j += 1;
+            if b == b'\\' {
+                if j < bytes.len() {
+                    j += 1;
+                }
+                continue;
+            }
+            if b == closer {
+                break;
+            }
+        }
+        return j;
+    }
+    match text.get(j..).and_then(|rest| rest.find(quote)) {
+        Some(rel) => j + rel + quote.len(),
+        None => text.len(),
+    }
 }
 
 fn strip_python_string_literals(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < text.len() {
-        let rest = &text[i..];
-        let delim = if rest.starts_with("\"\"\"") {
-            Some("\"\"\"")
-        } else if rest.starts_with("'''") {
-            Some("'''")
-        } else if rest.starts_with('"') {
-            Some("\"")
-        } else if rest.starts_with('\'') {
-            Some("'")
-        } else {
-            None
-        };
-        if let Some(quote) = delim {
-            i += quote.len();
-            if quote.len() == 1 {
-                let closer = quote.as_bytes()[0];
-                while i < text.len() {
-                    let b = text.as_bytes()[i];
-                    i += 1;
-                    if b == b'\\' {
-                        if i < text.len() {
-                            i += 1;
-                        }
-                        continue;
-                    }
-                    if b == closer {
-                        break;
-                    }
-                }
-            } else {
-                match text[i..].find(quote) {
-                    Some(rel) => i += rel + quote.len(),
-                    None => break,
-                }
-            }
+        if let Some(quote) = python_string_open(text, i) {
+            i = skip_python_string(text, i, quote);
             continue;
         }
-        let ch = rest.chars().next().expect("char");
+        let ch = text[i..].chars().next().expect("char");
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -621,6 +653,38 @@ def merge_sorted(a, b):
             "a comment parenthesis must not drop a real function: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_hash_inside_string_keeps_real_return_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    note = \"return a merged list # note\"\n    return a + b\n",
+            "def merge_sorted(a, b):\n    \"\"\"Merge # two lists.\"\"\"\n    return a + b\n",
+        ] {
+            let llm = MockLlm {
+                response: text_response(code),
+            };
+            let result = probe_code_syntax(&llm).await.unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a hash inside a string must not hide the real return: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong);
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_hash_inside_string_does_not_hide_unmatched_paren() {
+        let code = "def merge_sorted(a, b):\n    return a + b\n    s = \"fine # \" + (\n";
+        let llm = MockLlm {
+            response: text_response(code),
+        };
+        let result = probe_code_syntax(&llm).await.unwrap();
+        assert!(
+            result.score < 1.0,
+            "an unmatched parenthesis after a hash inside a string must stay visible: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
