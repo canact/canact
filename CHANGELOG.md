@@ -3,6 +3,15 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.3](https://github.com/canact/canact/compare/v0.12.2...v0.12.3) (2026-10-25)
+
+
+### Bug Fixes
+
+* consume wiremux 0.11.9 and clear yanked tokio ([#385](https://github.com/canact/canact/issues/385)) ([1b0273a](https://github.com/canact/canact/commit/1b0273a973d06974fa49a882977da893e012dc2e))
+* do not score an unanswered context ladder as a recall miss ([#388](https://github.com/canact/canact/issues/388)) ([cac6f06](https://github.com/canact/canact/commit/cac6f06827e3526ec24f0b63bd8d1c1cbadac8a5))
+* score a hash inside a Python string as code ([#387](https://github.com/canact/canact/issues/387)) ([9ad7c4b](https://github.com/canact/canact/commit/9ad7c4b4d018b87e08f93cec499188d2f0ecbaf7))
+
 ## [0.12.2](https://github.com/canact/canact/compare/v0.12.1...v0.12.2) (2026-10-20)
 
 
