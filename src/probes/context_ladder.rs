@@ -172,11 +172,13 @@ fn recalls_all_facts(text: &str) -> bool {
 }
 
 /// Derived `context_faithfulness` from the last ladder rung.
+///
+/// A reply that misses the facts is a real score. An error before any
+/// passing rung is `Probe failed`, including a model that cannot chat.
+/// An error after a passing rung keeps that rung's recall.
 pub fn faithfulness_from_ladder(ladder: &ContextLadder) -> crate::types::ProbeResult {
     if ladder.tokens.is_none()
         && let Err(err) = &ladder.error
-        && (ProbeError::is_context_window_message(&err.to_string())
-            || matches!(err, ProbeError::Transient(msg) if msg.contains("provider safety stop")))
     {
         return crate::types::ProbeResult {
             name: "context_faithfulness".to_string(),
@@ -833,6 +835,64 @@ mod tests {
         assert_eq!(got.recall_hits, 0);
         let faith = faithfulness_from_ladder(&got);
         assert_eq!(faith.score, 0.0);
+    }
+
+    #[test]
+    fn llm_error_before_a_pass_is_not_a_measured_miss() {
+        let ladder = ContextLadder {
+            tokens: None,
+            error: Err(ProbeError::Llm(
+                "\"tev1:0.8b\" does not support chat".into(),
+            )),
+            recall_hits: 0,
+        };
+        let faith = faithfulness_from_ladder(&ladder);
+        assert!(faith.is_synthesized_error(), "{faith:?}");
+        assert_eq!(faith.measured_level(), None);
+        assert!(
+            !faith.details.contains("recalled"),
+            "an unanswered ladder must not look like a recall miss: {faith:?}"
+        );
+    }
+
+    #[test]
+    fn transient_error_before_a_pass_is_not_a_measured_miss() {
+        let ladder = ContextLadder {
+            tokens: None,
+            error: Err(ProbeError::Transient("timeout".into())),
+            recall_hits: 0,
+        };
+        let faith = faithfulness_from_ladder(&ladder);
+        assert!(faith.is_synthesized_error(), "{faith:?}");
+        assert_eq!(faith.measured_level(), None);
+    }
+
+    #[tokio::test]
+    async fn transient_4k_faithfulness_is_not_a_miss() {
+        let llm = LadderMock::new(None, None).transient_at(4096);
+        let got = probe_effective_context_tokens(&llm, true).await;
+        let faith = faithfulness_from_ladder(&got);
+        assert!(faith.is_synthesized_error(), "{faith:?}");
+        assert_eq!(faith.measured_level(), None);
+    }
+
+    #[tokio::test]
+    async fn length_fail_4k_faithfulness_is_not_a_miss() {
+        let llm = LadderMock::new(None, Some(4096)).length_on_fail();
+        let got = probe_effective_context_tokens(&llm, true).await;
+        let faith = faithfulness_from_ladder(&got);
+        assert!(faith.is_synthesized_error(), "{faith:?}");
+        assert_eq!(faith.measured_level(), None);
+    }
+
+    #[tokio::test]
+    async fn pass_then_transient_keeps_recall() {
+        let llm = LadderMock::new(None, None).transient_at(8192);
+        let got = probe_effective_context_tokens(&llm, false).await;
+        assert_eq!(got.tokens, Some(4096));
+        let faith = faithfulness_from_ladder(&got);
+        assert_eq!(faith.score, 1.0);
+        assert!(!faith.is_synthesized_error(), "{faith:?}");
     }
 
     #[test]
