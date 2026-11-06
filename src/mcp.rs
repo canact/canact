@@ -141,8 +141,8 @@ fn tools_list() -> Value {
                         "type": "string",
                         "description": "policy (default), full, or all. cheap/full remain aliases."
                     },
-                    "cheap": { "type": "boolean", "description": "Alias of suite=policy" },
-                    "full": { "type": "boolean", "description": "Alias of suite=full" },
+                    "cheap": { "type": "boolean", "description": "Alias of suite=policy. Conflicts with full." },
+                    "full": { "type": "boolean", "description": "Alias of suite=full. Conflicts with cheap." },
                     "vision": {
                         "type": "boolean",
                         "description": "true runs vision; false skips it. Omit to use the host catalog."
@@ -254,6 +254,7 @@ async fn probe_model_with_route(
     let cheap = present_json_bool(args, "cheap")?.unwrap_or(false);
     let full = present_json_bool(args, "full")?.unwrap_or(false);
     let suite = match args.get("suite") {
+        None if cheap && full => return Err("cheap conflicts with full".to_owned()),
         None if full => SuiteTier::Full,
         None => SuiteTier::Policy,
         Some(v) => {
@@ -1681,33 +1682,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_cheap_and_full_without_suite_is_full() {
-        let dir = tempfile::tempdir().expect("temp");
-        let cache_path = dir.path().join("probes.json");
-        let mut cache = ProbeCache::default();
-        let mut policy = CapabilityProfile::unprobed("gpt-4o", "openai");
-        policy.effective_context_tokens = Some(111);
-        cache
-            .put_with_suite(policy, SuiteTier::Policy, false, None)
-            .expect("cache id");
-        let mut full = CapabilityProfile::unprobed("gpt-4o", "openai");
-        full.effective_context_tokens = Some(999);
-        cache
-            .put_with_suite(full, SuiteTier::Full, false, None)
-            .expect("cache id");
-        cache.save(&cache_path).expect("save");
+    async fn mcp_cheap_and_full_without_suite_conflicts() {
         let args = json!({
             "model": "gpt-4o",
             "provider": "openai",
-            "cache": cache_path.to_str().expect("utf8"),
             "cheap": true,
             "full": true,
         });
-        let envelope = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
+        let err = probe_model_with_route(&args, mcp_empty_route(), None, &cache_ok())
             .await
-            .expect("cheap+full with no suite is Full");
-        assert_eq!(envelope["fromCache"], true, "probe envelope");
-        assert_eq!(envelope["suite"], "full", "probe envelope");
+            .unwrap_err();
+        assert!(
+            err.contains("cheap") && err.contains("full"),
+            "cheap+full with no suite must name both flags: {err}"
+        );
     }
 
     #[tokio::test]

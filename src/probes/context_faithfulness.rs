@@ -32,8 +32,8 @@ timeout of 3 seconds.";
 ///
 /// Scoring:
 /// - `1.0` - all 3 facts recalled correctly
-/// - `0.67` - 2 of 3 correct
-/// - `0.33` - 1 of 3 correct
+/// - `2/3` - 2 of 3 facts recalled
+/// - `1/3` - 1 of 3 facts recalled
 /// - `0.0` - 0 correct or refused to answer
 #[allow(dead_code)] // retired live call; ladder derives this dimension
 pub async fn probe_context_faithfulness<C: ProbeClient>(

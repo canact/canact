@@ -30,11 +30,11 @@ them, or the single word NONE if you cannot. No other words.";
 /// using inline base64 images.
 ///
 /// Scoring:
-/// - `1.0` - response mentions "BL" or "BLINE" (case-insensitive)
-/// - `0.5` - response describes image content (letters, text, pattern)
-///   but does not identify the exact text
-/// - `0.0` - response indicates inability to process images, or gives
-///   a generic answer ignoring the image
+/// - `1.0` - identifies BL or BLINE and does not negate the read
+/// - `0.5` - describes letters, text, or the image without that identification
+/// - `0.0` - the reply is NONE, a refusal, or a generic answer that ignores the image
+///
+/// A reply that mentions BL inside a refusal, such as "I cannot read BL", is not 1.0.
 ///
 /// Note: vision probes are more expensive than text probes due to image
 /// token costs. The cache prevents repeated probing.
