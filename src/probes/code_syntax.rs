@@ -18,10 +18,11 @@ use super::{refuse_truncated_incomplete_text, user_text};
 ///
 /// Scoring:
 /// - `1.0` - code has balanced delimiters, no obvious syntax errors,
-///   and contains the expected function signature. Parentheses that
-///   sit only in a comment or string do not count.
+///   and contains the expected function signature. Parentheses,
+///   and an ellipsis, that sit only in a comment or string do not
+///   count. A real `return ...` or `name = ...` in the body still does.
 /// - `0.5` - code present and mostly correct but has minor issues
-///   (unbalanced delimiters or missing return)
+///   (unbalanced delimiters, a real ellipsis, or missing return)
 /// - `0.0` - no code block found or prose-only response
 pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let request = ProbeRequest {
@@ -64,8 +65,10 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let braces_balanced = count_char(&code_body, '{') == count_char(&code_body, '}');
     let delimiters_ok = parens_balanced && brackets_balanced && braces_balanced;
 
-    let has_ellipsis = trimmed.lines().any(|l| {
-        let t = l.trim().trim_start_matches('#').trim();
+    // `code_body` already dropped comments and string text. An ellipsis
+    // that lives only in a string or a `#` comment is not a stub body.
+    let has_ellipsis = code_body.lines().any(|line| {
+        let t = line.trim();
         t == "..."
             || t == "...."
             || t == "return ..."
@@ -1211,6 +1214,47 @@ def merge_sorted(
             "ellipsis assignment stub must not be Strong: {result:?}"
         );
         assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_ellipsis_inside_string_or_comment_stays_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    note = \"example = ...\"\n    return a + b\n",
+            "def merge_sorted(a, b):\n    note = 'example = ...'\n    return a + b\n",
+            "def merge_sorted(a, b):\n    note = \"example=...\"\n    return a + b\n",
+            "def merge_sorted(a, b):\n    note = r\"example = ...\"\n    return a + b\n",
+            "def merge_sorted(a, b):\n    note = f\"example = ...\"\n    return a + b\n",
+            "def merge_sorted(a, b):\n    \"\"\"\n    example = ...\n    \"\"\"\n    return a + b\n",
+            "def merge_sorted(a, b):\n    # result = ...\n    return a + b\n",
+            "def merge_sorted(a, b):\n    return \"...\"\n",
+            "def merge_sorted(a, b):\n    return a + b  # example = ...\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "ellipsis inside a string or comment must stay Strong: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_string_ellipsis_does_not_hide_real_stub() {
+        let code = "def merge_sorted(a, b):\n    note = \"example = ...\"\n    return ...\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "a real return ... stays incomplete when a string also has an ellipsis: {result:?}"
+        );
     }
 
     #[tokio::test]
