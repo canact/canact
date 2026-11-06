@@ -159,8 +159,8 @@ Rules:
 ///   Comment marks inside a string on a `+` or `-` line do not hide
 ///   the function or the greeting. A `#` comment that is the whole
 ///   line is still ignored.
-/// - `0.5` - parseable but with wrong paths or extra junk
-/// - `0.0` - not a valid unified diff
+/// - `0.5` - parseable diff whose paths or body do not match the rename, or plus and minus lines with a missing header or hunk marker
+/// - `0.0` - not a recognizable unified diff, or an echo of the format card
 pub async fn probe_unified_diff<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let system = UNIFIED_DIFF_SYSTEM;
 

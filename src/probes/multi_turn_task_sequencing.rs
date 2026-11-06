@@ -98,8 +98,8 @@ fn is_precise_run(c: &ProbeToolCall) -> bool {
 /// - `0.7` - all three names but wrong order or same-turn dump; or
 ///   read then edit (missing verify); or read then run; or edit then run
 /// - `0.5` - full name chain with empty, whitespace, or imprecise args
-/// - `0.3` - sensible first tool only (`read_file` or `edit_file`) then stops
-/// - `0.0` - no tools or wrong-only start
+/// - `0.3` - stops after a first read_file or edit_file, or the only call is run_command
+/// - `0.0` - no tools, or the first tool is not read_file, edit_file, or run_command
 pub async fn probe_multi_turn_task_sequencing<C: ProbeClient>(
     llm: &C,
 ) -> Result<ProbeResult, ProbeError> {

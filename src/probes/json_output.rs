@@ -12,9 +12,10 @@ use super::{extract_json_from_text, refuse_truncated_incomplete_text, user_text}
 /// fields: `word`, `length`, and `reversed`.
 ///
 /// Scoring:
-/// - `1.0` - valid JSON with all three fields and correct types
-/// - Partial credit for valid JSON with fewer fields
-/// - `0.0` - response is not valid JSON
+/// - `1.0` - JSON object with word `hello`, length `5`, and reversed `olleh`
+/// - `0.5` - those three fields are present with the right types, but the values are not hello / 5 / olleh
+/// - partial - a JSON object that is missing one or more of those fields
+/// - `0.0` - not valid JSON, or the only complete hello object sits inside a JSON array or a JSON string
 pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let request = ProbeRequest {
         messages: vec![user_text(
