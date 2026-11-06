@@ -96,11 +96,14 @@ fn score_read_file_calls(calls: &[ProbeToolCall]) -> (f32, String) {
 /// require two different tools.
 ///
 /// Scoring:
-/// - `1.0` - two correct tool calls with correct names and required arguments
-/// - `0.8` - two tool calls, correct names, but one has extra/missing params
-/// - `0.5` - only one correct tool call
-/// - `0.3` - tool calls present but wrong names or merged parameters
-/// - `0.0` - no tool calls or calls to hallucinated tools
+/// - `1.0` - two correct tool calls with correct names and required
+///   nonempty string arguments
+/// - `0.5` - both expected names are present but a required argument is
+///   missing or not a nonempty string, or only one of the two calls is
+///   precise
+/// - `0.3` - tool calls are present but the names are wrong, including
+///   calls to tools that were not offered
+/// - `0.0` - no tool calls
 pub async fn probe_complex_tool_calling<C: ProbeClient>(
     llm: &C,
 ) -> Result<ProbeResult, ProbeError> {
