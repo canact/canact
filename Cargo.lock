@@ -2661,9 +2661,9 @@ dependencies = [
 
 [[package]]
 name = "wiremux"
-version = "0.11.9"
+version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26f624f03a59c70ddeb441b7d2b83be7b23b68f98c6f0bd86f5277664155f812"
+checksum = "f15239fa393663305551a313db84d5a8999966ae15b2d94557adcbedcf9d4799"
 dependencies = [
  "bytes",
  "futures-util",
@@ -2676,9 +2676,9 @@ dependencies = [
 
 [[package]]
 name = "wiremux-auth"
-version = "0.11.9"
+version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73978323a5ff29123bd9a8e21ad9084cd5ab25c2803073d5623498771083797a"
+checksum = "5e73144b9de543167ec1c7378dc5191116d1907c92446ac8d442fe880451b55d"
 dependencies = [
  "fs4",
  "getrandom 0.4.3",
