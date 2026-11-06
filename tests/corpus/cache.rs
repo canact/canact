@@ -1198,6 +1198,39 @@ fn stale_vision_grader_v1_resets_only_vision() {
 }
 
 #[test]
+fn stale_string_mark_graders_reset_only_those_dims() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("probe-cache.json");
+    let mut cache = ProbeCache::default();
+    cache.put(sample_profile()).expect("cache id");
+    for entry in cache.profiles.values_mut() {
+        entry.grader_versions.insert("code_syntax".into(), 1);
+        entry.grader_versions.insert("search_replace".into(), 1);
+        entry.grader_versions.insert("unified_diff".into(), 2);
+    }
+    cache.save(&path).expect("save");
+    let loaded = ProbeCache::load(&path).expect("load");
+    let got = loaded.get("m", "p").expect("hit");
+    assert_eq!(got.tool_calling.level, CapabilityLevel::Strong);
+    assert!(
+        got.code_syntax.is_unprobed_default(),
+        "code_syntax epoch 1 must reset: {:?}",
+        got.code_syntax
+    );
+    assert!(
+        got.search_replace.is_unprobed_default(),
+        "search_replace epoch 1 must reset: {:?}",
+        got.search_replace
+    );
+    assert!(
+        got.unified_diff.is_unprobed_default(),
+        "unified_diff epoch 2 must reset: {:?}",
+        got.unified_diff
+    );
+    assert_eq!(got.json_output.level, CapabilityLevel::Strong);
+}
+
+#[test]
 fn stale_unified_diff_grader_v1_resets_only_that_dim() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("probe-cache.json");

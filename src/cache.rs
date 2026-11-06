@@ -1561,13 +1561,23 @@ fn key_knobs_match_suite(
 ///
 /// When a grader changes, return a higher number for that `name` only.
 /// Do not bump [`PROBE_SUITE_VERSION`].
+///
+/// `code_syntax` 2 and `search_replace` 2 ignore a syntax mark that
+/// sits inside a string. `unified_diff` 3 uses that same comment strip.
+/// A cached Medium from the old strip is probed again.
 pub fn current_grader_version(name: &str) -> u32 {
     match name {
         "max_tokens_compliance" => 2,
         "context_faithfulness" => 2,
         // 3: probe image is 32x32 (1024 pixels). Epoch 2 scored the 16x16 image.
         "vision" => 3,
-        "unified_diff" => 2,
+        // 2: an ellipsis inside a string or comment is not an incomplete body.
+        "code_syntax" => 2,
+        // 2: `#`, `//`, and `/*` inside a string do not hide the edit.
+        "search_replace" => 2,
+        // 3: same string-aware comment strip as search_replace. Epoch 2
+        // scored a mark inside a string as a comment.
+        "unified_diff" => 3,
         _ => DEFAULT_GRADER_VERSION,
     }
 }

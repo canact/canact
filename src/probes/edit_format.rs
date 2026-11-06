@@ -12,7 +12,10 @@ use super::{refuse_truncated_incomplete_text, system_text, user_text};
 /// using the exact SEARCH/REPLACE format.
 ///
 /// Scoring:
-/// - `1.0` - parseable block with correct markers and matching content
+/// - `1.0` - parseable block with correct markers and matching content.
+///   A `#`, `//`, or `/*` inside a string, raw string, or character
+///   does not hide the function or the greeting. A comment that is
+///   the whole line still does not count, and `#[derive]` stays.
 /// - `0.7` - markers present and parseable but old_content has drift
 /// - `0.4` - markers present but block is not parseable
 /// - `0.0` - no SEARCH/REPLACE markers at all
@@ -152,7 +155,10 @@ Rules:
 /// Sends the same small file and asks for a unified diff format rename.
 ///
 /// Scoring:
-/// - `1.0` - parseable diff with correct headers and +/- lines
+/// - `1.0` - parseable diff with correct headers and +/- lines.
+///   Comment marks inside a string on a `+` or `-` line do not hide
+///   the function or the greeting. A `#` comment that is the whole
+///   line is still ignored.
 /// - `0.5` - parseable but with wrong paths or extra junk
 /// - `0.0` - not a valid unified diff
 pub async fn probe_unified_diff<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
@@ -240,35 +246,88 @@ Rename the function `greet` to `welcome` and change the greeting from \
     })
 }
 
-/// `fn greet(` / `fn welcome(` must start a line (after indent), not sit mid-sentence.
-/// The rest of the line must look like a Rust signature, not English
-/// (`should say`, `says`, `must print`).
+/// `fn greet(` / `fn welcome(` must sit outside a string, at an
+/// identifier boundary. `fn greet<'a>(` counts too. The rest must look
+/// like a Rust signature, not English (`should say`, `says`, `must print`).
+/// A signature may share the line with an earlier statement
+/// (`let label = "..."; fn greet(`).
+///
+/// Literals are masked first. `fn greet(` inside a label string is not
+/// the edit. The greeting check still reads the unmasked text, because
+/// `Hello` lives in `format!("Hello")`.
 fn has_code_fn_token(text: &str, token: &str) -> bool {
-    text.lines().any(|line| {
-        let t = line.trim_start();
-        let after = if let Some(rest) = t.strip_prefix(token) {
-            rest
-        } else if let Some(rest) = t.strip_prefix("pub ") {
-            let rest = rest.trim_start();
-            let Some(rest) = rest.strip_prefix(token) else {
-                return false;
-            };
-            rest
-        } else {
-            return false;
-        };
-        looks_like_rust_fn_signature_rest(after)
-    })
+    // Mask the whole block so a raw string or triple quote that spans
+    // lines hides `fn greet(` on a later line. Per-line masking would
+    // see that continuation as code.
+    mask_literals(text)
+        .lines()
+        .any(|line| line_has_code_fn_token(line, token))
 }
 
-/// After `fn greet(`, the rest must close the params and then be a type/`{`/`;`.
+fn line_has_code_fn_token(line: &str, token: &str) -> bool {
+    let Some(name) = token.strip_suffix('(') else {
+        return false;
+    };
+    let bytes = line.as_bytes();
+    let mut search = 0;
+    while let Some(rel) = line.get(search..).and_then(|rest| rest.find(name)) {
+        let idx = search + rel;
+        let boundary = idx == 0 || !is_ident_byte(bytes[idx - 1]);
+        if boundary
+            && let Some(after_paren) = skip_generics_to_paren(&line[idx + name.len()..])
+            && looks_like_rust_fn_signature_rest(after_paren)
+        {
+            return true;
+        }
+        search = idx + name.len();
+    }
+    false
+}
+
+/// `fn greet(` or `fn greet<'a>(`. Returns the text after the parameter `(`.
+fn skip_generics_to_paren(after_name: &str) -> Option<&str> {
+    let s = after_name.trim_start();
+    let bytes = s.as_bytes();
+    if bytes.first() == Some(&b'(') {
+        return Some(&s[1..]);
+    }
+    if bytes.first() != Some(&b'<') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (i, b) in bytes.iter().enumerate() {
+        match b {
+            b'<' => depth += 1,
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    let rest = s[i + 1..].trim_start();
+                    return rest.strip_prefix('(');
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// After `fn greet(`, the rest must close the params and then be a type,
+/// `;`, or a `{ ... }` body. A body on the same line counts when it
+/// looks like code (`format!(...)`, `return name`). English
+/// (`{ should say Hello }`) does not.
 fn looks_like_rust_fn_signature_rest(after_open_paren: &str) -> bool {
+    let bytes = after_open_paren.as_bytes();
     let mut depth = 1i32;
     let mut close = None;
-    for (i, c) in after_open_paren.char_indices() {
-        match c {
-            '(' => depth += 1,
-            ')' => {
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = literal_end(after_open_paren, i) {
+            i = end;
+            continue;
+        }
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
                 depth -= 1;
                 if depth == 0 {
                     close = Some(i);
@@ -277,23 +336,59 @@ fn looks_like_rust_fn_signature_rest(after_open_paren: &str) -> bool {
             }
             _ => {}
         }
+        i += 1;
     }
     let Some(close) = close else {
         return false;
     };
     let after = after_open_paren[close + 1..].trim();
-    let after = after
-        .strip_suffix('{')
-        .or_else(|| after.strip_suffix(';'))
-        .map(str::trim)
-        .unwrap_or(after);
-    if after.is_empty() {
+    if after.is_empty() || after == "{" || after == ";" {
         return true;
+    }
+    if let Some(body) = after.strip_prefix('{') {
+        return brace_body_is_code(body);
     }
     let Some(ty) = after.strip_prefix("->") else {
         return false;
     };
-    is_rust_type_tokens(ty.trim().trim_end_matches(['{', ';']).trim())
+    let (ty, body) = split_type_and_brace_body(ty.trim());
+    if !is_rust_type_tokens(ty.trim().trim_end_matches(';').trim()) {
+        return false;
+    }
+    match body {
+        Some(body) => brace_body_is_code(body),
+        None => true,
+    }
+}
+
+fn split_type_and_brace_body(after_arrow: &str) -> (&str, Option<&str>) {
+    let bytes = after_arrow.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = literal_end(after_arrow, i) {
+            i = end;
+            continue;
+        }
+        if bytes[i] == b'{' {
+            let body = after_arrow[i + 1..].trim().trim_end_matches('}').trim();
+            return (after_arrow[..i].trim(), Some(body));
+        }
+        let ch = after_arrow[i..].chars().next().expect("char");
+        i += ch.len_utf8();
+    }
+    (after_arrow.trim().trim_end_matches(';').trim(), None)
+}
+
+/// Empty braces stay code so a signature can end in `{` and put the
+/// body on the next line. A same-line body needs a call, an assignment,
+/// or a semicolon. `{ Hello }`, `{ doesn't print Hello }`, and
+/// `{ let me say Hello }` are lecture.
+fn brace_body_is_code(body: &str) -> bool {
+    let t = body.trim().trim_end_matches('}').trim();
+    if t.is_empty() {
+        return true;
+    }
+    t.contains(['(', ';', '='])
 }
 
 fn is_rust_type_tokens(s: &str) -> bool {
@@ -379,64 +474,307 @@ fn is_code_diff_line(line: &str, mark: char) -> bool {
     !strip_comments(&line[1..]).trim().is_empty()
 }
 
+/// Drop comments, but keep the text of string and character literals.
+/// The greeting lives in a string, so blanking literals would hide a
+/// real edit. A `#`, `//`, or `/*` inside a literal is not a comment.
+/// `#[` and `#!` stay.
 fn strip_comments(text: &str) -> String {
-    strip_line_comments(&strip_block_comments(text))
-}
-
-fn strip_block_comments(text: &str) -> String {
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("/*") {
-        out.push_str(&rest[..start]);
-        match rest[start + 2..].find("*/") {
-            Some(end) => rest = &rest[start + 4 + end..],
-            None => return out,
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-fn is_rust_attribute(text: &str) -> bool {
-    text.starts_with("#[") || text.starts_with("#!")
-}
-
-fn strip_inline_hash_comment(line: &str) -> &str {
-    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
     let mut i = 0;
+    let mut line_start = 0;
     while i < bytes.len() {
+        if let Some(end) = literal_end(text, i) {
+            let literal = &text[i..end];
+            out.push_str(literal);
+            if let Some(rel) = literal.rfind('\n') {
+                line_start = out.len() - (literal.len() - rel - 1);
+            }
+            i = end;
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            drop_rest_of_line(bytes, &mut i, &mut out, &mut line_start);
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            if i + 1 < bytes.len() {
+                i += 2;
+            } else {
+                i = bytes.len();
+            }
+            continue;
+        }
         if bytes[i] == b'#' {
-            let rest = &line[i..];
-            if is_rust_attribute(rest) {
+            let rest = &text[i..];
+            if rest.starts_with("#[") || rest.starts_with("#!") {
+                out.push('#');
                 i += 1;
                 continue;
             }
-            return &line[..i];
+            drop_rest_of_line(bytes, &mut i, &mut out, &mut line_start);
+            continue;
         }
-        i += 1;
+        let ch = text[i..].chars().next().expect("char");
+        out.push(ch);
+        i += ch.len_utf8();
+        if ch == '\n' {
+            line_start = out.len();
+        }
     }
-    line
+    out
 }
 
-fn strip_line_comments(text: &str) -> String {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") {
+fn drop_rest_of_line(bytes: &[u8], i: &mut usize, out: &mut String, line_start: &mut usize) {
+    while *i < bytes.len() && bytes[*i] != b'\n' {
+        *i += 1;
+    }
+    if out[*line_start..].chars().all(|ch| ch == ' ' || ch == '\t') {
+        out.truncate(*line_start);
+    }
+    if *i < bytes.len() && bytes[*i] == b'\n' {
+        if out.len() == *line_start {
+            *i += 1;
+        } else {
+            out.push('\n');
+            *i += 1;
+            *line_start = out.len();
+        }
+    }
+}
+
+fn mask_literals(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = literal_end(text, i) {
+            out.extend(text[i..end].chars().map(|_| ' '));
+            i = end;
+            continue;
+        }
+        let ch = text[i..].chars().next().expect("char");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// End index of a Rust or Python literal that starts at `i`.
+/// `None` when `i` is not a literal. An unclosed raw string runs
+/// through the end of `text` so its `#` delimiters are not comments.
+fn literal_end(text: &str, i: usize) -> Option<usize> {
+    if let Some(end) = raw_string_end(text, i) {
+        return Some(end);
+    }
+    if let Some(end) = triple_quote_end(text, i) {
+        return Some(end);
+    }
+    if let Some(end) = prefixed_byte_or_c_end(text, i) {
+        return Some(end);
+    }
+    let bytes = text.as_bytes();
+    if bytes.get(i) == Some(&b'"') {
+        return Some(escaped_string_end(text, i));
+    }
+    if bytes.get(i) == Some(&b'\'') {
+        if let Some(end) = char_literal_end(text, i) {
+            return Some(end);
+        }
+        if let Some(end) = single_quote_with_comment_mark_end(text, i) {
+            return Some(end);
+        }
+    }
+    None
+}
+
+fn raw_string_end(text: &str, i: usize) -> Option<usize> {
+    if i > 0 && is_ident_byte(text.as_bytes()[i - 1]) {
+        return None;
+    }
+    let rest = text.get(i..)?;
+    let prefix = if rest.starts_with("br") || rest.starts_with("cr") {
+        2
+    } else if rest.starts_with('r') {
+        1
+    } else {
+        return None;
+    };
+    let bytes = text.as_bytes();
+    let mut j = i + prefix;
+    let mut hashes = 0usize;
+    while j < bytes.len() && bytes[j] == b'#' {
+        hashes += 1;
+        j += 1;
+    }
+    if j >= bytes.len() || bytes[j] != b'"' {
+        return None;
+    }
+    j += 1;
+    Some(find_raw_closer(text, j, hashes).unwrap_or(text.len()))
+}
+
+fn find_raw_closer(text: &str, from: usize, hashes: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut j = from;
+    while j < bytes.len() {
+        if bytes[j] == b'"' {
+            let mut k = 0;
+            while k < hashes && j + 1 + k < bytes.len() && bytes[j + 1 + k] == b'#' {
+                k += 1;
+            }
+            if k == hashes {
+                return Some(j + 1 + hashes);
+            }
+        }
+        j += 1;
+    }
+    None
+}
+
+fn triple_quote_end(text: &str, i: usize) -> Option<usize> {
+    let rest = text.get(i..)?;
+    let quote = if rest.starts_with("\"\"\"") {
+        "\"\"\""
+    } else if rest.starts_with("'''") {
+        "'''"
+    } else {
+        return None;
+    };
+    let search_from = i + quote.len();
+    let rel = text.get(search_from..)?.find(quote)?;
+    Some(search_from + rel + quote.len())
+}
+
+fn prefixed_byte_or_c_end(text: &str, i: usize) -> Option<usize> {
+    if i > 0 && is_ident_byte(text.as_bytes()[i - 1]) {
+        return None;
+    }
+    let rest = text.get(i..)?;
+    if rest.starts_with("b\"") || rest.starts_with("c\"") {
+        Some(escaped_string_end(text, i + 1))
+    } else if rest.starts_with("b'") || rest.starts_with("c'") {
+        char_literal_end(text, i + 1)
+    } else {
+        None
+    }
+}
+
+fn escaped_string_end(text: &str, quote_at: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut j = quote_at + 1;
+    while j < bytes.len() {
+        let b = bytes[j];
+        if b == b'\\' {
+            j += 1;
+            if j < bytes.len() {
+                j += 1;
+            }
+            continue;
+        }
+        if b == b'"' {
+            return j + 1;
+        }
+        // A Rust string cannot cross a raw newline. Stopping here keeps
+        // a real function on the next line when the closer was dropped.
+        if b == b'\n' {
+            return j;
+        }
+        j += 1;
+    }
+    text.len()
+}
+
+fn char_literal_end(text: &str, quote_at: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.get(quote_at) != Some(&b'\'') {
+        return None;
+    }
+    let mut j = quote_at + 1;
+    if j >= bytes.len() || bytes[j] == b'\n' || bytes[j] == b'\'' {
+        return None;
+    }
+    if bytes[j] == b'\\' {
+        j += 1;
+        if j >= bytes.len() || bytes[j] == b'\n' {
+            return None;
+        }
+        if bytes[j] == b'x' {
+            j += 1;
+            if j + 1 >= bytes.len()
+                || !bytes[j].is_ascii_hexdigit()
+                || !bytes[j + 1].is_ascii_hexdigit()
+            {
                 return None;
             }
-            // `#` comments (Python/shell). Rust attributes (`#[`, `#!`) stay.
-            if trimmed.starts_with('#') && !is_rust_attribute(trimmed) {
+            j += 2;
+        } else if bytes[j] == b'u' {
+            j += 1;
+            if j >= bytes.len() || bytes[j] != b'{' {
                 return None;
             }
-            let without_slashes = match line.split_once("//") {
-                Some((code, _)) => code,
-                None => line,
-            };
-            Some(strip_inline_hash_comment(without_slashes))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            j += 1;
+            let start = j;
+            while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            if j == start || j >= bytes.len() || bytes[j] != b'}' {
+                return None;
+            }
+            j += 1;
+        } else {
+            j += 1;
+        }
+    } else {
+        let ch = text.get(j..)?.chars().next()?;
+        j += ch.len_utf8();
+    }
+    if bytes.get(j) == Some(&b'\'') {
+        Some(j + 1)
+    } else {
+        None
+    }
+}
+
+/// Python `'a # b'` hides comment marks. A Rust lifetime (`'a`, `'static`)
+/// has no closer, or the span to the next `'` has no comment mark, so
+/// it stays code.
+fn single_quote_with_comment_mark_end(text: &str, quote_at: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.get(quote_at) != Some(&b'\'') {
+        return None;
+    }
+    let mut j = quote_at + 1;
+    let mut saw_mark = false;
+    while j < bytes.len() && bytes[j] != b'\n' {
+        if bytes[j] == b'\\' {
+            j += 1;
+            if j < bytes.len() && bytes[j] != b'\n' {
+                j += 1;
+            }
+            continue;
+        }
+        if bytes[j] == b'\'' {
+            return if saw_mark { Some(j + 1) } else { None };
+        }
+        if bytes[j] == b'#' {
+            saw_mark = true;
+        }
+        if bytes[j] == b'/' && j + 1 < bytes.len() && (bytes[j + 1] == b'/' || bytes[j + 1] == b'*')
+        {
+            saw_mark = true;
+        }
+        j += 1;
+    }
+    None
 }
 
 /// Collapse ASCII whitespace, hyphens, underscores, and ZWSP/format
@@ -653,6 +991,283 @@ src/greet.rs
             CapabilityLevel::Strong,
             "comment tokens must not set SearchReplace: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn search_replace_mark_inside_string_stays_strong() {
+        for (old_line, new_line) in [
+            (
+                "let label = \"a # b\"; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"c # d\"; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = \"http://old\"; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"http://new\"; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = \"a /* b\"; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"c /* d\"; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = r#\"a # b\"#; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = r#\"c # d\"#; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = '#'; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = '#'; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = 'a # b'; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = 'c # d'; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = \"\"\"a # b\"\"\"; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"\"\"c # d\"\"\"; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "pub(crate) fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "pub(crate) fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "async fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "async fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = br#\"a # b\"#; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = br#\"c # d\"#; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = b'#'; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = b'#'; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+        ] {
+            let response_text = format!(
+                "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+{old_line}
+=======
+{new_line}
+>>>>>>> REPLACE"
+            );
+            let result = probe_search_replace(&MockLlm {
+                response: text_response(&response_text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a mark inside a string must not hide the edit: {old_line:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{old_line:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn search_replace_comment_after_string_is_not_strong() {
+        for (old_line, new_line) in [
+            (
+                "let label = \"ok\"; // fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"ok\"; // fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = \"ok\"; # fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"ok\"; # fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+        ] {
+            let response_text = format!(
+                "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+{old_line}
+=======
+{new_line}
+>>>>>>> REPLACE"
+            );
+            let result = probe_search_replace(&MockLlm {
+                response: text_response(&response_text),
+            })
+            .await
+            .unwrap();
+            assert_ne!(
+                result.score, 1.0,
+                "a comment after a string must not count as the edit: {old_line:?} {result:?}"
+            );
+            assert_ne!(result.level, CapabilityLevel::Strong, "{old_line:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn search_replace_braced_lecture_is_not_strong() {
+        for (old_line, new_line) in [
+            (
+                "fn greet(name: &str) -> String { should say Hello }",
+                "fn welcome(name: &str) -> String { should say Welcome }",
+            ),
+            (
+                "fn greet(name: &str) -> String { Hello }",
+                "fn welcome(name: &str) -> String { Welcome }",
+            ),
+            (
+                "fn greet(name: &str) -> String { doesn't print Hello }",
+                "fn welcome(name: &str) -> String { doesn't print Welcome }",
+            ),
+            (
+                "fn greet(name: &str) -> String { should say Hello. }",
+                "fn welcome(name: &str) -> String { should say Welcome. }",
+            ),
+            (
+                "fn greet(name: &str) -> String { let me say Hello }",
+                "fn welcome(name: &str) -> String { let me say Welcome }",
+            ),
+            (
+                "fn greet(name: &str) -> String { for example Hello }",
+                "fn welcome(name: &str) -> String { for example Welcome }",
+            ),
+        ] {
+            let response_text = format!(
+                "\
+<<<<<<< SEARCH
+src/greet.rs
+{old_line}
+=======
+{new_line}
+>>>>>>> REPLACE"
+            );
+            let result = probe_search_replace(&MockLlm {
+                response: text_response(&response_text),
+            })
+            .await
+            .unwrap();
+            assert_ne!(
+                result.score, 1.0,
+                "a braced lecture must not be Strong: {old_line:?} {result:?}"
+            );
+            assert_ne!(result.level, CapabilityLevel::Strong, "{old_line:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn search_replace_real_fn_after_raw_string_stays_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+let s = r#\"
+note
+\"#;
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+}
+=======
+let s = r#\"
+note
+\"#;
+fn welcome(name: &str) -> String {
+    format!(\"Welcome, {}\", name)
+}
+>>>>>>> REPLACE";
+        let result = probe_search_replace(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a function after a closed raw string must stay Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn search_replace_fn_after_unclosed_quote_stays_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+let s = \"unclosed
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+}
+=======
+let s = \"unclosed
+fn welcome(name: &str) -> String {
+    format!(\"Welcome, {}\", name)
+}
+>>>>>>> REPLACE";
+        let result = probe_search_replace(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a dropped string closer must not hide the next line: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn search_replace_fn_inside_spanning_string_is_not_strong() {
+        for (old_body, new_body) in [
+            (
+                "let s = r#\"\nfn greet(name: &str) -> String { format!(\"Hello, {}\", name) }\n\"#;",
+                "let s = r#\"\nfn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }\n\"#;",
+            ),
+            (
+                "let s = \"\"\"\nfn greet(name: &str) -> String { format!(\"Hello, {}\", name) }\n\"\"\";",
+                "let s = \"\"\"\nfn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }\n\"\"\";",
+            ),
+        ] {
+            let response_text = format!(
+                "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+{old_body}
+=======
+{new_body}
+>>>>>>> REPLACE"
+            );
+            let result = probe_search_replace(&MockLlm {
+                response: text_response(&response_text),
+            })
+            .await
+            .unwrap();
+            assert_ne!(
+                result.score, 1.0,
+                "fn inside a spanning string must not be Strong: {old_body:?} {result:?}"
+            );
+            assert_ne!(result.level, CapabilityLevel::Strong, "{old_body:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn search_replace_lifetime_signature_stays_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+fn greet<'a>(name: &'a str) -> String {
+    format!(\"Hello, {}\", name)
+}
+=======
+fn welcome<'a>(name: &'a str) -> String {
+    format!(\"Welcome, {}\", name)
+}
+>>>>>>> REPLACE";
+        let result = probe_search_replace(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "lifetimes must not be read as strings: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
@@ -1064,6 +1679,40 @@ fn welcome(name: &str) -> String {
             "comment-only +/- must not set UnifiedDiff: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_mark_inside_string_stays_strong() {
+        for (old_line, new_line) in [
+            (
+                "let label = \"a # b\"; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"c # d\"; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+            (
+                "let label = \"http://old\"; fn greet(name: &str) -> String { format!(\"Hello, {}\", name) }",
+                "let label = \"http://new\"; fn welcome(name: &str) -> String { format!(\"Welcome, {}\", name) }",
+            ),
+        ] {
+            let response_text = format!(
+                "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,1 +1,1 @@
+-{old_line}
++{new_line}
+"
+            );
+            let result = probe_unified_diff(&MockLlm {
+                response: text_response(&response_text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a mark inside a string on a diff line must stay Strong: {old_line:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{old_line:?}");
+        }
     }
 
     #[tokio::test]
