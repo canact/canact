@@ -3,6 +3,16 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.4](https://github.com/canact/canact/compare/v0.12.3...v0.12.4) (2026-11-07)
+
+
+### Bug Fixes
+
+* consume wiremux 0.11.10 ([#393](https://github.com/canact/canact/issues/393)) ([9919c1b](https://github.com/canact/canact/commit/9919c1b2ecb78f733c6843fb25131a1f7527be6d))
+* consume wiremux 0.11.11 ([#395](https://github.com/canact/canact/issues/395)) ([0d545a3](https://github.com/canact/canact/commit/0d545a34fe11d717c2cff7067659898d11675f12))
+* ignore a syntax mark that sits inside a string ([#391](https://github.com/canact/canact/issues/391)) ([19c2e14](https://github.com/canact/canact/commit/19c2e14f0adfb96fffe3d4e9c92e2e7c28a59bbb))
+* reject MCP cheap together with full ([#394](https://github.com/canact/canact/issues/394)) ([bd7c832](https://github.com/canact/canact/commit/bd7c832a3f729786bf347e7080d330ea0180e705))
+
 ## [0.12.3](https://github.com/canact/canact/compare/v0.12.2...v0.12.3) (2026-10-25)
 
 
