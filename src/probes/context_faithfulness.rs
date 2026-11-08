@@ -115,26 +115,50 @@ fn recalls_timeout(lower: &str) -> bool {
 }
 
 fn integer_is_planted_ms(lower: &str) -> bool {
-    if has_milliseconds_unit(lower) {
-        return true;
-    }
-    // 1750 seconds / 1750s is 1000x the planted millisecond fact.
-    if has_seconds_unit(lower)
-        || has_compact_seconds_after_integer(lower)
-        || has_minutes_unit(lower)
-        || has_hours_unit(lower)
-    {
-        return false;
-    }
-    true
+    // `1750 seconds` is 1000x the planted fact, even if the reply also
+    // says milliseconds. `1750 ms` next to some other "3 seconds" still counts.
+    planted_ms_integer_ok(lower, "1750")
 }
 
-fn has_compact_seconds_after_integer(lower: &str) -> bool {
-    let compact: String = lower
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != ',')
-        .collect();
-    compact.contains("1750s") && !compact.contains("1750ms")
+fn planted_ms_integer_ok(lower: &str, digits: &str) -> bool {
+    let folded: String = lower.chars().filter(|c| *c != ',').collect();
+    let mut rest = folded.as_str();
+    while let Some(rel) = rest.find(digits) {
+        let abs = folded.len() - rest.len() + rel;
+        let before_digit = abs > 0 && folded.as_bytes()[abs - 1].is_ascii_digit();
+        let after = abs + digits.len();
+        let after_digit = after < folded.len() && folded.as_bytes()[after].is_ascii_digit();
+        if !before_digit && !after_digit {
+            let tail = folded[after..].trim_start();
+            let word: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            if !is_larger_time_unit(&word) {
+                return true;
+            }
+        }
+        let next = rel + digits.len();
+        rest = &rest[next..];
+    }
+    false
+}
+
+fn is_larger_time_unit(word: &str) -> bool {
+    matches!(
+        word,
+        "s" | "sec"
+            | "second"
+            | "seconds"
+            | "min"
+            | "mins"
+            | "minute"
+            | "minutes"
+            | "hr"
+            | "hrs"
+            | "hour"
+            | "hours"
+    )
 }
 
 fn has_seconds_unit(lower: &str) -> bool {
@@ -365,6 +389,18 @@ mod tests {
         assert!(
             !recalls_timeout("1750 seconds"),
             "1750 seconds is 1000x the planted ms fact"
+        );
+        assert!(
+            !recalls_timeout("1750 seconds, not milliseconds"),
+            "1750 seconds stays rejected when the word milliseconds is also present"
+        );
+        assert!(
+            recalls_timeout("1750 milliseconds, not seconds"),
+            "1750 milliseconds stays recalled when the reply also says seconds"
+        );
+        assert!(
+            !recalls_timeout("11750"),
+            "11750 is a longer integer, not the planted 1750"
         );
         assert!(
             !recalls_timeout("1750s"),

@@ -1563,6 +1563,8 @@ fn key_knobs_match_suite(
 /// Do not bump [`PROBE_SUITE_VERSION`].
 ///
 /// `search_replace` 2 ignores a syntax mark that sits inside a string.
+/// `context_faithfulness` 3 counts `2840 ms` when the reply also
+/// mentions some other number of seconds. `2840 seconds` stays out.
 /// `code_syntax` 5 keeps a comma or colon inside a default or a
 /// return annotation. Epoch 4 treats `return a or b` as a real body.
 /// `unified_diff` 3 uses the
@@ -1571,7 +1573,10 @@ fn key_knobs_match_suite(
 pub fn current_grader_version(name: &str) -> u32 {
     match name {
         "max_tokens_compliance" => 2,
-        "context_faithfulness" => 2,
+        // 2: derived from ladder recall. 3: the unit has to follow the
+        // planted integer. `2840 ms` plus "3 seconds" stays a hit.
+        // `2840 seconds` does not.
+        "context_faithfulness" => 3,
         // 3: probe image is 32x32 (1024 pixels). Epoch 2 scored the 16x16 image.
         "vision" => 3,
         // 2: an ellipsis inside a string or comment is not an incomplete body.
@@ -1682,6 +1687,45 @@ mod tests {
             entry.profile.code_syntax.details
         );
         assert_eq!(entry.profile.search_replace.details, "kept");
+    }
+
+    #[test]
+    fn context_faithfulness_grader_epoch_3_resets_an_epoch_2_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.context_faithfulness.details = "2840 ms erased by 3 seconds".to_owned();
+        profile.context_faithfulness.level = CapabilityLevel::Medium;
+        profile.context_faithfulness.score = 2.0 / 3.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry
+            .grader_versions
+            .insert("context_faithfulness".to_owned(), 2);
+        entry.grader_versions.insert("code_syntax".to_owned(), 5);
+        entry.profile.context_faithfulness.details = "2840 ms erased by 3 seconds".to_owned();
+        entry.profile.context_faithfulness.level = CapabilityLevel::Medium;
+        entry.profile.context_faithfulness.score = 2.0 / 3.0;
+        entry.profile.code_syntax.details = "kept".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(
+            entry.grader_versions.get("context_faithfulness").copied(),
+            Some(3)
+        );
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(5));
+        assert!(
+            entry
+                .profile
+                .context_faithfulness
+                .details
+                .starts_with("Not probed"),
+            "{}",
+            entry.profile.context_faithfulness.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
     }
 
     #[test]
