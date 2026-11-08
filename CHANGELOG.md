@@ -3,6 +3,17 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.5](https://github.com/canact/canact/compare/v0.12.4...v0.12.5) (2026-11-08)
+
+
+### Bug Fixes
+
+* consume wiremux 0.11.13 ([#400](https://github.com/canact/canact/issues/400)) ([3bfeb7b](https://github.com/canact/canact/commit/3bfeb7bcff0de42389dd5a66611b57a365349f1a))
+* count a millisecond fact beside another seconds timeout ([#403](https://github.com/canact/canact/issues/403)) ([ba145e4](https://github.com/canact/canact/commit/ba145e432e283604c683742cd8cb4bdf56e602c2))
+* keep a comma inside a parameter default ([#402](https://github.com/canact/canact/issues/402)) ([650e91e](https://github.com/canact/canact/commit/650e91e64049537c99f6b6dd84ca37d6a0195737))
+* score a python word-operator return as a real body ([#401](https://github.com/canact/canact/issues/401)) ([3d77fcd](https://github.com/canact/canact/commit/3d77fcdaf96d6714228823f69c9a26e7b351a941))
+* score a value ellipsis as an incomplete function ([#398](https://github.com/canact/canact/issues/398)) ([51bacbc](https://github.com/canact/canact/commit/51bacbc723461833a0f69013764e575a8cd850e9)), closes [#396](https://github.com/canact/canact/issues/396)
+
 ## [0.12.4](https://github.com/canact/canact/compare/v0.12.3...v0.12.4) (2026-11-07)
 
 
