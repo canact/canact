@@ -747,7 +747,9 @@ fn looks_like_same_line_body(line: &str) -> bool {
             || after.starts_with(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
         if bounded {
             // `return`, `return(`, `return[`, and `return"..."` stay real.
-            // Two or more space-separated bare words with no operator is English.
+            // Word operators (`and`, `or`, `not`, `lambda`, ...) and code
+            // punctuation (`|`, `&`, `:`, `.`, `@`) are a body. Two or more
+            // bare English words are not. A final period is not an operator.
             // An f-string still counts when the text has spaces (`f"café ..."`).
             if after.is_empty()
                 || after.starts_with(['(', '['])
@@ -765,10 +767,7 @@ fn looks_like_same_line_body(line: &str) -> bool {
             {
                 return true;
             }
-            if rest.contains(['+', '-', '*', '/', '%', ',', '(', '[', '<', '>', '=', '!']) {
-                return true;
-            }
-            return rest.split_whitespace().nth(1).is_none();
+            return return_rest_is_code(rest);
         }
     }
     if t == "pass"
@@ -790,6 +789,28 @@ fn looks_like_same_line_body(line: &str) -> bool {
     }
     let after = t[ident_end..].trim_start();
     after.starts_with('=') || after.starts_with('(')
+}
+
+fn return_rest_is_code(rest: &str) -> bool {
+    let trimmed = rest.trim_end();
+    let sentence = trimmed.strip_suffix('.').unwrap_or(trimmed);
+    if sentence.contains([
+        '+', '-', '*', '/', '%', ',', '(', '[', '<', '>', '=', '!', ':', '|', '&', '^', '~', '.',
+        '@',
+    ]) {
+        return true;
+    }
+    if sentence.split_whitespace().any(is_return_operator_word) {
+        return true;
+    }
+    sentence.split_whitespace().nth(1).is_none()
+}
+
+fn is_return_operator_word(word: &str) -> bool {
+    matches!(
+        word,
+        "and" | "or" | "not" | "in" | "is" | "if" | "else" | "elif" | "lambda" | "await" | "yield"
+    )
 }
 
 fn is_simple_ident(s: &str) -> bool {
@@ -1434,6 +1455,49 @@ def merge_sorted(a, b):
                 "English return phrase is not a body: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_word_operator_return_is_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    return a or b\n",
+            "def merge_sorted(a, b):\n    return a and b\n",
+            "def merge_sorted(a, b):\n    return not a\n",
+            "def merge_sorted(a, b):\n    return a if b else a\n",
+            "def merge_sorted(a, b):\n    return a | b\n",
+            "def merge_sorted(a, b):\n    return a & b\n",
+            "def merge_sorted(a, b):\n    return lambda: a\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "word-operator return must be Strong: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_word_operator_value_ellipsis_is_not_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    return a or ...\n",
+            "def merge_sorted(a, b):\n    return lambda: ...\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.5,
+                "value ellipsis on a word-operator return stays incomplete: {code:?} {result:?}"
+            );
+            assert_ne!(result.level, CapabilityLevel::Strong, "{code:?}");
         }
     }
 

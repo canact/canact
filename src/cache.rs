@@ -1563,8 +1563,8 @@ fn key_knobs_match_suite(
 /// Do not bump [`PROBE_SUITE_VERSION`].
 ///
 /// `search_replace` 2 ignores a syntax mark that sits inside a string.
-/// `code_syntax` 3 treats a value ellipsis as a stub, including
-/// parentheses and f-string expressions. `unified_diff` 3 uses the
+/// `code_syntax` 4 treats `return a or b`, `return a | b`, and
+/// `return a if b else a` as a real body. `unified_diff` 3 uses the
 /// same comment strip as search_replace. A cached score from an older
 /// epoch is probed again.
 pub fn current_grader_version(name: &str) -> u32 {
@@ -1576,7 +1576,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         // 2: an ellipsis inside a string or comment is not an incomplete body.
         // 3: a value ellipsis is a stub (`return (...)`, `f"{...}"`,
         // `helper(...)`). A slice, type subscript, or parameter default is not.
-        "code_syntax" => 3,
+        // 4: `return a or b`, `return a | b`, and `return a if b else a`
+        // are a real body.
+        "code_syntax" => 4,
         // 2: `#`, `//`, and `/*` inside a string do not hide the edit.
         "search_replace" => 2,
         // 3: same string-aware comment strip as search_replace. Epoch 2
@@ -1648,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn code_syntax_grader_epoch_3_resets_an_epoch_2_row() {
+    fn code_syntax_grader_epoch_4_resets_an_epoch_3_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
         profile.code_syntax.details = "parenthesized ellipsis scored Strong".to_owned();
@@ -1659,14 +1661,14 @@ mod tests {
         profile.search_replace.score = 1.0;
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
-        entry.grader_versions.insert("code_syntax".to_owned(), 2);
+        entry.grader_versions.insert("code_syntax".to_owned(), 3);
         entry.grader_versions.insert("search_replace".to_owned(), 2);
         entry.profile.code_syntax.details = "parenthesized ellipsis scored Strong".to_owned();
         entry.profile.code_syntax.level = CapabilityLevel::Strong;
         entry.profile.code_syntax.score = 1.0;
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(3));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(4));
         assert_eq!(
             entry.grader_versions.get("search_replace").copied(),
             Some(2)
