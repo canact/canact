@@ -612,13 +612,23 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
 }
 
 /// Offset of the def colon after `def merge_sorted`.
-/// Scans through balanced parens so wrapped parameter lists still count.
-/// A no-paren signature must put its colon on the first line.
+/// Strings and `{...}` defaults do not supply that colon. A no-paren
+/// signature must put its colon on the first line.
 fn signature_colon_offset(after: &str) -> Option<usize> {
+    let bytes = after.as_bytes();
     let mut paren = 0i32;
     let mut brack = 0i32;
+    let mut brace = 0i32;
     let mut seen_paren = false;
-    for (i, c) in after.char_indices() {
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = skip_string_at(after, i) {
+            i = end;
+            continue;
+        }
+        let Some(c) = after.get(i..).and_then(|rest| rest.chars().next()) else {
+            break;
+        };
         match c {
             '(' => {
                 paren += 1;
@@ -627,10 +637,13 @@ fn signature_colon_offset(after: &str) -> Option<usize> {
             ')' => paren -= 1,
             '[' => brack += 1,
             ']' => brack -= 1,
-            ':' if paren <= 0 && brack <= 0 => return Some(i),
-            '\n' if !seen_paren && paren <= 0 => return None,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            ':' if paren <= 0 && brack <= 0 && brace <= 0 => return Some(i),
+            '\n' if !seen_paren && paren <= 0 && brace <= 0 => return None,
             _ => {}
         }
+        i += c.len_utf8();
     }
     None
 }
@@ -639,7 +652,9 @@ fn looks_like_parameter_list(between: &str) -> bool {
     let stripped = strip_hash_comments(between);
     let s = strip_return_annotation(stripped.trim());
     if s.starts_with('(') && s.ends_with(')') {
-        if count_char(s, '(') != count_char(s, ')') {
+        // A default like `"("` must not look unbalanced.
+        let visible = strip_python_string_literals(s);
+        if count_char(&visible, '(') != count_char(&visible, ')') {
             return false;
         }
         let inner = s[1..s.len() - 1].trim();
@@ -688,23 +703,42 @@ fn strip_return_annotation(s: &str) -> &str {
     s
 }
 
+fn skip_string_at(text: &str, i: usize) -> Option<usize> {
+    let (quote_at, quote, _) = string_literal_at(text, i)?;
+    let end = skip_python_string(text, quote_at, quote);
+    (end > i).then_some(end)
+}
+
 fn split_top_level_commas(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
     let mut paren = 0i32;
     let mut brack = 0i32;
-    for (i, c) in s.char_indices() {
+    let mut brace = 0i32;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = skip_string_at(s, i) {
+            i = end;
+            continue;
+        }
+        let Some(c) = s.get(i..).and_then(|rest| rest.chars().next()) else {
+            break;
+        };
         match c {
             '(' => paren += 1,
             ')' => paren -= 1,
             '[' => brack += 1,
             ']' => brack -= 1,
-            ',' if paren <= 0 && brack <= 0 => {
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            ',' if paren <= 0 && brack <= 0 && brace <= 0 => {
                 out.push(s[start..i].trim());
-                start = i + 1;
+                start = i + c.len_utf8();
             }
             _ => {}
         }
+        i += c.len_utf8();
     }
     out.push(s[start..].trim());
     out
@@ -1477,6 +1511,26 @@ def merge_sorted(a, b):
             assert_eq!(
                 result.score, 1.0,
                 "word-operator return must be Strong: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_nested_default_is_strong() {
+        for code in [
+            "def merge_sorted(a, b=\", \"):\n    return a + b\n",
+            "def merge_sorted(a, b={\"x\": 1, \"y\": 2}):\n    return a + b\n",
+            "def merge_sorted(a, b) -> \"a:b\":\n    return a + b\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "comma or colon inside a default must stay Strong: {code:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
         }
