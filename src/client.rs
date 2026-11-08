@@ -119,23 +119,28 @@ pub enum ProbeFinish {
 /// | --- | --- |
 /// | `stop`, `end_turn`, `eos` | [`ProbeFinish::Stop`] |
 /// | `tool_calls`, `tool_use`, `function_call` | [`ProbeFinish::ToolCalls`] |
-/// | `length`, `max_tokens` (any case) | [`ProbeFinish::Length`] |
+/// | `length`, `max_tokens`, `incomplete`, `model_context_window_exceeded` (any case) | [`ProbeFinish::Length`] |
 /// | `content_filter`, `content_filtered`, `refusal`, `guardrail_intervened`, `safety`, `recitation`, `blocklist`, `prohibited_content`, `spii`, `image_safety`, `language` | [`ProbeFinish::Safety`] |
 /// | `malformed_function_call` (any case) | [`ProbeFinish::Malformed`] |
 /// | anything else, including `other` and `OTHER` | [`ProbeFinish::Other`] |
 ///
-/// Safety tokens, `malformed_function_call`, `length`, and `max_tokens`
+/// Safety tokens, `malformed_function_call`, and the length tokens
 /// are matched without case, so Gemini `SAFETY`, `MALFORMED_FUNCTION_CALL`,
-/// and `MAX_TOKENS` count.
+/// and `MAX_TOKENS` count. `incomplete` is the Responses context-window
+/// status. `model_context_window_exceeded` is the Messages stop.
 /// `stop` stays exact: `STOP` is still [`ProbeFinish::Other`].
 #[must_use]
 pub fn finish_from_reason(reason: &str) -> ProbeFinish {
     match reason {
         "stop" | "end_turn" | "eos" => ProbeFinish::Stop,
         "tool_calls" | "tool_use" | "function_call" => ProbeFinish::ToolCalls,
-        "length" | "max_tokens" => ProbeFinish::Length,
+        "length" | "max_tokens" | "incomplete" | "model_context_window_exceeded" => {
+            ProbeFinish::Length
+        }
         _ => match reason.to_ascii_lowercase().as_str() {
-            "length" | "max_tokens" => ProbeFinish::Length,
+            "length" | "max_tokens" | "incomplete" | "model_context_window_exceeded" => {
+                ProbeFinish::Length
+            }
             "malformed_function_call" => ProbeFinish::Malformed,
             "content_filter"
             | "content_filtered"
@@ -460,6 +465,15 @@ mod tests {
     fn finish_from_reason_length_family() {
         assert_eq!(finish_from_reason("length"), ProbeFinish::Length);
         assert_eq!(finish_from_reason("max_tokens"), ProbeFinish::Length);
+        assert_eq!(finish_from_reason("incomplete"), ProbeFinish::Length);
+        assert_eq!(
+            finish_from_reason("model_context_window_exceeded"),
+            ProbeFinish::Length
+        );
+        assert_eq!(
+            finish_from_reason("MODEL_CONTEXT_WINDOW_EXCEEDED"),
+            ProbeFinish::Length
+        );
     }
 
     #[test]

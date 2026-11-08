@@ -1843,6 +1843,36 @@ mod tests {
     }
 
     #[test]
+    fn messages_context_window_stop_is_length() {
+        use wiremux::{Wire, decode_response, parse_profile_str};
+
+        let profile = parse_profile_str(
+            "schema_version = 1\nid = \"claude\"\nwire = \"messages\"\nbase_url = \"https://api.anthropic.com\"\nchat_path = \"/v1/messages\"\nauth_scheme = \"bearer\"\n",
+        )
+        .expect("messages profile");
+        let body = br#"{"content":[{"type":"text","text":"partial"}],"stop_reason":"model_context_window_exceeded"}"#;
+        let events = decode_response(Wire::Messages, body, &profile).expect("decode");
+        let response = scored_completion(events).expect("context window stop is a finish");
+        assert_eq!(response.text, "partial");
+        assert_eq!(response.finish, ProbeFinish::Length);
+    }
+
+    #[test]
+    fn responses_incomplete_max_output_is_length() {
+        use wiremux::{Wire, decode_response, parse_profile_str};
+
+        let profile = parse_profile_str(
+            "schema_version = 1\nid = \"codex\"\nwire = \"responses\"\nbase_url = \"https://api.openai.com\"\nchat_path = \"/v1/responses\"\nauth_scheme = \"bearer\"\n",
+        )
+        .expect("responses profile");
+        let body = br#"{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cut"}]}]}"#;
+        let events = decode_response(Wire::Responses, body, &profile).expect("decode");
+        let response = scored_completion(events).expect("max_output_tokens is a finish");
+        assert_eq!(response.text, "cut");
+        assert_eq!(response.finish, ProbeFinish::Length);
+    }
+
+    #[test]
     fn responses_failed_encrypted_leaf_is_not_a_score() {
         use wiremux::{Wire, decode_response, parse_profile_str};
 
