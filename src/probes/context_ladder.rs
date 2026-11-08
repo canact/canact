@@ -279,24 +279,50 @@ fn recalls_heartbeat(text: &str) -> bool {
 }
 
 fn integer_is_planted_ms(lower: &str) -> bool {
-    // 2840 seconds / 2840s is 1000x the planted millisecond fact, even
-    // when the reply also says the word milliseconds.
-    if has_seconds_unit(lower)
-        || has_compact_seconds_after_integer(lower)
-        || has_minutes_unit(lower)
-        || has_hours_unit(lower)
-    {
-        return false;
-    }
-    true
+    // `2840 seconds` is 1000x the planted fact. `2840 ms` next to a
+    // different "3 seconds" timeout still counts.
+    planted_ms_integer_ok(lower, FACT_HEARTBEAT)
 }
 
-fn has_compact_seconds_after_integer(lower: &str) -> bool {
-    let compact: String = lower
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != ',')
-        .collect();
-    compact.contains("2840s") && !compact.contains("2840ms")
+fn planted_ms_integer_ok(lower: &str, digits: &str) -> bool {
+    let folded: String = lower.chars().filter(|c| *c != ',').collect();
+    let mut rest = folded.as_str();
+    while let Some(rel) = rest.find(digits) {
+        let abs = folded.len() - rest.len() + rel;
+        let before_digit = abs > 0 && folded.as_bytes()[abs - 1].is_ascii_digit();
+        let after = abs + digits.len();
+        let after_digit = after < folded.len() && folded.as_bytes()[after].is_ascii_digit();
+        if !before_digit && !after_digit {
+            let tail = folded[after..].trim_start();
+            let word: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            if !is_larger_time_unit(&word) {
+                return true;
+            }
+        }
+        let next = rel + digits.len();
+        rest = &rest[next..];
+    }
+    false
+}
+
+fn is_larger_time_unit(word: &str) -> bool {
+    matches!(
+        word,
+        "s" | "sec"
+            | "second"
+            | "seconds"
+            | "min"
+            | "mins"
+            | "minute"
+            | "minutes"
+            | "hr"
+            | "hrs"
+            | "hour"
+            | "hours"
+    )
 }
 
 fn has_seconds_unit(lower: &str) -> bool {
@@ -637,6 +663,18 @@ mod tests {
             count_recalled_facts("WH-4481\nproto-9.2.11\n2840 seconds, not milliseconds"),
             2,
             "2840 seconds stays rejected when the word milliseconds is also present"
+        );
+        assert_eq!(
+            count_recalled_facts("WH-4481\nproto-9.2.11\n2840 milliseconds, not seconds"),
+            3,
+            "2840 milliseconds stays recalled when the reply also says seconds"
+        );
+        assert_eq!(
+            count_recalled_facts(
+                "WH-4481\nproto-9.2.11\n2840 ms. Health checks use a timeout of 3 seconds."
+            ),
+            3,
+            "a different 3 second timeout must not erase 2840 ms"
         );
     }
 
