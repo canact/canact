@@ -18,9 +18,11 @@ use super::{refuse_truncated_incomplete_text, user_text};
 ///
 /// Scoring:
 /// - `1.0` - code has balanced delimiters, no obvious syntax errors,
-///   and contains the expected function signature. Parentheses,
-///   and an ellipsis, that sit only in a comment or string do not
-///   count. A real `return ...` or `name = ...` in the body still does.
+///   and contains the expected function signature. An ellipsis in a
+///   comment, a string, a slice, a type subscript, or a parameter
+///   default does not count. A value ellipsis still does, including
+///   `return ...`, `return (...)`, `name = ...`, an f-string
+///   expression, and a call argument.
 /// - `0.5` - code present and mostly correct but has minor issues
 ///   (unbalanced delimiters, a real ellipsis, or missing return)
 /// - `0.0` - no code block found or prose-only response
@@ -54,7 +56,8 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
         });
     }
 
-    let code_body = strip_python_string_literals(&strip_hash_comments(trimmed));
+    let commented = strip_hash_comments(trimmed);
+    let code_body = strip_python_string_literals(&commented);
     // Fenced or unfenced prose can name `def merge_sorted(` and `return`.
     // Strong needs a colon plus a real body, not a parenthesized name-drop.
     let has_def = has_indented_merge_sorted_body(trimmed);
@@ -65,19 +68,10 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     let braces_balanced = count_char(&code_body, '{') == count_char(&code_body, '}');
     let delimiters_ok = parens_balanced && brackets_balanced && braces_balanced;
 
-    // `code_body` already dropped comments and string text. An ellipsis
-    // that lives only in a string or a `#` comment is not a stub body.
-    let has_ellipsis = code_body.lines().any(|line| {
-        let t = line.trim();
-        t == "..."
-            || t == "...."
-            || t == "return ..."
-            || t == "return..."
-            || t.starts_with("return ...")
-            || t.starts_with("return...")
-            || t.contains("= ...")
-            || t.contains("=...")
-    });
+    // Comments are already gone. String data stays, so an f-string
+    // expression can still be read. A value `...` is a stub. A slice,
+    // a type subscript, and a parameter default are not.
+    let has_ellipsis = has_stub_ellipsis(&commented);
     let has_pass_only = code_body.lines().any(|l| l.trim() == "pass")
         && !code_body.contains("return")
         && !code_body.contains("append");
@@ -210,6 +204,376 @@ fn strip_python_string_literals(text: &str) -> String {
         i += ch.len_utf8();
     }
     out
+}
+
+/// A `...` used as a value. Parameter defaults, slices, and type
+/// subscripts are real syntax. String text is skipped, except an
+/// f-string `{expression}`.
+fn has_stub_ellipsis(text: &str) -> bool {
+    scan_python(text, 0, false).0
+}
+
+enum PyFrame {
+    Paren,
+    Bracket { subscript: bool },
+    Brace,
+}
+
+/// Walk Python tokens. When `stop_expr` is set, stop at the f-string
+/// expression terminator and return that index.
+fn scan_python(text: &str, mut i: usize, stop_expr: bool) -> (bool, usize) {
+    let bytes = text.as_bytes();
+    let mut frames: Vec<PyFrame> = Vec::new();
+    // `frames.len()` when `def` or `lambda` began. The matching `:` pops it.
+    let mut sigs: Vec<usize> = Vec::new();
+    let mut annotating = false;
+    let mut prev_primary = false;
+    let mut found = false;
+
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            if bytes[i] == b'\n' {
+                annotating = false;
+            }
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if stop_expr
+            && frames.is_empty()
+            && (bytes[i] == b'}' || is_fstring_conversion(text, i) || is_debug_eq(text, i))
+        {
+            return (found, i);
+        }
+        if let Some((quote_at, quote, formatted)) = string_literal_at(text, i) {
+            if formatted {
+                let (stub, end) = scan_fstring(text, quote_at, quote);
+                // A default or annotation is not a stub body. `return f"{...}"` is.
+                if sigs.is_empty() && !annotating {
+                    found |= stub;
+                }
+                i = end;
+            } else {
+                i = skip_python_string(text, quote_at, quote);
+            }
+            prev_primary = true;
+            continue;
+        }
+        if is_ellipsis_at(bytes, i) {
+            let mut j = i;
+            while j < bytes.len() && bytes[j] == b'.' {
+                j += 1;
+            }
+            let in_subscript = matches!(frames.last(), Some(PyFrame::Bracket { subscript: true }));
+            if !in_subscript && sigs.is_empty() && !annotating {
+                found = true;
+            }
+            i = j;
+            prev_primary = true;
+            continue;
+        }
+        if is_ident_start(bytes[i]) {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && is_ident_continue(bytes[i]) {
+                i += 1;
+            }
+            let word = &text[start..i];
+            if word == "def" || word == "lambda" {
+                sigs.push(frames.len());
+            }
+            prev_primary = !is_non_primary_keyword(word);
+            continue;
+        }
+        match bytes[i] {
+            b'(' => {
+                frames.push(PyFrame::Paren);
+                prev_primary = false;
+                i += 1;
+            }
+            b')' => {
+                frames.pop();
+                prev_primary = true;
+                i += 1;
+            }
+            b'[' => {
+                frames.push(PyFrame::Bracket {
+                    subscript: prev_primary,
+                });
+                prev_primary = false;
+                i += 1;
+            }
+            b']' => {
+                frames.pop();
+                prev_primary = true;
+                i += 1;
+            }
+            b'{' => {
+                frames.push(PyFrame::Brace);
+                prev_primary = false;
+                i += 1;
+            }
+            b'}' => {
+                if stop_expr && frames.is_empty() {
+                    return (found, i);
+                }
+                frames.pop();
+                prev_primary = true;
+                i += 1;
+            }
+            b':' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    prev_primary = false;
+                    i += 1;
+                    continue;
+                }
+                if sigs.last().copied() == Some(frames.len()) {
+                    sigs.pop();
+                    annotating = false;
+                } else if stop_expr && frames.is_empty() {
+                    return (found, i);
+                } else if frames.is_empty() && sigs.is_empty() {
+                    annotating = true;
+                }
+                prev_primary = false;
+                i += 1;
+            }
+            b'=' => {
+                if !is_comparison_eq(text, i) {
+                    if stop_expr && frames.is_empty() {
+                        return (found, i);
+                    }
+                    annotating = false;
+                }
+                prev_primary = false;
+                i += 1;
+            }
+            _ => {
+                let ch = text[i..].chars().next().expect("char");
+                prev_primary = false;
+                i += ch.len_utf8();
+            }
+        }
+    }
+    (found, i)
+}
+
+fn scan_fstring(text: &str, quote_at: usize, quote: &str) -> (bool, usize) {
+    let bytes = text.as_bytes();
+    let mut j = quote_at + quote.len();
+    let mut found = false;
+    while j < bytes.len() {
+        if bytes[j] == b'\\' {
+            j += 1;
+            if j < text.len() {
+                let ch = text[j..].chars().next().expect("char");
+                j += ch.len_utf8();
+            }
+            continue;
+        }
+        if text[j..].starts_with(quote) {
+            return (found, j + quote.len());
+        }
+        if bytes[j] == b'{' && bytes.get(j + 1) == Some(&b'{') {
+            j += 2;
+            continue;
+        }
+        if bytes[j] == b'}' && bytes.get(j + 1) == Some(&b'}') {
+            j += 2;
+            continue;
+        }
+        if bytes[j] == b'{' {
+            let (stub, end) = scan_python(text, j + 1, true);
+            found |= stub;
+            if end >= bytes.len() {
+                return (found, bytes.len());
+            }
+            if bytes[end] == b'}' {
+                j = end + 1;
+                continue;
+            }
+            let (tail_stub, after) = skip_fstring_tail(text, end);
+            found |= tail_stub;
+            j = after;
+            continue;
+        }
+        let ch = text[j..].chars().next().expect("char");
+        j += ch.len_utf8();
+    }
+    (found, bytes.len())
+}
+
+/// `index` points at `!`, `:`, or the debug `=`. Skip through the
+/// closing `}` and scan nested replacement fields.
+fn skip_fstring_tail(text: &str, mut j: usize) -> (bool, usize) {
+    let bytes = text.as_bytes();
+    let mut found = false;
+    if j < bytes.len() && bytes[j] == b'!' {
+        j += 1;
+        if j < bytes.len() && matches!(bytes[j], b's' | b'r' | b'a') {
+            j += 1;
+        }
+    }
+    if j < bytes.len() && bytes[j] == b'=' {
+        j += 1;
+    }
+    while j < bytes.len() {
+        if bytes[j] == b'\\' {
+            j += 1;
+            if j < text.len() {
+                let ch = text[j..].chars().next().expect("char");
+                j += ch.len_utf8();
+            }
+            continue;
+        }
+        if bytes[j] == b'{' && bytes.get(j + 1) == Some(&b'{') {
+            j += 2;
+            continue;
+        }
+        if bytes[j] == b'}' && bytes.get(j + 1) == Some(&b'}') {
+            j += 2;
+            continue;
+        }
+        if bytes[j] == b'}' {
+            return (found, j + 1);
+        }
+        if bytes[j] == b'{' {
+            let (stub, end) = scan_python(text, j + 1, true);
+            found |= stub;
+            if end >= bytes.len() {
+                return (found, bytes.len());
+            }
+            if bytes[end] == b'}' {
+                j = end + 1;
+                continue;
+            }
+            let (tail_stub, after) = skip_fstring_tail(text, end);
+            found |= tail_stub;
+            j = after;
+            continue;
+        }
+        let ch = text[j..].chars().next().expect("char");
+        j += ch.len_utf8();
+    }
+    (found, bytes.len())
+}
+
+/// `(quote_index, quote, formatted)`.
+///
+/// A quote with no prefix is still a string when it follows a name
+/// (`return"..."`). A prefix is only a prefix when it is not the tail
+/// of a longer name (`myf"..."` is a name, then a string).
+fn string_literal_at(text: &str, i: usize) -> Option<(usize, &'static str, bool)> {
+    let bytes = text.as_bytes();
+    if let Some(quote) = python_string_open(text, i) {
+        return Some((i, quote, false));
+    }
+    if i > 0 && is_ident_continue(bytes[i - 1]) {
+        return None;
+    }
+    let mut k = i;
+    while k < bytes.len() && k - i < 3 && is_string_prefix(bytes[k]) {
+        k += 1;
+    }
+    if k == i {
+        return None;
+    }
+    let quote = python_string_open(text, k)?;
+    let formatted = text[i..k]
+        .bytes()
+        .any(|b| matches!(b, b'f' | b'F' | b't' | b'T'));
+    Some((k, quote, formatted))
+}
+
+fn is_string_prefix(b: u8) -> bool {
+    matches!(
+        b,
+        b'r' | b'R' | b'u' | b'U' | b'b' | b'B' | b'f' | b'F' | b't' | b'T'
+    )
+}
+
+fn is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_'
+}
+
+fn is_ident_continue(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn is_ellipsis_at(bytes: &[u8], i: usize) -> bool {
+    bytes.get(i) == Some(&b'.')
+        && bytes.get(i + 1) == Some(&b'.')
+        && bytes.get(i + 2) == Some(&b'.')
+}
+
+fn is_fstring_conversion(text: &str, i: usize) -> bool {
+    let bytes = text.as_bytes();
+    bytes.get(i) == Some(&b'!')
+        && matches!(bytes.get(i + 1), Some(b's' | b'r' | b'a'))
+        && !bytes.get(i + 2).is_some_and(|b| is_ident_continue(*b))
+}
+
+fn is_debug_eq(text: &str, i: usize) -> bool {
+    let bytes = text.as_bytes();
+    bytes.get(i) == Some(&b'=') && !is_comparison_eq(text, i)
+}
+
+fn is_comparison_eq(text: &str, i: usize) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.get(i) != Some(&b'=') {
+        return false;
+    }
+    if bytes.get(i + 1) == Some(&b'=') {
+        return true;
+    }
+    matches!(
+        i.checked_sub(1).and_then(|prev| bytes.get(prev)),
+        Some(b'!' | b'<' | b'>' | b':' | b'=')
+    )
+}
+
+fn is_non_primary_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "return"
+            | "assert"
+            | "if"
+            | "elif"
+            | "else"
+            | "for"
+            | "while"
+            | "yield"
+            | "raise"
+            | "del"
+            | "pass"
+            | "break"
+            | "continue"
+            | "and"
+            | "or"
+            | "not"
+            | "in"
+            | "is"
+            | "as"
+            | "with"
+            | "from"
+            | "import"
+            | "class"
+            | "try"
+            | "except"
+            | "finally"
+            | "match"
+            | "case"
+            | "global"
+            | "nonlocal"
+            | "await"
+            | "def"
+            | "lambda"
+    )
 }
 
 fn has_indented_merge_sorted_body(text: &str) -> bool {
@@ -378,22 +742,34 @@ fn looks_like_same_line_body(line: &str) -> bool {
         return false;
     }
     if let Some(after) = t.strip_prefix("return") {
-        // `return`, `return(`, and `return [` stay real. Two or more
-        // space-separated bare words with no operator is English.
-        if after.is_empty() || after.starts_with('(') || after.starts_with('[') {
-            return true;
+        // `returning` is an identifier. The keyword needs a boundary.
+        let bounded = after.is_empty()
+            || after.starts_with(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+        if bounded {
+            // `return`, `return(`, `return[`, and `return"..."` stay real.
+            // Two or more space-separated bare words with no operator is English.
+            // An f-string still counts when the text has spaces (`f"café ..."`).
+            if after.is_empty()
+                || after.starts_with(['(', '['])
+                || string_literal_at(after, 0).is_some()
+            {
+                return true;
+            }
+            if !after.starts_with(|c: char| c.is_whitespace()) {
+                return false;
+            }
+            let rest = after.trim_start();
+            if rest.is_empty()
+                || rest.starts_with(['(', '['])
+                || string_literal_at(rest, 0).is_some()
+            {
+                return true;
+            }
+            if rest.contains(['+', '-', '*', '/', '%', ',', '(', '[', '<', '>', '=', '!']) {
+                return true;
+            }
+            return rest.split_whitespace().nth(1).is_none();
         }
-        if !after.starts_with(|c: char| c.is_whitespace()) {
-            return false;
-        }
-        let rest = after.trim_start();
-        if rest.is_empty() || rest.starts_with('(') || rest.starts_with('[') {
-            return true;
-        }
-        if rest.contains(['+', '-', '*', '/', '%', ',', '(', '[', '<', '>', '=', '!']) {
-            return true;
-        }
-        return rest.split_whitespace().nth(1).is_none();
     }
     if t == "pass"
         || t.starts_with("pass ")
@@ -471,7 +847,9 @@ fn line_has_return_token(line: &str) -> bool {
         && (t == "return"
             || t.starts_with("return ")
             || t.starts_with("return\t")
-            || t.starts_with("return("))
+            || t.starts_with("return(")
+            || t.starts_with("return\"")
+            || t.starts_with("return'"))
 }
 
 fn extract_code_block(text: &str) -> Option<&str> {
@@ -1381,5 +1759,98 @@ def merge_sorted(a, b):
         assert_eq!(count_char("((()))", '('), 3);
         assert_eq!(count_char("((()))", ')'), 3);
         assert_eq!(count_char("abc", '('), 0);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_value_ellipsis_is_not_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    return (...)\n",
+            "def merge_sorted(a, b):\n    return(...)\n",
+            "def merge_sorted(a, b):\n    return ( ... )\n",
+            "def merge_sorted(a, b):\n    return ((...))\n",
+            "def merge_sorted(a, b):\n    return (...,)\n",
+            "def merge_sorted(a, b):\n    return (...)  # done\n",
+            "def merge_sorted(a, b):\n    return [...]\n",
+            "def merge_sorted(a, b):\n    return {...}\n",
+            "def merge_sorted(a, b):\n    return ....\n",
+            "def merge_sorted(a, b):\n    out = (...)\n    return out\n",
+            "def merge_sorted(a, b):\n    out = [...]\n    return out\n",
+            "def merge_sorted(a, b):\n    out = {...}\n    return out\n",
+            "def merge_sorted(a, b):\n    out=(...)\n    return out\n",
+            "def merge_sorted(a, b):\n    out: list = (...)\n    return out\n",
+            "def merge_sorted(a, b):\n    a = b = (...)\n    return a\n",
+            "def merge_sorted(a, b):\n    return f\"{...}\"\n",
+            "def merge_sorted(a, b):\n    return f'{...}'\n",
+            "def merge_sorted(a, b):\n    return f\"\"\"{...}\"\"\"\n",
+            "def merge_sorted(a, b):\n    return rf\"{...}\"\n",
+            "def merge_sorted(a, b):\n    return fr\"{...}\"\n",
+            "def merge_sorted(a, b):\n    return F\"{...}\"\n",
+            "def merge_sorted(a, b):\n    return f\"{...!r}\"\n",
+            "def merge_sorted(a, b):\n    return f\"{a + ...}\"\n",
+            "def merge_sorted(a, b):\n    note = f\"{...}\"\n    return note\n",
+            "def merge_sorted(a, b):\n    return f\"\"\"\n{...}\n\"\"\"\n",
+            "def merge_sorted(a, b):\n    return a + ...\n",
+            "def merge_sorted(a, b):\n    x = a + ...\n    return x\n",
+            "def merge_sorted(a, b):\n    return a // ...\n",
+            "def merge_sorted(a, b):\n    return \"...\" + ...\n",
+            "def merge_sorted(a, b):\n    return helper(...)\n",
+            "def merge_sorted(a, b):\n    out = []\n    out.append(...)\n    return out\n",
+            "def merge_sorted(a, b):\n    assert ...\n    return a + b\n",
+            "def merge_sorted(a, b):\n    for x in ...:\n        pass\n    return a + b\n",
+            "def merge_sorted(a, b):\n    x: int = ...\n    return x\n",
+            "def merge_sorted(a, b):\n    x: int = f\"{...}\"\n    return x\n",
+            "def merge_sorted(a, b):\n    return f\"\\é{...}\"\n",
+            "def merge_sorted(a, b):\n    return f\"{a == ...}\"\n",
+            "def merge_sorted(a, b):\n    return a == ...\n",
+            "def merge_sorted(a, b):\n    ...\n    return a + b\n",
+            "def merge_sorted(a, b):\n    return (\n        ...\n    )\n",
+            "def merge_sorted(a, b=...):\n    return ...\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "value ellipsis must not be Strong: {code:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_non_value_ellipsis_stays_strong() {
+        for code in [
+            "def merge_sorted(a, b=...):\n    return a + b\n",
+            "def merge_sorted(a, b = ...):\n    return a + b\n",
+            "def merge_sorted(a, b=f\"{...}\"):\n    return a + b\n",
+            "def merge_sorted(\n    a,\n    b=...,\n):\n    return a + b\n",
+            "def merge_sorted(a: tuple[int, ...], b: tuple[int, ...]) -> tuple[int, ...]:\n    return a + b\n",
+            "def merge_sorted(a, b):\n    x: tuple[int, ...] = (1,)\n    return a + b\n",
+            "def merge_sorted(a, b):\n    return a[...]\n",
+            "def merge_sorted(a, b):\n    out = a[..., 0]\n    return out\n",
+            "def merge_sorted(a, b):\n    return a[1:...]\n",
+            "def merge_sorted(a, b):\n    return f\"{'...'}\"\n",
+            "def merge_sorted(a, b):\n    return f\"{a + '...'}\"\n",
+            "def merge_sorted(a, b):\n    return f\"{a:...}\"\n",
+            "def merge_sorted(a, b):\n    return f\"{{...}}\"\n",
+            "def merge_sorted(a, b):\n    return\"...\"\n",
+            "def merge_sorted(a, b):\n    return \"a single sorted list\"\n",
+            "def merge_sorted(a, b):\n    return f\"café ...\"\n",
+            "def merge_sorted(a, b):\n    return f\"{a == b}\"\n",
+            "def merge_sorted(a, b):\n    if (x := a):\n        return a + b\n    return b\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "ellipsis in a slice, signature, or string must stay Strong: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
+        }
     }
 }
