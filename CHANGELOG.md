@@ -3,6 +3,16 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.6](https://github.com/canact/canact/compare/v0.12.5...v0.12.6) (2026-11-23)
+
+
+### Bug Fixes
+
+* keep a tight return and a column-0 comment as code ([#412](https://github.com/canact/canact/issues/412)) ([1bd2c71](https://github.com/canact/canact/commit/1bd2c711e3026a0e5752b36fc797b8d4c22838ae))
+* keep an English or truncated return below Strong ([#410](https://github.com/canact/canact/issues/410)) ([2d277db](https://github.com/canact/canact/commit/2d277dba5d1d6e1aa0d5355f3f5fb44b207ca44d)), closes [#404](https://github.com/canact/canact/issues/404)
+* leave a tilde path unchanged when it climbs past home ([#408](https://github.com/canact/canact/issues/408)) ([af33c63](https://github.com/canact/canact/commit/af33c633c04bdf615fcdb5b1fa6e27b0fb684635))
+* score ellipsis stubs, for-targets, and call order ([#411](https://github.com/canact/canact/issues/411)) ([9fb20d1](https://github.com/canact/canact/commit/9fb20d13a04b82a7d39d52f6a0cc98c9af8f4926))
+
 ## [0.12.5](https://github.com/canact/canact/compare/v0.12.4...v0.12.5) (2026-11-08)
 
 
