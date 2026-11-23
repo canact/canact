@@ -884,19 +884,38 @@ fn unclosed_delimiters(s: &str) -> bool {
     paren > 0 || brack > 0 || brace > 0
 }
 
+fn is_hash_comment_line(line: &str) -> bool {
+    line.trim_start().starts_with('#')
+}
+
+fn ends_with_line_join(line: &str) -> bool {
+    strip_hash_comments(line).trim_end().ends_with('\\')
+}
+
 fn join_open_return(lines: &[&str]) -> (String, usize) {
     let Some(first) = lines.first().copied() else {
         return (String::new(), 1);
     };
-    if !line_starts_return(first) || !unclosed_delimiters(first) {
+    if !line_starts_return(first) || !(unclosed_delimiters(first) || ends_with_line_join(first)) {
         return (first.to_string(), 1);
     }
     let mut joined = first.to_string();
     let mut n = 1;
-    while n < lines.len() && unclosed_delimiters(&joined) {
+    while n < lines.len() && (unclosed_delimiters(&joined) || ends_with_line_join(&joined)) {
         let next = lines[n];
+        if is_hash_comment_line(next) {
+            n += 1;
+            continue;
+        }
         if !(next.trim().is_empty() || next.starts_with(' ') || next.starts_with('\t')) {
             break;
+        }
+        if ends_with_line_join(&joined) {
+            let code = strip_hash_comments(&joined);
+            let trimmed = code.trim_end();
+            if let Some(body) = trimmed.strip_suffix('\\') {
+                joined = body.trim_end().to_string();
+            }
         }
         joined.push('\n');
         joined.push_str(next);
@@ -916,6 +935,11 @@ fn body_lines_are_real(text: &str, rest: &str, rest_at: usize) -> bool {
             continue;
         }
         if i > 0 && !(line.starts_with(' ') || line.starts_with('\t')) {
+            // A column-0 `#` line is a comment, not the next function.
+            if is_hash_comment_line(line) {
+                i += 1;
+                continue;
+            }
             return false;
         }
         if !line_outside_string(text, starts[i]) {
@@ -2157,13 +2181,8 @@ fn line_outside_string(text: &str, target: usize) -> bool {
 
 fn line_has_return_token(line: &str) -> bool {
     let t = line.trim_start();
-    looks_like_same_line_body(line)
-        && (t == "return"
-            || t.starts_with("return ")
-            || t.starts_with("return\t")
-            || t.starts_with("return(")
-            || t.starts_with("return\"")
-            || t.starts_with("return'"))
+    // `return[a, b]` and `return-a` are the same statement as the spaced form.
+    line_starts_return(t) && looks_like_same_line_body(t)
 }
 
 fn extract_code_block(text: &str) -> Option<&str> {
@@ -3313,6 +3332,62 @@ def merge_sorted(a, b):
         assert_eq!(count_char("((()))", '('), 3);
         assert_eq!(count_char("((()))", ')'), 3);
         assert_eq!(count_char("abc", '('), 0);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_column_zero_comment_before_return_is_strong() {
+        let code = "def merge_sorted(a, b):\n# two-pointer merge\n    return a + b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a column-0 comment is not the end of the function: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_tight_return_spelling_is_strong() {
+        for body in [
+            "return[a, b]",
+            "return{\"a\": b}",
+            "return*a, b",
+            "return-a",
+        ] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a return with no space after the keyword is still a return: {body:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{body:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_backslash_return_is_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    return \\\n        sorted(a + b)\n",
+            "def merge_sorted(a, b):\n    return \\\n        a + b\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a backslash continues the return: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
+        }
     }
 
     #[tokio::test]
