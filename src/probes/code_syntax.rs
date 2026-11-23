@@ -1522,29 +1522,48 @@ impl<'a> ExprParser<'a> {
             self.group -= 1;
             return true;
         }
+        let mut saw_keyword = false;
+        let mut kwargs_closed = false;
         loop {
             self.skip_ws();
             if self.rest().starts_with("**") {
+                if kwargs_closed {
+                    self.group -= 1;
+                    return false;
+                }
                 self.i += 2;
+                saw_keyword = true;
+                kwargs_closed = true;
                 if !self.parse_expr() {
                     self.group -= 1;
                     return false;
                 }
             } else if self.rest().starts_with('*') {
+                // `f(a=1, *xs)` and `f(**k, *xs)` are syntax errors.
+                if saw_keyword || kwargs_closed {
+                    self.group -= 1;
+                    return false;
+                }
                 self.i += 1;
                 if !self.parse_expr() {
                     self.group -= 1;
                     return false;
                 }
             } else if self.peek_kwarg() {
+                if kwargs_closed {
+                    self.group -= 1;
+                    return false;
+                }
                 let _ = self.consume_name();
                 self.skip_ws();
                 self.i += 1;
+                saw_keyword = true;
                 if !self.parse_expr() {
                     self.group -= 1;
                     return false;
                 }
-            } else if !self.parse_expr() {
+            } else if saw_keyword || kwargs_closed || !self.parse_expr() {
+                // A positional after a keyword is not a finished call.
                 self.group -= 1;
                 return false;
             }
@@ -1816,13 +1835,52 @@ impl<'a> ExprParser<'a> {
         self.parse_trailers()
     }
 
+    fn parse_comp_target(&mut self) -> bool {
+        self.skip_ws();
+        if self.rest().starts_with('(') || self.rest().starts_with('[') {
+            let close = if self.rest().starts_with('(') {
+                ')'
+            } else {
+                ']'
+            };
+            self.i += 1;
+            self.skip_ws();
+            if self.rest().starts_with(close) {
+                return false;
+            }
+            loop {
+                if !self.parse_comp_target() {
+                    return false;
+                }
+                self.skip_ws();
+                if self.rest().starts_with(',') {
+                    self.i += 1;
+                    self.skip_ws();
+                    if self.rest().starts_with(close) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+            self.skip_ws();
+            if !self.rest().starts_with(close) {
+                return false;
+            }
+            self.i += 1;
+            true
+        } else {
+            self.consume_name()
+        }
+    }
+
     fn parse_comp_for(&mut self) -> bool {
         loop {
             if !self.keyword("for") {
                 return false;
             }
             loop {
-                if !self.consume_name() {
+                if !self.parse_comp_target() {
                     return false;
                 }
                 self.skip_ws();
@@ -3255,6 +3313,57 @@ def merge_sorted(a, b):
         assert_eq!(count_char("((()))", '('), 3);
         assert_eq!(count_char("((()))", ')'), 3);
         assert_eq!(count_char("abc", '('), 0);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_parenthesized_comprehension_target_is_strong() {
+        for body in [
+            "return [x for (x, y) in zip(a, b)]",
+            "return [x for [x, y] in zip(a, b)]",
+            "return [x for x, y in zip(a, b)]",
+        ] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a comprehension target in parentheses is finished code: {body:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{body:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_positional_after_keyword_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    return sorted(reverse=True, a + b)\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert!(
+            result.score < 1.0,
+            "a positional after a keyword is not a finished call: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_keyword_after_positional_stays_strong() {
+        let code = "def merge_sorted(a, b):\n    return sorted(a + b, reverse=True)\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a keyword after a positional stays Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
