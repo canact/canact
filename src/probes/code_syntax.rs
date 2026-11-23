@@ -22,7 +22,10 @@ use super::{refuse_truncated_incomplete_text, user_text};
 ///   comment, a string, a slice, a type subscript, or a parameter
 ///   default does not count. A value ellipsis still does, including
 ///   `return ...`, `return (...)`, `name = ...`, an f-string
-///   expression, and a call argument.
+///   expression, and a call argument. An English return stays Weak
+///   when a comma, hyphen, parenthesis, colon, or exclamation mark
+///   sits in the phrase. A return that stops on an operator stays
+///   below Strong.
 /// - `0.5` - code present and mostly correct but has minor issues
 ///   (unbalanced delimiters, a real ellipsis, or missing return)
 /// - `0.0` - no code block found or prose-only response
@@ -61,7 +64,9 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     // Fenced or unfenced prose can name `def merge_sorted(` and `return`.
     // Strong needs a colon plus a real body, not a parenthesized name-drop.
     let has_def = has_indented_merge_sorted_body(trimmed);
-    let has_return = merge_sorted_body_has_return(&code_body);
+    // Keep string text here. Stripping it turns `return {"a": b}` into
+    // `return {: b}`. Lines inside a string are skipped below.
+    let has_return = merge_sorted_body_has_return(&commented);
 
     let parens_balanced = count_char(&code_body, '(') == count_char(&code_body, ')');
     let brackets_balanced = count_char(&code_body, '[') == count_char(&code_body, ']');
@@ -589,21 +594,8 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
             && looks_like_parameter_list(&after[..colon_abs])
         {
             let rest = &after[colon_abs + 1..];
-            if rest.lines().next().is_some_and(looks_like_same_line_body) {
+            if body_lines_are_real(rest) {
                 return true;
-            }
-            for line in rest.lines().skip(1) {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if !(line.starts_with(' ') || line.starts_with('\t')) {
-                    return false;
-                }
-                if looks_like_same_line_body(line) {
-                    return true;
-                }
-                // English return phrases, lecture lines, comments, and
-                // docstrings are not a body. Keep looking for a statement.
             }
         }
         search = idx + needle.len();
@@ -780,25 +772,15 @@ fn looks_like_same_line_body(line: &str) -> bool {
         let bounded = after.is_empty()
             || after.starts_with(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
         if bounded {
-            // `return`, `return(`, `return[`, and `return"..."` stay real.
-            // Word operators (`and`, `or`, `not`, `lambda`, ...) and code
-            // punctuation (`|`, `&`, `:`, `.`, `@`) are a body. Two or more
-            // bare English words are not. A final period is not an operator.
-            // An f-string still counts when the text has spaces (`f"café ..."`).
-            if after.is_empty()
-                || after.starts_with(['(', '['])
-                || string_literal_at(after, 0).is_some()
-            {
+            // A bare `return` is a body. Anything after it has to be a
+            // finished expression: `return a + b`, `return (a + b)`,
+            // `return a or b`. English with a comma, hyphen, or
+            // parenthesis is not. A dangling operator is not either.
+            if after.is_empty() {
                 return true;
             }
-            if !after.starts_with(|c: char| c.is_whitespace()) {
-                return false;
-            }
             let rest = after.trim_start();
-            if rest.is_empty()
-                || rest.starts_with(['(', '['])
-                || string_literal_at(rest, 0).is_some()
-            {
+            if rest.is_empty() {
                 return true;
             }
             return return_rest_is_code(rest);
@@ -826,25 +808,1191 @@ fn looks_like_same_line_body(line: &str) -> bool {
 }
 
 fn return_rest_is_code(rest: &str) -> bool {
-    let trimmed = rest.trim_end();
-    let sentence = trimmed.strip_suffix('.').unwrap_or(trimmed);
-    if sentence.contains([
-        '+', '-', '*', '/', '%', ',', '(', '[', '<', '>', '=', '!', ':', '|', '&', '^', '~', '.',
-        '@',
-    ]) {
-        return true;
+    let commented = strip_hash_comments(rest);
+    let trimmed = commented.trim();
+    if trimmed.is_empty() {
+        return false;
     }
-    if sentence.split_whitespace().any(is_return_operator_word) {
-        return true;
+    let sentence = strip_sentence_period(trimmed);
+    let mut parser = ExprParser {
+        s: sentence,
+        i: 0,
+        group: 0,
+    };
+    parser.parse_star_exprs() && {
+        parser.skip_ws();
+        // `return a + b;` is one statement. Words after `;` are not.
+        if parser.rest().starts_with(';') {
+            parser.i += 1;
+            parser.skip_ws();
+        }
+        parser.i >= parser.s.len()
     }
-    sentence.split_whitespace().nth(1).is_none()
 }
 
-fn is_return_operator_word(word: &str) -> bool {
-    matches!(
-        word,
-        "and" | "or" | "not" | "in" | "is" | "if" | "else" | "elif" | "lambda" | "await" | "yield"
-    )
+fn line_starts_return(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(after) = t.strip_prefix("return") else {
+        return false;
+    };
+    after.is_empty() || after.starts_with(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+}
+
+/// Parentheses, brackets, and braces join the next indented lines.
+fn unclosed_delimiters(s: &str) -> bool {
+    let mut paren = 0i32;
+    let mut brack = 0i32;
+    let mut brace = 0i32;
+    let mut i = 0;
+    while i < s.len() {
+        if let Some((quote_at, quote, _)) = string_literal_at(s, i) {
+            if quote_at > i {
+                i = quote_at;
+            }
+            let end = skip_python_string(s, quote_at, quote);
+            if end <= i {
+                let Some(ch) = s[i..].chars().next() else {
+                    break;
+                };
+                i += ch.len_utf8();
+            } else {
+                i = end;
+            }
+            continue;
+        }
+        let Some(ch) = s[i..].chars().next() else {
+            break;
+        };
+        match ch {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => brack += 1,
+            ']' => brack -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            _ => {}
+        }
+        i += ch.len_utf8();
+    }
+    paren > 0 || brack > 0 || brace > 0
+}
+
+fn join_open_return(lines: &[&str]) -> (String, usize) {
+    let Some(first) = lines.first().copied() else {
+        return (String::new(), 1);
+    };
+    if !line_starts_return(first) || !unclosed_delimiters(first) {
+        return (first.to_string(), 1);
+    }
+    let mut joined = first.to_string();
+    let mut n = 1;
+    while n < lines.len() && unclosed_delimiters(&joined) {
+        let next = lines[n];
+        if !(next.trim().is_empty() || next.starts_with(' ') || next.starts_with('\t')) {
+            break;
+        }
+        joined.push('\n');
+        joined.push_str(next);
+        n += 1;
+    }
+    (joined, n)
+}
+
+fn body_lines_are_real(rest: &str) -> bool {
+    let lines: Vec<&str> = rest.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if i > 0 && line.trim().is_empty() {
+            i += 1;
+            continue;
+        }
+        if i > 0 && !(line.starts_with(' ') || line.starts_with('\t')) {
+            return false;
+        }
+        let (joined, used) = join_open_return(&lines[i..]);
+        if looks_like_same_line_body(&joined) {
+            return true;
+        }
+        i += used.max(1);
+    }
+    false
+}
+
+fn rest_has_return_line(text: &str, rest: &str, rest_at: usize) -> bool {
+    let lines: Vec<&str> = rest.lines().collect();
+    let mut starts = Vec::with_capacity(lines.len());
+    let bytes = rest.as_bytes();
+    let mut at = rest_at;
+    let mut b = 0;
+    for line in &lines {
+        starts.push(at);
+        b += line.len();
+        at += line.len();
+        if bytes.get(b) == Some(&b'\n') {
+            b += 1;
+            at += 1;
+        }
+    }
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if i > 0 && line.trim().is_empty() {
+            i += 1;
+            continue;
+        }
+        if i > 0 && !(line.starts_with(' ') || line.starts_with('\t')) {
+            return false;
+        }
+        let (joined, used) = join_open_return(&lines[i..]);
+        if line_outside_string(text, starts[i]) && line_has_return_token(&joined) {
+            return true;
+        }
+        i += used.max(1);
+    }
+    false
+}
+
+/// Drop one sentence period. Keep `1.` and a trailing attribute dot.
+fn strip_sentence_period(s: &str) -> &str {
+    let Some(body) = s.strip_suffix('.') else {
+        return s;
+    };
+    if body.is_empty() || body.ends_with('.') || body.ends_with(|c: char| c.is_ascii_digit()) {
+        return s;
+    }
+    if !body.chars().any(|c| c.is_whitespace()) {
+        return s;
+    }
+    body
+}
+
+struct ExprParser<'a> {
+    s: &'a str,
+    i: usize,
+    group: u32,
+}
+
+impl<'a> ExprParser<'a> {
+    fn rest(&self) -> &'a str {
+        &self.s[self.i..]
+    }
+
+    fn skip_ws(&mut self) {
+        let skip = self
+            .rest()
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .map(|c| c.len_utf8())
+            .sum::<usize>();
+        self.i += skip;
+    }
+
+    fn bump_str(&mut self, lit: &str) -> bool {
+        if self.rest().starts_with(lit) {
+            self.i += lit.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn keyword(&mut self, word: &str) -> bool {
+        self.skip_ws();
+        let rest = self.rest();
+        if !rest.starts_with(word) {
+            return false;
+        }
+        let after = rest.as_bytes().get(word.len()).copied();
+        if after.is_some_and(is_ident_continue) {
+            return false;
+        }
+        self.i += word.len();
+        true
+    }
+
+    fn peek_keyword(&mut self, word: &str) -> bool {
+        let saved = self.i;
+        let ok = self.keyword(word);
+        self.i = saved;
+        ok
+    }
+
+    fn bump_op(&mut self, op: &str) -> bool {
+        self.skip_ws();
+        let rest = self.rest();
+        if !rest.starts_with(op) {
+            return false;
+        }
+        let next = rest.as_bytes().get(op.len()).copied();
+        if next == Some(b'=') {
+            return false;
+        }
+        if op == "<" && next == Some(b'<') || op == ">" && next == Some(b'>') {
+            return false;
+        }
+        if op == "*" && next == Some(b'*') || op == "/" && next == Some(b'/') {
+            return false;
+        }
+        self.i += op.len();
+        true
+    }
+
+    fn parse_maybe_starred(&mut self) -> Option<bool> {
+        self.skip_ws();
+        if self.rest().starts_with("**") {
+            return None;
+        }
+        if self.rest().starts_with('*') {
+            self.i += 1;
+            return self.parse_expr().then_some(true);
+        }
+        self.parse_expr().then_some(false)
+    }
+
+    fn parse_star_exprs(&mut self) -> bool {
+        let Some(mut saw_star) = self.parse_maybe_starred() else {
+            return false;
+        };
+        let mut saw_comma = false;
+        loop {
+            self.skip_ws();
+            if !self.rest().starts_with(',') {
+                break;
+            }
+            saw_comma = true;
+            self.i += 1;
+            self.skip_ws();
+            if self.i >= self.s.len()
+                || self.rest().starts_with(')')
+                || self.rest().starts_with(']')
+                || self.rest().starts_with('}')
+            {
+                break;
+            }
+            let Some(star) = self.parse_maybe_starred() else {
+                return false;
+            };
+            saw_star |= star;
+        }
+        // `return *a` is a syntax error. `return *a,` is a tuple.
+        !saw_star || saw_comma
+    }
+
+    fn parse_expr(&mut self) -> bool {
+        if !self.parse_or() {
+            return false;
+        }
+        if self.peek_keyword("if") {
+            self.keyword("if");
+            if !self.parse_or() || !self.keyword("else") || !self.parse_expr() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_or(&mut self) -> bool {
+        if !self.parse_and() {
+            return false;
+        }
+        while self.peek_keyword("or") {
+            self.keyword("or");
+            if !self.parse_and() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_and(&mut self) -> bool {
+        if !self.parse_not() {
+            return false;
+        }
+        while self.peek_keyword("and") {
+            self.keyword("and");
+            if !self.parse_not() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_not(&mut self) -> bool {
+        if self.peek_keyword("not") {
+            self.keyword("not");
+            return self.parse_not();
+        }
+        self.parse_comparison()
+    }
+
+    fn parse_comparison(&mut self) -> bool {
+        if !self.parse_bor() {
+            return false;
+        }
+        while self.take_comp_op() {
+            if !self.parse_bor() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn take_comp_op(&mut self) -> bool {
+        self.skip_ws();
+        if self.rest().starts_with("<<") || self.rest().starts_with(">>") {
+            return false;
+        }
+        if self.bump_str("<=")
+            || self.bump_str(">=")
+            || self.bump_str("==")
+            || self.bump_str("!=")
+            || self.bump_str("<")
+            || self.bump_str(">")
+        {
+            return true;
+        }
+        if self.peek_keyword("not") {
+            let saved = self.i;
+            self.keyword("not");
+            if self.keyword("in") {
+                return true;
+            }
+            self.i = saved;
+            return false;
+        }
+        if self.peek_keyword("is") {
+            self.keyword("is");
+            let _ = self.keyword("not");
+            return true;
+        }
+        if self.peek_keyword("in") {
+            return self.keyword("in");
+        }
+        false
+    }
+
+    fn parse_bor(&mut self) -> bool {
+        if !self.parse_bxor() {
+            return false;
+        }
+        while self.bump_op("|") {
+            if !self.parse_bxor() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_bxor(&mut self) -> bool {
+        if !self.parse_band() {
+            return false;
+        }
+        while self.bump_op("^") {
+            if !self.parse_band() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_band(&mut self) -> bool {
+        if !self.parse_shift() {
+            return false;
+        }
+        while self.bump_op("&") {
+            if !self.parse_shift() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_shift(&mut self) -> bool {
+        if !self.parse_sum() {
+            return false;
+        }
+        loop {
+            self.skip_ws();
+            if self.rest().starts_with("<<") || self.rest().starts_with(">>") {
+                self.i += 2;
+                if self.rest().starts_with('=') {
+                    return false;
+                }
+                if !self.parse_sum() {
+                    return false;
+                }
+                continue;
+            }
+            return true;
+        }
+    }
+
+    fn parse_sum(&mut self) -> bool {
+        if !self.parse_term() {
+            return false;
+        }
+        while self.bump_op("+") || self.bump_op("-") {
+            if !self.parse_term() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_term(&mut self) -> bool {
+        if !self.parse_factor() {
+            return false;
+        }
+        loop {
+            self.skip_ws();
+            if self.rest().starts_with("//") {
+                self.i += 2;
+                if self.rest().starts_with('=') {
+                    return false;
+                }
+                if !self.parse_factor() {
+                    return false;
+                }
+                continue;
+            }
+            if self.bump_op("*") || self.bump_op("/") || self.bump_op("%") || self.bump_op("@") {
+                if !self.parse_factor() {
+                    return false;
+                }
+                continue;
+            }
+            return true;
+        }
+    }
+
+    fn parse_factor(&mut self) -> bool {
+        self.skip_ws();
+        if self.rest().starts_with("**") {
+            return self.parse_power();
+        }
+        if self.bump_op("+") || self.bump_op("-") || self.bump_op("~") {
+            return self.parse_factor();
+        }
+        self.parse_power()
+    }
+
+    fn parse_power(&mut self) -> bool {
+        if !self.parse_await_primary() {
+            return false;
+        }
+        self.skip_ws();
+        if self.rest().starts_with("**") {
+            self.i += 2;
+            if self.rest().starts_with('=') {
+                return false;
+            }
+            return self.parse_factor();
+        }
+        true
+    }
+
+    fn parse_await_primary(&mut self) -> bool {
+        if self.peek_keyword("await") {
+            self.keyword("await");
+            return self.parse_primary();
+        }
+        self.parse_primary()
+    }
+
+    fn parse_primary(&mut self) -> bool {
+        self.skip_ws();
+        if self.peek_keyword("lambda") {
+            return self.parse_lambda();
+        }
+        if self.peek_keyword("yield") {
+            return self.parse_yield();
+        }
+        if self.consume_string() || self.consume_ellipsis() || self.consume_number() {
+            return self.parse_trailers();
+        }
+        if self.consume_name() {
+            self.skip_ws();
+            if self.group > 0 && self.rest().starts_with(":=") {
+                self.i += 2;
+                if !self.parse_expr() {
+                    return false;
+                }
+            }
+            return self.parse_trailers();
+        }
+        if self.rest().starts_with('(') {
+            return self.parse_paren();
+        }
+        if self.rest().starts_with('[') {
+            return self.parse_bracket();
+        }
+        if self.rest().starts_with('{') {
+            return self.parse_brace();
+        }
+        false
+    }
+
+    fn parse_trailers(&mut self) -> bool {
+        loop {
+            self.skip_ws();
+            if self.rest().starts_with('(') {
+                if !self.parse_call_args() {
+                    return false;
+                }
+                continue;
+            }
+            if self.rest().starts_with('[') {
+                if !self.parse_subscript() {
+                    return false;
+                }
+                continue;
+            }
+            if self.rest().starts_with('.') {
+                let next = self.rest().as_bytes().get(1).copied();
+                if next == Some(b'.') || next.is_some_and(|b| b.is_ascii_digit()) {
+                    return false;
+                }
+                self.i += 1;
+                if !self.consume_name() {
+                    return false;
+                }
+                continue;
+            }
+            return true;
+        }
+    }
+
+    fn parse_lambda(&mut self) -> bool {
+        if !self.keyword("lambda") {
+            return false;
+        }
+        self.skip_ws();
+        if !self.rest().starts_with(':') {
+            loop {
+                self.skip_ws();
+                if self.rest().starts_with(':') {
+                    break;
+                }
+                if self.rest().starts_with("**") || self.rest().starts_with('*') {
+                    self.i += if self.rest().starts_with("**") { 2 } else { 1 };
+                    let _ = self.consume_name();
+                } else if !self.consume_name() {
+                    return false;
+                }
+                self.skip_ws();
+                if self.rest().starts_with('=') && !self.rest().starts_with("==") {
+                    self.i += 1;
+                    if !self.parse_expr() {
+                        return false;
+                    }
+                }
+                self.skip_ws();
+                if self.rest().starts_with(',') {
+                    self.i += 1;
+                    continue;
+                }
+                break;
+            }
+        }
+        self.skip_ws();
+        if !self.bump_str(":") {
+            return false;
+        }
+        self.parse_expr()
+    }
+
+    fn parse_yield(&mut self) -> bool {
+        if !self.keyword("yield") {
+            return false;
+        }
+        let _ = self.keyword("from");
+        self.skip_ws();
+        if self.i >= self.s.len() || self.rest().starts_with([')', ']', '}', ',', ':']) {
+            return true;
+        }
+        self.parse_expr()
+    }
+
+    fn parse_paren(&mut self) -> bool {
+        self.i += 1;
+        self.group += 1;
+        self.skip_ws();
+        if self.rest().starts_with(')') {
+            self.i += 1;
+            self.group -= 1;
+            return self.parse_trailers();
+        }
+        if self.peek_keyword("yield") {
+            let ok = self.parse_yield();
+            self.skip_ws();
+            if !ok || !self.rest().starts_with(')') {
+                self.group -= 1;
+                return false;
+            }
+            self.i += 1;
+            self.group -= 1;
+            return self.parse_trailers();
+        }
+        let Some(mut saw_star) = self.parse_maybe_starred() else {
+            self.group -= 1;
+            return false;
+        };
+        let mut saw_comma = false;
+        self.skip_ws();
+        if self.peek_keyword("for") {
+            let ok = self.parse_comp_for();
+            self.skip_ws();
+            if !ok || !self.rest().starts_with(')') {
+                self.group -= 1;
+                return false;
+            }
+            self.i += 1;
+            self.group -= 1;
+            return self.parse_trailers();
+        }
+        loop {
+            self.skip_ws();
+            if self.rest().starts_with(')') {
+                if saw_star && !saw_comma {
+                    self.group -= 1;
+                    return false;
+                }
+                self.i += 1;
+                self.group -= 1;
+                return self.parse_trailers();
+            }
+            if self.rest().starts_with(',') {
+                saw_comma = true;
+                self.i += 1;
+                self.skip_ws();
+                if self.rest().starts_with(')') {
+                    self.i += 1;
+                    self.group -= 1;
+                    return self.parse_trailers();
+                }
+                let Some(star) = self.parse_maybe_starred() else {
+                    self.group -= 1;
+                    return false;
+                };
+                saw_star |= star;
+                continue;
+            }
+            self.group -= 1;
+            return false;
+        }
+    }
+
+    fn parse_call_args(&mut self) -> bool {
+        self.i += 1;
+        self.group += 1;
+        self.skip_ws();
+        if self.rest().starts_with(')') {
+            self.i += 1;
+            self.group -= 1;
+            return true;
+        }
+        loop {
+            self.skip_ws();
+            if self.rest().starts_with("**") {
+                self.i += 2;
+                if !self.parse_expr() {
+                    self.group -= 1;
+                    return false;
+                }
+            } else if self.rest().starts_with('*') {
+                self.i += 1;
+                if !self.parse_expr() {
+                    self.group -= 1;
+                    return false;
+                }
+            } else if self.peek_kwarg() {
+                let _ = self.consume_name();
+                self.skip_ws();
+                self.i += 1;
+                if !self.parse_expr() {
+                    self.group -= 1;
+                    return false;
+                }
+            } else if !self.parse_expr() {
+                self.group -= 1;
+                return false;
+            }
+            self.skip_ws();
+            if self.peek_keyword("for") && !self.parse_comp_for() {
+                self.group -= 1;
+                return false;
+            }
+            self.skip_ws();
+            if self.rest().starts_with(',') {
+                self.i += 1;
+                self.skip_ws();
+                if self.rest().starts_with(')') {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        self.skip_ws();
+        if !self.rest().starts_with(')') {
+            self.group -= 1;
+            return false;
+        }
+        self.i += 1;
+        self.group -= 1;
+        true
+    }
+
+    fn peek_kwarg(&mut self) -> bool {
+        let saved = self.i;
+        let ok = self.consume_name() && {
+            self.skip_ws();
+            self.rest().starts_with('=') && !self.rest().starts_with("==")
+        };
+        self.i = saved;
+        ok
+    }
+
+    fn parse_bracket(&mut self) -> bool {
+        self.i += 1;
+        self.group += 1;
+        self.skip_ws();
+        if self.rest().starts_with(']') {
+            self.i += 1;
+            self.group -= 1;
+            return self.parse_trailers();
+        }
+        if self.rest().starts_with('*') && !self.rest().starts_with("**") {
+            self.i += 1;
+        }
+        if !self.parse_expr() {
+            self.group -= 1;
+            return false;
+        }
+        self.skip_ws();
+        if self.peek_keyword("for") {
+            if !self.parse_comp_for() {
+                self.group -= 1;
+                return false;
+            }
+        } else {
+            loop {
+                self.skip_ws();
+                if !self.rest().starts_with(',') {
+                    break;
+                }
+                self.i += 1;
+                self.skip_ws();
+                if self.rest().starts_with(']') {
+                    break;
+                }
+                if self.rest().starts_with('*') && !self.rest().starts_with("**") {
+                    self.i += 1;
+                }
+                if !self.parse_expr() {
+                    self.group -= 1;
+                    return false;
+                }
+            }
+        }
+        self.skip_ws();
+        if !self.rest().starts_with(']') {
+            self.group -= 1;
+            return false;
+        }
+        self.i += 1;
+        self.group -= 1;
+        self.parse_trailers()
+    }
+
+    fn parse_subscript(&mut self) -> bool {
+        self.i += 1;
+        self.group += 1;
+        if !self.parse_subscript_list() {
+            self.group -= 1;
+            return false;
+        }
+        self.skip_ws();
+        if !self.rest().starts_with(']') {
+            self.group -= 1;
+            return false;
+        }
+        self.i += 1;
+        self.group -= 1;
+        true
+    }
+
+    fn parse_subscript_list(&mut self) -> bool {
+        loop {
+            if !self.parse_slice_item() {
+                return false;
+            }
+            self.skip_ws();
+            if self.rest().starts_with(',') {
+                self.i += 1;
+                self.skip_ws();
+                if self.rest().starts_with(']') {
+                    return true;
+                }
+                continue;
+            }
+            return true;
+        }
+    }
+
+    fn parse_slice_item(&mut self) -> bool {
+        self.skip_ws();
+        if self.rest().starts_with(':') {
+            return self.parse_slice_tail();
+        }
+        if !self.parse_expr() {
+            return false;
+        }
+        self.skip_ws();
+        if self.rest().starts_with(':') {
+            return self.parse_slice_tail();
+        }
+        true
+    }
+
+    fn parse_slice_tail(&mut self) -> bool {
+        let mut colons = 0;
+        while colons < 2 {
+            self.skip_ws();
+            if !self.rest().starts_with(':') {
+                break;
+            }
+            self.i += 1;
+            colons += 1;
+            self.skip_ws();
+            if self.rest().starts_with(':')
+                || self.rest().starts_with(',')
+                || self.rest().starts_with(']')
+            {
+                continue;
+            }
+            if !self.parse_expr() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn parse_brace(&mut self) -> bool {
+        self.i += 1;
+        self.group += 1;
+        self.skip_ws();
+        if self.rest().starts_with('}') {
+            self.i += 1;
+            self.group -= 1;
+            return self.parse_trailers();
+        }
+        let mut saw_star = false;
+        let mut saw_comma = false;
+        let dict = if self.rest().starts_with("**") {
+            self.i += 2;
+            if !self.parse_expr() {
+                self.group -= 1;
+                return false;
+            }
+            true
+        } else if self.rest().starts_with('*') {
+            saw_star = true;
+            self.i += 1;
+            if !self.parse_expr() {
+                self.group -= 1;
+                return false;
+            }
+            false
+        } else if !self.parse_expr() {
+            self.group -= 1;
+            return false;
+        } else {
+            false
+        };
+        self.skip_ws();
+        let dict = dict || self.rest().starts_with(':');
+        if self.rest().starts_with(':') {
+            self.i += 1;
+            if !self.parse_expr() {
+                self.group -= 1;
+                return false;
+            }
+        }
+        self.skip_ws();
+        if self.peek_keyword("for") {
+            if !self.parse_comp_for() {
+                self.group -= 1;
+                return false;
+            }
+        } else {
+            loop {
+                self.skip_ws();
+                if !self.rest().starts_with(',') {
+                    break;
+                }
+                saw_comma = true;
+                self.i += 1;
+                self.skip_ws();
+                if self.rest().starts_with('}') {
+                    break;
+                }
+                if self.rest().starts_with('*') && !self.rest().starts_with("**") {
+                    saw_star = true;
+                    self.i += 1;
+                    if !self.parse_expr() {
+                        self.group -= 1;
+                        return false;
+                    }
+                    continue;
+                }
+                if self.rest().starts_with("**") {
+                    self.i += 2;
+                    if !self.parse_expr() {
+                        self.group -= 1;
+                        return false;
+                    }
+                    continue;
+                }
+                if !self.parse_expr() {
+                    self.group -= 1;
+                    return false;
+                }
+                self.skip_ws();
+                if self.rest().starts_with(':') {
+                    self.i += 1;
+                    if !self.parse_expr() {
+                        self.group -= 1;
+                        return false;
+                    }
+                } else if dict {
+                    self.group -= 1;
+                    return false;
+                }
+            }
+        }
+        self.skip_ws();
+        if saw_star && !saw_comma {
+            self.group -= 1;
+            return false;
+        }
+        if !self.rest().starts_with('}') {
+            self.group -= 1;
+            return false;
+        }
+        self.i += 1;
+        self.group -= 1;
+        self.parse_trailers()
+    }
+
+    fn parse_comp_for(&mut self) -> bool {
+        loop {
+            if !self.keyword("for") {
+                return false;
+            }
+            loop {
+                if !self.consume_name() {
+                    return false;
+                }
+                self.skip_ws();
+                if self.rest().starts_with(',') {
+                    self.i += 1;
+                    continue;
+                }
+                break;
+            }
+            if !self.keyword("in") || !self.parse_or() {
+                return false;
+            }
+            while self.peek_keyword("if") {
+                if !self.keyword("if") || !self.parse_or() {
+                    return false;
+                }
+            }
+            if self.peek_keyword("for") {
+                continue;
+            }
+            return true;
+        }
+    }
+
+    fn consume_string(&mut self) -> bool {
+        self.skip_ws();
+        let Some((quote_at, quote, _)) = string_literal_at(self.s, self.i) else {
+            return false;
+        };
+        let Some(end) = closed_string_end(self.s, quote_at, quote) else {
+            return false;
+        };
+        self.i = end;
+        true
+    }
+
+    fn consume_ellipsis(&mut self) -> bool {
+        self.skip_ws();
+        if self.rest().starts_with("...") {
+            self.i += 3;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn consume_number(&mut self) -> bool {
+        self.skip_ws();
+        let bytes = self.rest().as_bytes();
+        if bytes.is_empty() {
+            return false;
+        }
+        let mut n = 0;
+        if bytes[0] == b'0' && matches!(bytes.get(1), Some(b'x' | b'X' | b'b' | b'B' | b'o' | b'O'))
+        {
+            let kind = bytes[1];
+            n = 2;
+            let mut digits = 0;
+            while n < bytes.len() {
+                let b = bytes[n];
+                if b == b'_' {
+                    if !bytes.get(n + 1).is_some_and(|c| number_digit(*c, kind)) {
+                        break;
+                    }
+                    n += 1;
+                    continue;
+                }
+                if !number_digit(b, kind) {
+                    break;
+                }
+                digits += 1;
+                n += 1;
+            }
+            if digits == 0 {
+                return false;
+            }
+        } else if bytes[0] == b'.' || bytes[0].is_ascii_digit() {
+            if bytes[0] == b'.' {
+                if !bytes.get(1).is_some_and(|b| b.is_ascii_digit()) {
+                    return false;
+                }
+                n = 1;
+            }
+            while n < bytes.len() {
+                let b = bytes[n];
+                if b == b'_' {
+                    if !bytes.get(n + 1).is_some_and(|c| c.is_ascii_digit()) {
+                        break;
+                    }
+                    n += 1;
+                    continue;
+                }
+                if b.is_ascii_digit() {
+                    n += 1;
+                    continue;
+                }
+                break;
+            }
+            if bytes.get(n) == Some(&b'.') && bytes.get(n + 1) != Some(&b'.') {
+                n += 1;
+                while n < bytes.len() {
+                    let b = bytes[n];
+                    if b == b'_' {
+                        if !bytes.get(n + 1).is_some_and(|c| c.is_ascii_digit()) {
+                            break;
+                        }
+                        n += 1;
+                        continue;
+                    }
+                    if b.is_ascii_digit() {
+                        n += 1;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            if matches!(bytes.get(n), Some(b'e' | b'E')) {
+                let mut k = n + 1;
+                if matches!(bytes.get(k), Some(b'+' | b'-')) {
+                    k += 1;
+                }
+                let exp_at = k;
+                while k < bytes.len() && (bytes[k].is_ascii_digit() || bytes[k] == b'_') {
+                    k += 1;
+                }
+                if k > exp_at && bytes[k - 1].is_ascii_digit() {
+                    n = k;
+                }
+            }
+            if n == 0 {
+                return false;
+            }
+            if matches!(bytes.get(n), Some(b'j' | b'J')) {
+                n += 1;
+            }
+        } else {
+            return false;
+        }
+        self.i += n;
+        true
+    }
+
+    fn consume_name(&mut self) -> bool {
+        self.skip_ws();
+        const WORDS: &[&str] = &[
+            "and", "or", "not", "in", "is", "if", "else", "elif", "lambda", "await", "yield",
+            "for", "from", "as",
+        ];
+        for word in WORDS {
+            if self.peek_keyword(word) {
+                return false;
+            }
+        }
+        let rest = self.rest();
+        let mut chars = rest.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !(first.is_ascii_alphabetic()
+            || first == '_'
+            || (!first.is_ascii() && first.is_alphabetic()))
+        {
+            return false;
+        }
+        let mut n = first.len_utf8();
+        for ch in chars {
+            let ok = ch.is_ascii_alphanumeric()
+                || ch == '_'
+                || (!ch.is_ascii()
+                    && (ch.is_alphanumeric() || ch == '\u{200c}' || ch == '\u{200d}'));
+            if !ok {
+                break;
+            }
+            n += ch.len_utf8();
+        }
+        self.i += n;
+        true
+    }
+}
+
+fn number_digit(b: u8, kind: u8) -> bool {
+    match kind {
+        b'x' | b'X' => b.is_ascii_hexdigit(),
+        b'b' | b'B' => b == b'0' || b == b'1',
+        _ => (b'0'..=b'7').contains(&b),
+    }
+}
+
+fn closed_string_end(text: &str, quote_at: usize, quote: &str) -> Option<usize> {
+    let end = skip_python_string(text, quote_at, quote);
+    if end < quote_at + quote.len() || !text[..end].ends_with(quote) {
+        return None;
+    }
+    if quote.len() == 1 {
+        return Some(end);
+    }
+    if end == text.len() && !text[quote_at + quote.len()..].contains(quote) {
+        return None;
+    }
+    Some(end)
 }
 
 fn is_simple_ident(s: &str) -> bool {
@@ -861,8 +2009,8 @@ fn is_real_merge_sorted(body: &str) -> bool {
 }
 
 fn fence_has_merge_sorted_return(body: &str) -> bool {
-    let code_body = strip_python_string_literals(&strip_hash_comments(body));
-    merge_sorted_body_has_return(&code_body)
+    let commented = strip_hash_comments(body);
+    merge_sorted_body_has_return(&commented)
 }
 
 fn merge_sorted_body_has_return(text: &str) -> bool {
@@ -875,25 +2023,48 @@ fn merge_sorted_body_has_return(text: &str) -> bool {
             && looks_like_parameter_list(&after[..colon_abs])
         {
             let rest = &after[colon_abs + 1..];
-            if rest.lines().next().is_some_and(line_has_return_token) {
+            let rest_at = idx + needle.len() + colon_abs + 1;
+            if rest_has_return_line(text, rest, rest_at) {
                 return true;
-            }
-            for line in rest.lines().skip(1) {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                // Next top-level def or any column-0 line ends the body.
-                if !(line.starts_with(' ') || line.starts_with('\t')) {
-                    break;
-                }
-                if line_has_return_token(line) {
-                    return true;
-                }
             }
         }
         search = idx + needle.len();
     }
     false
+}
+
+/// `target` is outside a Python string. A `return` on its own line
+/// inside a docstring is not a statement.
+fn line_outside_string(text: &str, target: usize) -> bool {
+    let mut i = 0;
+    while i < target && i < text.len() {
+        if let Some((quote_at, quote, _)) = string_literal_at(text, i) {
+            if quote_at >= target {
+                return true;
+            }
+            if quote_at > i {
+                i = quote_at;
+            }
+            let end = skip_python_string(text, quote_at, quote);
+            if quote_at < target && end > target {
+                return false;
+            }
+            if end <= i {
+                let Some(ch) = text[i..].chars().next() else {
+                    break;
+                };
+                i += ch.len_utf8();
+            } else {
+                i = end;
+            }
+            continue;
+        }
+        let Some(ch) = text[i..].chars().next() else {
+            break;
+        };
+        i += ch.len_utf8();
+    }
+    true
 }
 
 fn line_has_return_token(line: &str) -> bool {
@@ -1489,6 +2660,183 @@ def merge_sorted(a, b):
                 "English return phrase is not a body: {text:?} {result:?}"
             );
             assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_english_punctuation_return_is_not_strong() {
+        for body in [
+            "return a single sorted list, please",
+            "return a pre-sorted list",
+            "return a single list (sorted)",
+            "return a single list: sorted",
+            "return a single list!",
+            "return a single list; please",
+            "return \"a sorted list\" please",
+            "return (a + b) please",
+        ] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "English return punctuation is not a body: {body:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{body:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_truncated_return_is_not_strong() {
+        for body in [
+            "return a +",
+            "return a -",
+            "return a *",
+            "return a /",
+            "return a //",
+            "return a %",
+            "return a |",
+            "return a &",
+            "return a ^",
+            "return a @",
+            "return a <<",
+            "return a >>",
+            "return a **",
+            "return a ==",
+            "return a !=",
+            "return a <=",
+            "return a <",
+            "return a or",
+            "return a and",
+            "return not",
+            "return lambda:",
+            "return await",
+            "return a.",
+            "return a[",
+            "return a if b",
+            "return *a",
+            "return (*a)",
+            "return {*a}",
+        ] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert!(
+                result.score < 1.0,
+                "truncated return must stay below Strong: {body:?} {result:?}"
+            );
+            assert_ne!(result.level, CapabilityLevel::Strong, "{body:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_truncated_return_after_statement_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    out = a\n    return out +\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert!(
+            result.score < 1.0,
+            "a real statement does not finish a dangling operator: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_wrapped_return_is_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    return (\n        a + b\n    )\n",
+            "def merge_sorted(a, b):\n    return sorted(\n        a + b\n    )\n",
+            "def merge_sorted(a, b):\n    return [\n        a,\n        b,\n    ]\n",
+            "def merge_sorted(a, b):\n    out = a\n    return (\n        out + b\n    )\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a return joined inside brackets must stay Strong: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_wrapped_english_return_is_not_strong() {
+        let code = "def merge_sorted(a, b):\n    return (\n        a single list, please\n    )\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "joined English inside parens is still not a body: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_finished_expression_return_is_strong() {
+        for body in [
+            "return a + b",
+            "return (a + b)",
+            "return a or b",
+            "return a if b else a",
+            "return a,",
+            "return a, b",
+            "return (a,)",
+            "return a.b",
+            "return -a",
+            "return a[0]",
+            "return a[1:2]",
+            "return a[:]",
+            "return [a, b]",
+            "return {\"a\": b}",
+            "return f(a, b)",
+            "return a // b",
+            "return a ** b",
+            "return a << 1",
+            "return (sorted)",
+            "return pre-sorted",
+            "return a != b",
+            "return a is not b",
+            "return a not in b",
+            "return await a",
+            "return lambda x: x",
+            "return [x for x in a]",
+            "return a @ b",
+            "return a + b;",
+            "return a;",
+            "return (*a, *b)",
+            "return *a, b",
+            "return {*a, *b}",
+            "return 0x10",
+            "return 1_000",
+            "return 2j",
+            "return café",
+        ] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "finished return expression must stay Strong: {body:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{body:?}");
         }
     }
 
