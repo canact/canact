@@ -27,7 +27,8 @@ use super::{refuse_truncated_incomplete_text, user_text};
 ///   sits in the phrase. A return that stops on an operator stays
 ///   below Strong.
 /// - `0.5` - code present and mostly correct but has minor issues
-///   (unbalanced delimiters, a real ellipsis, or missing return)
+///   (unbalanced delimiters, a real ellipsis, a body that is only
+///   `...`, or missing return)
 /// - `0.0` - no code block found or prose-only response
 pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let request = ProbeRequest {
@@ -594,7 +595,8 @@ fn has_indented_merge_sorted_body(text: &str) -> bool {
             && looks_like_parameter_list(&after[..colon_abs])
         {
             let rest = &after[colon_abs + 1..];
-            if body_lines_are_real(rest) {
+            let rest_at = idx + needle.len() + colon_abs + 1;
+            if body_lines_are_real(text, rest, rest_at) {
                 return true;
             }
         }
@@ -794,6 +796,11 @@ fn looks_like_same_line_body(line: &str) -> bool {
     {
         return true;
     }
+    // `...` is the usual stub body. A docstring line is skipped by the
+    // caller, so this does not treat an ellipsis inside quotes as code.
+    if strip_hash_comments(t).trim() == "..." {
+        return true;
+    }
     if t.starts_with('[') {
         return true;
     }
@@ -898,8 +905,9 @@ fn join_open_return(lines: &[&str]) -> (String, usize) {
     (joined, n)
 }
 
-fn body_lines_are_real(rest: &str) -> bool {
+fn body_lines_are_real(text: &str, rest: &str, rest_at: usize) -> bool {
     let lines: Vec<&str> = rest.lines().collect();
+    let starts = line_starts(rest, rest_at);
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -910,6 +918,10 @@ fn body_lines_are_real(rest: &str) -> bool {
         if i > 0 && !(line.starts_with(' ') || line.starts_with('\t')) {
             return false;
         }
+        if !line_outside_string(text, starts[i]) {
+            i += 1;
+            continue;
+        }
         let (joined, used) = join_open_return(&lines[i..]);
         if looks_like_same_line_body(&joined) {
             return true;
@@ -917,6 +929,24 @@ fn body_lines_are_real(rest: &str) -> bool {
         i += used.max(1);
     }
     false
+}
+
+fn line_starts(rest: &str, rest_at: usize) -> Vec<usize> {
+    let lines: Vec<&str> = rest.lines().collect();
+    let bytes = rest.as_bytes();
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut at = rest_at;
+    let mut b = 0;
+    for line in &lines {
+        starts.push(at);
+        b += line.len();
+        at += line.len();
+        if bytes.get(b) == Some(&b'\n') {
+            b += 1;
+            at += 1;
+        }
+    }
+    starts
 }
 
 fn rest_has_return_line(text: &str, rest: &str, rest_at: usize) -> bool {
@@ -3225,6 +3255,45 @@ def merge_sorted(a, b):
         assert_eq!(count_char("((()))", '('), 3);
         assert_eq!(count_char("((()))", ')'), 3);
         assert_eq!(count_char("abc", '('), 0);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_ellipsis_stub_is_incomplete() {
+        for code in [
+            "def merge_sorted(a, b):\n    ...\n",
+            "def merge_sorted(a, b):\n    \"\"\"Merge two sorted lists.\"\"\"\n    ...\n",
+            "def merge_sorted(a, b): ...\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.5,
+                "an ellipsis stub is a function, not a missing one: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Medium, "{code:?} {result:?}");
+            assert!(
+                !result.details.contains("No recognizable"),
+                "{code:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_ellipsis_only_inside_docstring_is_not_a_function() {
+        let code = "def merge_sorted(a, b):\n    \"\"\"\n    ...\n    \"\"\"\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 0.0,
+            "an ellipsis inside a docstring is not a body: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Weak);
     }
 
     #[tokio::test]
