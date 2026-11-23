@@ -92,6 +92,11 @@ pub use claude_code::{
 };
 
 #[cfg(feature = "cli")]
+mod user_path;
+#[cfg(feature = "cli")]
+pub use user_path::expand_tilde_with_home;
+
+#[cfg(feature = "cli")]
 mod mcp;
 #[cfg(feature = "cli")]
 pub use mcp::{McpServerOptions, run_mcp_stdio, run_mcp_stdio_with};
