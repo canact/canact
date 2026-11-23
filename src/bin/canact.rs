@@ -1155,18 +1155,15 @@ fn home_dir() -> Option<PathBuf> {
 fn expand_tilde(path: PathBuf) -> PathBuf {
     let owned = path.to_string_lossy();
     let raw = owned.trim();
-    if raw == "~" {
-        return home_dir().unwrap_or_else(|| PathBuf::from(raw));
-    }
-    if let Some(rest) = raw.strip_prefix("~/")
-        && let Some(home) = home_dir()
-    {
-        return home.join(rest);
-    }
-    if raw == owned.as_ref() {
-        path
+    let expanded = canact::expand_tilde_with_home(raw, home_dir().as_deref());
+    if expanded.as_os_str() == std::ffi::OsStr::new(raw) {
+        if raw == owned.as_ref() {
+            path
+        } else {
+            PathBuf::from(raw)
+        }
     } else {
-        PathBuf::from(raw)
+        expanded
     }
 }
 
@@ -1505,6 +1502,21 @@ mod tests {
             home.join("overlays")
         );
         assert_eq!(expand_tilde(PathBuf::from(" ~ ")), home);
+        assert_eq!(
+            expand_tilde(PathBuf::from("~/skills/../skills")),
+            home.join("skills/../skills")
+        );
+        for raw in [
+            "~/../../Windows",
+            r"~\..\..\Windows",
+            "~/a\\b/../../outside",
+        ] {
+            assert_eq!(
+                expand_tilde(PathBuf::from(raw)),
+                PathBuf::from(raw),
+                "{raw} must stay unexpanded"
+            );
+        }
     }
 
     #[test]
