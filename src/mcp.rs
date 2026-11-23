@@ -891,15 +891,12 @@ fn home_dir() -> Option<PathBuf> {
 
 fn expand_tilde(path: PathBuf) -> PathBuf {
     let raw = path.to_string_lossy();
-    if raw == "~" {
-        return home_dir().unwrap_or(path);
+    let expanded = crate::expand_tilde_with_home(raw.as_ref(), home_dir().as_deref());
+    if expanded.as_os_str() == std::ffi::OsStr::new(raw.as_ref()) {
+        path
+    } else {
+        expanded
     }
-    if let Some(rest) = raw.strip_prefix("~/")
-        && let Some(home) = home_dir()
-    {
-        return home.join(rest);
-    }
-    path
 }
 
 fn json_bool(v: Option<&Value>) -> Option<bool> {
@@ -2148,6 +2145,21 @@ mod tests {
             expand_tilde(PathBuf::from("/tmp/overlays")),
             PathBuf::from("/tmp/overlays")
         );
+        assert_eq!(
+            expand_tilde(PathBuf::from("~/skills/../skills")),
+            home.join("skills/../skills")
+        );
+        for raw in [
+            "~/../../Windows",
+            r"~\..\..\Windows",
+            "~/a\\b/../../outside",
+        ] {
+            assert_eq!(
+                expand_tilde(PathBuf::from(raw)),
+                PathBuf::from(raw),
+                "{raw} must stay unexpanded"
+            );
+        }
     }
 
     #[test]
