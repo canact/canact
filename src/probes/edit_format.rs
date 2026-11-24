@@ -16,6 +16,10 @@ use super::{refuse_truncated_incomplete_text, system_text, user_text};
 ///   A `#`, `//`, or `/*` inside a string, raw string, or character
 ///   does not hide the function or the greeting. A comment that is
 ///   the whole line still does not count, and `#[derive]` stays.
+///   Each half of the rename has to be paired inside one block:
+///   `fn greet` with `fn welcome`, and `Hello` with `Welcome`.
+///   Two one-edit blocks still count. Old lines from one block and
+///   new lines from another do not.
 /// - `0.7` - markers present and parseable but old_content has drift
 /// - `0.4` - markers present but block is not parseable
 /// - `0.0` - no SEARCH/REPLACE markers at all
@@ -67,10 +71,8 @@ Rename the function `greet` to `welcome` and change the greeting from \
     let (score, details) = if has_search && has_separator && has_replace {
         let mut best = 0.4_f64;
         let mut any_greet = false;
-        let mut old_fn = false;
-        let mut old_hello = false;
-        let mut new_fn = false;
-        let mut new_welcome = false;
+        let mut paired_fn = false;
+        let mut paired_hello = false;
         for block in parse_search_replace_blocks(&text) {
             let has_file_ref = block.path.contains("greet.rs");
             let search = strip_comments(block.search);
@@ -95,12 +97,12 @@ Rename the function `greet` to `welcome` and change the greeting from \
             if has_file_ref {
                 any_greet = true;
             }
-            old_fn |= block_old_fn;
-            old_hello |= block_old_hello;
-            new_fn |= block_new_fn;
-            new_welcome |= block_new_welcome;
+            // A split edit is two paired blocks, not old text from one
+            // block and the replacement from another.
+            paired_fn |= block_old_fn && block_new_fn;
+            paired_hello |= block_old_hello && block_new_welcome;
         }
-        if any_greet && old_fn && old_hello && new_fn && new_welcome {
+        if any_greet && paired_fn && paired_hello {
             best = 1.0;
         }
         if (best - 1.0).abs() < f64::EPSILON {
@@ -1474,6 +1476,36 @@ src/greet.rs
             "two correct one-block-per-edit SEARCH/REPLACE blocks must be Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn search_replace_unpaired_blocks_are_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+=======
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+src/other.rs
+note
+=======
+fn welcome(name: &str) -> String {
+    format!(\"Welcome, {}\", name)
+>>>>>>> REPLACE";
+        let result = probe_search_replace(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "old lines and new lines in different blocks must not be Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

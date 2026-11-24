@@ -1562,7 +1562,9 @@ fn key_knobs_match_suite(
 /// When a grader changes, return a higher number for that `name` only.
 /// Do not bump [`PROBE_SUITE_VERSION`].
 ///
-/// `search_replace` 2 ignores a syntax mark that sits inside a string.
+/// `search_replace` 3 keeps a split rename only when each half is
+/// paired inside one block. Epoch 2 ignores a syntax mark that sits
+/// inside a string.
 /// `context_faithfulness` 3 counts `2840 ms` when the reply also
 /// mentions some other number of seconds. `2840 seconds` stays out.
 /// `code_syntax` 10 counts `a += b` as a statement and ignores a
@@ -1603,7 +1605,11 @@ pub fn current_grader_version(name: &str) -> u32 {
         // `class` keeps that `return` from finishing `merge_sorted`.
         "code_syntax" => 10,
         // 2: `#`, `//`, and `/*` inside a string do not hide the edit.
-        "search_replace" => 2,
+        // 3: `fn greet` must be paired with `fn welcome` in one block,
+        // and `Hello` with `Welcome` in one block. A copied old
+        // function plus a welcome replacement in another file stays
+        // below Strong. Two paired one-edit blocks stay Strong.
+        "search_replace" => 3,
         // 3: same string-aware comment strip as search_replace. Epoch 2
         // scored a mark inside a string as a comment.
         "unified_diff" => 3,
@@ -1685,7 +1691,7 @@ mod tests {
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
         entry.grader_versions.insert("code_syntax".to_owned(), 9);
-        entry.grader_versions.insert("search_replace".to_owned(), 2);
+        entry.grader_versions.insert("search_replace".to_owned(), 3);
         entry.profile.code_syntax.details = "nested return scored Strong".to_owned();
         entry.profile.code_syntax.level = CapabilityLevel::Strong;
         entry.profile.code_syntax.score = 1.0;
@@ -1694,7 +1700,7 @@ mod tests {
         assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
         assert_eq!(
             entry.grader_versions.get("search_replace").copied(),
-            Some(2)
+            Some(3)
         );
         assert!(
             entry.profile.code_syntax.details.starts_with("Not probed"),
@@ -1702,6 +1708,40 @@ mod tests {
             entry.profile.code_syntax.details
         );
         assert_eq!(entry.profile.search_replace.details, "kept");
+    }
+
+    #[test]
+    fn search_replace_grader_epoch_3_resets_an_epoch_2_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.search_replace.details = "unpaired blocks scored Strong".to_owned();
+        profile.search_replace.level = CapabilityLevel::Strong;
+        profile.search_replace.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry.grader_versions.insert("search_replace".to_owned(), 2);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.profile.search_replace.details = "unpaired blocks scored Strong".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(
+            entry.grader_versions.get("search_replace").copied(),
+            Some(3)
+        );
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert!(
+            entry
+                .profile
+                .search_replace
+                .details
+                .starts_with("Not probed"),
+            "{}",
+            entry.profile.search_replace.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
     }
 
     #[test]
