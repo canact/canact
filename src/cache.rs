@@ -1622,6 +1622,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         // 2: edge punctuation still leaves Paris. Letters glued on,
         // including non-ASCII letters, stay below Strong.
         "instruction_following" => 2,
+        // 2: completion_tokens 0 on non-empty text is not a concise score.
+        // The character estimate is used, same as a missing count.
+        "token_efficiency" => 2,
         _ => DEFAULT_GRADER_VERSION,
     }
 }
@@ -1851,6 +1854,45 @@ mod tests {
                 .starts_with("Not probed"),
             "{}",
             entry.profile.context_faithfulness.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
+    }
+
+    #[test]
+    fn token_efficiency_grader_epoch_2_resets_an_epoch_1_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.token_efficiency.details = "completion=0 scored Strong".to_owned();
+        profile.token_efficiency.level = CapabilityLevel::Strong;
+        profile.token_efficiency.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry
+            .grader_versions
+            .insert("token_efficiency".to_owned(), 1);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.profile.token_efficiency.details = "completion=0 scored Strong".to_owned();
+        entry.profile.token_efficiency.level = CapabilityLevel::Strong;
+        entry.profile.token_efficiency.score = 1.0;
+        entry.profile.code_syntax.details = "kept".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(
+            entry.grader_versions.get("token_efficiency").copied(),
+            Some(2)
+        );
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert!(
+            entry
+                .profile
+                .token_efficiency
+                .details
+                .starts_with("Not probed"),
+            "{}",
+            entry.profile.token_efficiency.details
         );
         assert_eq!(entry.profile.code_syntax.details, "kept");
     }
