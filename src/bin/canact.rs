@@ -575,6 +575,13 @@ fn run_cache(args: CacheArgs) -> Result<(), u8> {
     match args.command {
         CacheCommand::Path(args) => {
             let path = resolve_user_path(args.cache, default_cache_path());
+            if path.is_dir() {
+                eprintln!(
+                    "error: probe cache must be a file (got a directory: {})",
+                    path.display()
+                );
+                return Err(1);
+            }
             println!("{}", path.display());
             Ok(())
         }

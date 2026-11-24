@@ -2305,6 +2305,26 @@ fn cache_path_expands_tilde() {
 }
 
 #[test]
+fn cache_path_directory_must_be_a_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let out = canact()
+        .args([
+            "cache",
+            "path",
+            "--cache",
+            dir.path().to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("spawn cache path");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("probe cache must be a file"), "{stderr}");
+    assert!(stderr.contains("got a directory"), "{stderr}");
+}
+
+#[test]
 fn cache_list_missing_file_exits_0() {
     let dir = tempfile::tempdir().expect("temp dir");
     let missing = dir.path().join("missing-probes.json");
