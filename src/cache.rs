@@ -1583,7 +1583,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         // `2840 seconds` does not.
         "context_faithfulness" => 3,
         // 3: probe image is 32x32 (1024 pixels). Epoch 2 scored the 16x16 image.
-        "vision" => 3,
+        // 4: `can't really see` and `cannot quite see` are see-denials.
+        // `I don't see BL` stays Weak. A font hedge stays Strong.
+        "vision" => 4,
         // 2: an ellipsis inside a string or comment is not an incomplete body.
         // 3: a value ellipsis is a stub (`return (...)`, `f"{...}"`,
         // `helper(...)`). A slice, type subscript, or parameter default is not.
@@ -1852,7 +1854,7 @@ mod tests {
     }
 
     #[test]
-    fn vision_grader_epoch_3_resets_an_epoch_2_row() {
+    fn vision_grader_epoch_4_resets_an_epoch_2_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
         profile.vision.details = "NONE from 16x16".to_owned();
@@ -1866,7 +1868,7 @@ mod tests {
         entry.profile.vision.score = 0.0;
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
-        assert_eq!(entry.grader_versions.get("vision").copied(), Some(3));
+        assert_eq!(entry.grader_versions.get("vision").copied(), Some(4));
         assert!(
             entry.profile.vision.details.starts_with("Not probed"),
             "{}",
