@@ -62,12 +62,19 @@ impl CapabilityProfile {
             "{:<28}Minimum of tool calling, JSON, and instruction following",
             ""
         );
-        let _ = writeln!(
-            out,
-            "{:<28}{:?}",
-            "Edit format (probe ladder):",
-            self.best_edit_format()
-        );
+        // best_edit_format() is WholeFile when neither rung was measured.
+        if self.search_replace.measured_level().is_none()
+            && self.unified_diff.measured_level().is_none()
+        {
+            let _ = writeln!(out, "{:<28}not probed", "Edit format (probe ladder):");
+        } else {
+            let _ = writeln!(
+                out,
+                "{:<28}{:?}",
+                "Edit format (probe ladder):",
+                self.best_edit_format()
+            );
+        }
         let tools = if self.can_use_tools() {
             "yes"
         } else if self.tool_gate_error().is_some() {
@@ -88,12 +95,17 @@ impl CapabilityProfile {
                 "not supported"
             }
         );
-        match self.max_tools() {
-            Some(n) => {
-                let _ = writeln!(out, "{:<28}{n}", "Max tools:");
-            }
-            None => {
-                let _ = writeln!(out, "{:<28}unlimited", "Max tools:");
+        // max_tools() is 10 when tool_selection did not complete.
+        if self.tool_selection.measured_level().is_none() {
+            let _ = writeln!(out, "{:<28}not probed", "Max tools:");
+        } else {
+            match self.max_tools() {
+                Some(n) => {
+                    let _ = writeln!(out, "{:<28}{n}", "Max tools:");
+                }
+                None => {
+                    let _ = writeln!(out, "{:<28}unlimited", "Max tools:");
+                }
             }
         }
         if let Some(n) = advertised {
@@ -237,6 +249,26 @@ mod tests {
         }
     }
 
+    fn completed_weak(name: &str) -> ProbeResult {
+        let mut probe = completed(name);
+        probe.score = 0.1;
+        probe.level = CapabilityLevel::Weak;
+        probe
+    }
+
+    fn probe_timeout(name: &str) -> ProbeResult {
+        let mut probe = unfinished(name);
+        probe.details = "Probe failed: timeout".to_owned();
+        probe
+    }
+
+    fn line_with_prefix<'a>(table: &'a str, prefix: &str) -> &'a str {
+        table
+            .lines()
+            .find(|line| line.starts_with(prefix))
+            .unwrap_or("")
+    }
+
     #[test]
     fn tool_gate_skips_exit_2_when_tool_probes_did_not_complete() {
         let mut profile = CapabilityProfile::unprobed("m", "p");
@@ -294,5 +326,46 @@ mod tests {
             "{table}"
         );
         assert!(table.contains("XML fallback needed"), "{table}");
+    }
+
+    #[test]
+    fn human_card_says_not_probed_when_edit_ladder_and_tool_selection_failed() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        profile.search_replace = probe_timeout("search_replace");
+        profile.unified_diff = probe_timeout("unified_diff");
+        profile.tool_selection = probe_timeout("tool_selection");
+        let table = profile.format_human_table(false);
+        let edit = line_with_prefix(&table, "Edit format (probe ladder):");
+        assert!(edit.contains("not probed"), "{edit}");
+        assert!(!edit.contains("WholeFile"), "{edit}");
+        let tools = line_with_prefix(&table, "Max tools:");
+        assert!(tools.contains("not probed"), "{tools}");
+        assert!(!tools.ends_with("10"), "{tools}");
+    }
+
+    #[test]
+    fn human_card_prints_whole_file_and_ten_when_edit_and_tools_finished_weak() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        profile.search_replace = completed_weak("search_replace");
+        profile.unified_diff = completed_weak("unified_diff");
+        profile.tool_selection = completed_weak("tool_selection");
+        assert_eq!(profile.search_replace.details, "done");
+        assert_eq!(profile.unified_diff.details, "done");
+        assert_eq!(profile.tool_selection.details, "done");
+        let table = profile.format_human_table(false);
+        let edit = line_with_prefix(&table, "Edit format (probe ladder):");
+        assert!(edit.contains("WholeFile"), "{edit}");
+        let tools = line_with_prefix(&table, "Max tools:");
+        assert!(tools.ends_with("10"), "{tools}");
+    }
+
+    #[test]
+    fn human_card_prints_search_replace_when_that_probe_finished_strong() {
+        let mut profile = CapabilityProfile::unprobed("m", "p");
+        profile.search_replace = completed("search_replace");
+        profile.unified_diff = probe_timeout("unified_diff");
+        let table = profile.format_human_table(false);
+        let edit = line_with_prefix(&table, "Edit format (probe ladder):");
+        assert!(edit.contains("SearchReplace"), "{edit}");
     }
 }
