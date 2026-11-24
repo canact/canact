@@ -16,10 +16,15 @@ use super::{refuse_truncated_incomplete_text, system_text, user_text};
 ///   A `#`, `//`, or `/*` inside a string, raw string, or character
 ///   does not hide the function or the greeting. A comment that is
 ///   the whole line still does not count, and `#[derive]` stays.
-///   Each half of the rename has to be paired inside one block:
-///   `fn greet` with `fn welcome`, and `Hello` with `Welcome`.
-///   Two one-edit blocks still count. Old lines from one block and
-///   new lines from another do not.
+///   Each half of the rename has to be paired inside one block whose
+///   path contains `greet.rs`: `fn greet` with `fn welcome`, and
+///   `Hello` with `Welcome`. `Hello` and `Welcome` count only inside
+///   a string literal (`"Hello"`, `format!("Hello, {}", name)`, or a
+///   raw string). Prose such as `still says Hello` does not count.
+///   Two one-edit blocks on `greet.rs` still count. A complete rename
+///   on another path stays below Strong, even when a different block
+///   names `greet.rs`. Old lines from one block and new lines from
+///   another do not.
 /// - `0.7` - markers present and parseable but old_content has drift
 /// - `0.4` - markers present but block is not parseable
 /// - `0.0` - no SEARCH/REPLACE markers at all
@@ -79,9 +84,9 @@ Rename the function `greet` to `welcome` and change the greeting from \
             let replace = strip_comments(block.replace);
             // Strong requires function-definition lines, not lecture tokens.
             let block_old_fn = has_code_fn_token(&search, "fn greet(");
-            let block_old_hello = search.contains("Hello");
+            let block_old_hello = contains_greeting_in_string(&search, "Hello");
             let block_new_fn = has_code_fn_token(&replace, "fn welcome(");
-            let block_new_welcome = replace.contains("Welcome");
+            let block_new_welcome = contains_greeting_in_string(&replace, "Welcome");
             let has_old_content = block_old_fn && block_old_hello;
             let has_new_content = block_new_fn && block_new_welcome;
             let block_score = if has_file_ref && has_old_content && has_new_content {
@@ -94,13 +99,14 @@ Rename the function `greet` to `welcome` and change the greeting from \
             if block_score > best {
                 best = block_score;
             }
+            // A split edit is two paired blocks on greet.rs, not old
+            // text from one block and the replacement from another,
+            // and not a rename whose path is a different file.
             if has_file_ref {
                 any_greet = true;
+                paired_fn |= block_old_fn && block_new_fn;
+                paired_hello |= block_old_hello && block_new_welcome;
             }
-            // A split edit is two paired blocks, not old text from one
-            // block and the replacement from another.
-            paired_fn |= block_old_fn && block_new_fn;
-            paired_hello |= block_old_hello && block_new_welcome;
         }
         if any_greet && paired_fn && paired_hello {
             best = 1.0;
@@ -161,7 +167,10 @@ Rules:
 ///   Comment marks inside a string on a `+` or `-` line do not hide
 ///   the function or the greeting. A `#` comment that is the whole
 ///   line is still ignored. The rename has to sit in the `greet.rs`
-///   file section. A rename in another file does not count.
+///   file section. A rename in another file does not count. `Hello`
+///   and `Welcome` count only inside a string literal on a line in
+///   that section (`"Hello"`, `format!("Hello, {}", name)`, or a raw
+///   string). Prose such as `still says Hello` does not count.
 /// - `0.5` - parseable diff whose paths or body do not match the rename, or plus and minus lines with a missing header or hunk marker
 /// - `0.0` - not a recognizable unified diff, or an echo of the format card
 pub async fn probe_unified_diff<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
@@ -259,11 +268,11 @@ fn unified_diff_rename_is_on_greet(text: &str) -> bool {
         if let Some(body) = line.strip_prefix('-') {
             let body = strip_comments(body);
             minus_greet |= has_code_fn_token(&body, "fn greet(");
-            minus_hello |= body.contains("Hello");
+            minus_hello |= contains_greeting_in_string(&body, "Hello");
         } else if let Some(body) = line.strip_prefix('+') {
             let body = strip_comments(body);
             plus_welcome |= has_code_fn_token(&body, "fn welcome(");
-            plus_welcome_text |= body.contains("Welcome");
+            plus_welcome_text |= contains_greeting_in_string(&body, "Welcome");
         }
     }
     matched || (on_greet && minus_greet && plus_welcome && minus_hello && plus_welcome_text)
@@ -276,8 +285,8 @@ fn unified_diff_rename_is_on_greet(text: &str) -> bool {
 /// (`let label = "..."; fn greet(`).
 ///
 /// Literals are masked first. `fn greet(` inside a label string is not
-/// the edit. The greeting check still reads the unmasked text, because
-/// `Hello` lives in `format!("Hello")`.
+/// the edit. The greeting check reads the unmasked text and keeps
+/// `Hello` only when it sits inside a string, as in `format!("Hello")`.
 fn has_code_fn_token(text: &str, token: &str) -> bool {
     // Mask the whole block so a raw string or triple quote that spans
     // lines hides `fn greet(` on a later line. Per-line masking would
@@ -589,6 +598,30 @@ fn mask_literals(text: &str) -> String {
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// `Hello` / `Welcome` count only inside a string literal.
+/// `"Hello"`, `format!("Hello, {}", name)`, byte strings, and raw
+/// strings count. Prose `still says Hello` does not. A `'` lifetime
+/// or character literal is not a string.
+fn contains_greeting_in_string(text: &str, word: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' && !text[i..].starts_with("'''") {
+            i += 1;
+            continue;
+        }
+        if let Some(end) = literal_end(text, i) {
+            if text[i..end].contains(word) {
+                return true;
+            }
+            i = if end > i { end } else { i + 1 };
+            continue;
+        }
+        i += text[i..].chars().next().expect("char").len_utf8();
+    }
+    false
 }
 
 /// End index of a Rust or Python literal that starts at `i`.
@@ -1500,6 +1533,67 @@ src/greet.rs
     }
 
     #[tokio::test]
+    async fn search_replace_signature_plus_prose_greeting_is_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+fn greet(name: &str) -> String
+still says Hello
+=======
+fn welcome(name: &str) -> String
+now says Welcome
+>>>>>>> REPLACE";
+        let result = probe_search_replace(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "a signature plus prose Hello/Welcome is not the rename: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn search_replace_decoy_greet_note_plus_other_rename_is_not_strong() {
+        let response_text = "\
+<<<<<<< SEARCH
+src/greet.rs
+-------
+note
+=======
+note
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+src/other.rs
+-------
+fn greet(name: &str) -> String {
+    format!(\"Hello, {}\", name)
+}
+=======
+fn welcome(name: &str) -> String {
+    format!(\"Welcome, {}\", name)
+}
+>>>>>>> REPLACE";
+        let result = probe_search_replace(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "a rename on src/other.rs must not promote a greet.rs note: {result:?}"
+        );
+        assert_eq!(
+            result.score, 0.7,
+            "the other-path rename is drift, not Strong: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn search_replace_unpaired_blocks_are_not_strong() {
         let response_text = "\
 <<<<<<< SEARCH
@@ -1662,6 +1756,29 @@ fn welcome(name: &str) -> String {
         let result = probe_unified_diff(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Strong);
         assert_eq!(result.score, 1.0);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_signature_plus_prose_greeting_is_not_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,2 +1,2 @@
+-fn greet(name: &str) -> String
+-still says Hello
++fn welcome(name: &str) -> String
++now says Welcome
+";
+        let result = probe_unified_diff(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "a greet.rs diff with prose Hello/Welcome is not the rename: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
