@@ -48,7 +48,9 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
 /// Asks for a single-word answer and scores based on response verbosity.
 ///
 /// Scoring:
-/// - `1.0` - exactly one word, the asked capital (Paris)
+/// - `1.0` - exactly one word, the asked capital (Paris).
+///   Edge punctuation is ignored. Letters stuck to the word,
+///   including non-ASCII letters, are not Paris.
 /// - `0.5` - one wrong word, or short but multi-word (2-4 words)
 /// - `0.0` - empty or verbose (5+ words)
 pub async fn probe_instruction_following<C: ProbeClient>(
@@ -97,9 +99,17 @@ pub async fn probe_instruction_following<C: ProbeClient>(
     })
 }
 
+fn is_edge_punct(c: char) -> bool {
+    c.is_ascii_punctuation()
+        || matches!(
+            c,
+            '«' | '»' | '“' | '”' | '‘' | '’' | '。' | '，' | '！' | '？' | '、' | '…'
+        )
+}
+
 fn asked_capital(word: &str) -> bool {
     word.trim()
-        .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+        .trim_matches(is_edge_punct)
         .eq_ignore_ascii_case("paris")
 }
 
@@ -724,7 +734,15 @@ mod tests {
 
     #[tokio::test]
     async fn instruction_following_wrong_single_word_is_not_strong() {
-        for word in ["The", "Stop", "London", "Yes"] {
+        for word in [
+            "The",
+            "Stop",
+            "London",
+            "Yes",
+            "不是Paris",
+            "éParis",
+            "Paris。不是",
+        ] {
             let llm = MockLlm {
                 response: text_response(word),
             };
@@ -741,7 +759,7 @@ mod tests {
 
     #[tokio::test]
     async fn instruction_following_paris_is_case_and_punct_insensitive() {
-        for word in ["paris", "PARIS", "Paris."] {
+        for word in ["paris", "PARIS", "Paris.", "\"Paris\"", "Paris。"] {
             let llm = MockLlm {
                 response: text_response(word),
             };

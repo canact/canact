@@ -1615,6 +1615,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         // 4: the rename has to be in the greet.rs section. A rename
         // under another file stays below Strong.
         "unified_diff" => 4,
+        // 2: edge punctuation still leaves Paris. Letters glued on,
+        // including non-ASCII letters, stay below Strong.
+        "instruction_following" => 2,
         _ => DEFAULT_GRADER_VERSION,
     }
 }
@@ -1769,6 +1772,42 @@ mod tests {
             entry.profile.unified_diff.details.starts_with("Not probed"),
             "{}",
             entry.profile.unified_diff.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
+    }
+
+    #[test]
+    fn instruction_following_grader_epoch_2_resets_an_epoch_1_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.instruction_following.details = "不是Paris scored Strong".to_owned();
+        profile.instruction_following.level = CapabilityLevel::Strong;
+        profile.instruction_following.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry
+            .grader_versions
+            .insert("instruction_following".to_owned(), 1);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.profile.instruction_following.details = "不是Paris scored Strong".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(
+            entry.grader_versions.get("instruction_following").copied(),
+            Some(2)
+        );
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert!(
+            entry
+                .profile
+                .instruction_following
+                .details
+                .starts_with("Not probed"),
+            "{}",
+            entry.profile.instruction_following.details
         );
         assert_eq!(entry.profile.code_syntax.details, "kept");
     }
