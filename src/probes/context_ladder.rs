@@ -279,8 +279,8 @@ fn recalls_heartbeat(text: &str) -> bool {
 }
 
 fn integer_is_planted_ms(lower: &str) -> bool {
-    // `2840 seconds` is 1000x the planted fact. `2840 ms` next to a
-    // different "3 seconds" timeout still counts.
+    // `2840 seconds` and compact `2840h` are not the planted fact.
+    // `2840 ms` next to a different "3 seconds" timeout still counts.
     planted_ms_integer_ok(lower, FACT_HEARTBEAT)
 }
 
@@ -314,6 +314,7 @@ fn is_larger_time_unit(word: &str) -> bool {
         "s" | "sec"
             | "second"
             | "seconds"
+            | "h"
             | "min"
             | "mins"
             | "minute"
@@ -594,6 +595,14 @@ mod tests {
         assert!(
             !recalls_heartbeat("2840s"),
             "2840s is compact seconds, not planted ms"
+        );
+        assert!(
+            !recalls_heartbeat("2840h"),
+            "2840h is compact hours, not planted ms"
+        );
+        assert!(
+            !recalls_heartbeat("2840 h"),
+            "2840 h is compact hours, not planted ms"
         );
         assert!(
             recalls_heartbeat("2840"),

@@ -34,6 +34,10 @@ impl CapabilityProfile {
             if let Some(probe) = self.dimension_result(dim) {
                 if probe.is_skipped() || probe.is_unprobed_default() {
                     let _ = writeln!(out, "{:<28}not probed", format!("{}:", display_name(dim)),);
+                } else if probe.is_synthesized_error() {
+                    // Stored level is often Medium. completed_level() is Weak.
+                    // Neither is a measurement. The details line has the error.
+                    let _ = writeln!(out, "{:<28}probe failed", format!("{}:", display_name(dim)),);
                 } else {
                     let _ = writeln!(
                         out,
@@ -244,6 +248,18 @@ mod tests {
         assert!(
             table.contains("unknown (tool probes did not finish)"),
             "{table}"
+        );
+        let tool_line = table
+            .lines()
+            .find(|line| line.starts_with("Tool Calling:"))
+            .unwrap_or("");
+        assert!(
+            tool_line.contains("probe failed"),
+            "a Probe failed row must not look like a measured score: {table}"
+        );
+        assert!(
+            !tool_line.contains("Weak"),
+            "a Probe failed row must not print Weak: {tool_line}"
         );
         assert!(!table.contains("XML fallback needed"), "{table}");
         assert!(!profile.needs_xml_fallback());
