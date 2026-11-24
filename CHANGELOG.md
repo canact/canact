@@ -3,6 +3,18 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.7](https://github.com/canact/canact/compare/v0.12.6...v0.12.7) (2026-11-24)
+
+
+### Bug Fixes
+
+* count an augmented assignment and ignore a nested return ([#415](https://github.com/canact/canact/issues/415)) ([74134d4](https://github.com/canact/canact/commit/74134d422c70f88c70dd26cadb056e83ac4513a8))
+* parse thousands separators and ignore a zero token count ([#421](https://github.com/canact/canact/issues/421)) ([9101239](https://github.com/canact/canact/commit/910123944443b8653455d5f938eb24c41f99b4d9))
+* refuse a directory as the cache path ([#418](https://github.com/canact/canact/issues/418)) ([adb8fed](https://github.com/canact/canact/commit/adb8fede50a1eff413b700aa5e0ac6d802eef7ba))
+* reject compact hour suffixes on planted millisecond facts ([#420](https://github.com/canact/canact/issues/420)) ([ac9a3c2](https://github.com/canact/canact/commit/ac9a3c2273b0b6e951ea7c34a74a4b4f8686003a))
+* say what Overall counts in the probe table ([#419](https://github.com/canact/canact/issues/419)) ([8f3bdfd](https://github.com/canact/canact/commit/8f3bdfd4abe8c14e1072679b3ca2be3c4428386b))
+* stop false Strong scores on split edits and glued Paris ([#417](https://github.com/canact/canact/issues/417)) ([fcf1b7d](https://github.com/canact/canact/commit/fcf1b7df91ece1d0958b5c9add08067b35d72772))
+
 ## [0.12.6](https://github.com/canact/canact/compare/v0.12.5...v0.12.6) (2026-11-23)
 
 
