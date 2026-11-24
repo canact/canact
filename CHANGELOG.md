@@ -3,6 +3,14 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.8](https://github.com/canact/canact/compare/v0.12.7...v0.12.8) (2026-11-24)
+
+
+### Bug Fixes
+
+* score remaining statements and drop format marks ([#426](https://github.com/canact/canact/issues/426)) ([e671d4b](https://github.com/canact/canact/commit/e671d4b8a548105491b6c5f3e3e1cc8bfb519c87))
+* stop false Strong edits and unmeasured card lines ([#428](https://github.com/canact/canact/issues/428)) ([da87e91](https://github.com/canact/canact/commit/da87e91ce7d9bbb776e9b579839222b9739e86ec))
+
 ## [0.12.7](https://github.com/canact/canact/compare/v0.12.6...v0.12.7) (2026-11-24)
 
 
