@@ -160,7 +160,8 @@ Rules:
 /// - `1.0` - parseable diff with correct headers and +/- lines.
 ///   Comment marks inside a string on a `+` or `-` line do not hide
 ///   the function or the greeting. A `#` comment that is the whole
-///   line is still ignored.
+///   line is still ignored. The rename has to sit in the `greet.rs`
+///   file section. A rename in another file does not count.
 /// - `0.5` - parseable diff whose paths or body do not match the rename, or plus and minus lines with a missing header or hunk marker
 /// - `0.0` - not a recognizable unified diff, or an echo of the format card
 pub async fn probe_unified_diff<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
@@ -195,30 +196,7 @@ Rename the function `greet` to `welcome` and change the greeting from \
     let has_minus_line = text.lines().any(|l| is_code_diff_line(l, '-'));
     let has_plus_line = text.lines().any(|l| is_code_diff_line(l, '+'));
 
-    let has_file_ref = text
-        .lines()
-        .any(|l| (l.starts_with("---") || l.starts_with("+++")) && l.contains("greet.rs"));
-    let minus_has_greet = text.lines().any(|l| {
-        l.starts_with('-')
-            && !l.starts_with("---")
-            && has_code_fn_token(&strip_comments(&l[1..]), "fn greet(")
-    });
-    let plus_has_welcome = text.lines().any(|l| {
-        l.starts_with('+')
-            && !l.starts_with("+++")
-            && has_code_fn_token(&strip_comments(&l[1..]), "fn welcome(")
-    });
-    let minus_has_hello = text.lines().any(|l| {
-        l.starts_with('-') && !l.starts_with("---") && strip_comments(&l[1..]).contains("Hello")
-    });
-    let plus_has_welcome_text = text.lines().any(|l| {
-        l.starts_with('+') && !l.starts_with("+++") && strip_comments(&l[1..]).contains("Welcome")
-    });
-    let real_edit = has_file_ref
-        && minus_has_greet
-        && plus_has_welcome
-        && minus_has_hello
-        && plus_has_welcome_text;
+    let real_edit = unified_diff_rename_is_on_greet(&text);
 
     let (score, details) = if is_unified_diff_card_echo(&text) && !real_edit {
         (0.0, "Echoed the unified diff format card".to_string())
@@ -246,6 +224,49 @@ Rename the function `greet` to `welcome` and change the greeting from \
         level: classify(score),
         details,
     })
+}
+
+/// The rename counts only inside a `greet.rs` file section.
+///
+/// `---` starts a section. `+++` can mark that section as `greet.rs`
+/// too. Minus and plus lines before the next `---` belong to it.
+fn unified_diff_rename_is_on_greet(text: &str) -> bool {
+    let mut on_greet = false;
+    let mut minus_greet = false;
+    let mut plus_welcome = false;
+    let mut minus_hello = false;
+    let mut plus_welcome_text = false;
+    let mut matched = false;
+    for line in text.lines() {
+        if line.starts_with("---") {
+            if on_greet && minus_greet && plus_welcome && minus_hello && plus_welcome_text {
+                matched = true;
+            }
+            on_greet = line.contains("greet.rs");
+            minus_greet = false;
+            plus_welcome = false;
+            minus_hello = false;
+            plus_welcome_text = false;
+            continue;
+        }
+        if line.starts_with("+++") {
+            on_greet |= line.contains("greet.rs");
+            continue;
+        }
+        if !on_greet {
+            continue;
+        }
+        if let Some(body) = line.strip_prefix('-') {
+            let body = strip_comments(body);
+            minus_greet |= has_code_fn_token(&body, "fn greet(");
+            minus_hello |= body.contains("Hello");
+        } else if let Some(body) = line.strip_prefix('+') {
+            let body = strip_comments(body);
+            plus_welcome |= has_code_fn_token(&body, "fn welcome(");
+            plus_welcome_text |= body.contains("Welcome");
+        }
+    }
+    matched || (on_greet && minus_greet && plus_welcome && minus_hello && plus_welcome_text)
 }
 
 /// `fn greet(` / `fn welcome(` must sit outside a string, at an
@@ -1684,6 +1705,35 @@ fn welcome(name: &str) -> String {
             "block-comment +/- must not set UnifiedDiff: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn unified_diff_rename_on_another_file_is_not_strong() {
+        let response_text = "\
+--- a/src/greet.rs
++++ b/src/greet.rs
+@@ -1,3 +1,3 @@
+ fn greet(name: &str) -> String {
+     format!(\"Hello, {}\", name)
+ }
+--- a/src/other.rs
++++ b/src/other.rs
+@@ -1,2 +1,2 @@
+-fn greet(name: &str) -> String {
+-    format!(\"Hello, {}\", name)
++fn welcome(name: &str) -> String {
++    format!(\"Welcome, {}\", name)
+";
+        let result = probe_unified_diff(&MockLlm {
+            response: text_response(response_text),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            result.score, 1.0,
+            "a rename in another file must not make greet.rs Strong: {result:?}"
+        );
+        assert_ne!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

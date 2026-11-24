@@ -1572,9 +1572,9 @@ fn key_knobs_match_suite(
 /// column-0 comment, a tight `return[`, and a backslash continuation
 /// as a real return. Epoch 8 accepts
 /// `for (x, y) in` and rejects a positional after a keyword.
-/// `unified_diff` 3 uses the
-/// same comment strip as search_replace. A cached score from an older
-/// epoch is probed again.
+/// `unified_diff` 4 scores the rename only inside the `greet.rs`
+/// file section. Epoch 3 uses the same comment strip as
+/// search_replace. A cached score from an older epoch is probed again.
 pub fn current_grader_version(name: &str) -> u32 {
     match name {
         "max_tokens_compliance" => 2,
@@ -1612,7 +1612,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         "search_replace" => 3,
         // 3: same string-aware comment strip as search_replace. Epoch 2
         // scored a mark inside a string as a comment.
-        "unified_diff" => 3,
+        // 4: the rename has to be in the greet.rs section. A rename
+        // under another file stays below Strong.
+        "unified_diff" => 4,
         _ => DEFAULT_GRADER_VERSION,
     }
 }
@@ -1740,6 +1742,33 @@ mod tests {
                 .starts_with("Not probed"),
             "{}",
             entry.profile.search_replace.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
+    }
+
+    #[test]
+    fn unified_diff_grader_epoch_4_resets_an_epoch_3_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.unified_diff.details = "rename on another file scored Strong".to_owned();
+        profile.unified_diff.level = CapabilityLevel::Strong;
+        profile.unified_diff.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry.grader_versions.insert("unified_diff".to_owned(), 3);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.profile.unified_diff.details = "rename on another file scored Strong".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(entry.grader_versions.get("unified_diff").copied(), Some(4));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert!(
+            entry.profile.unified_diff.details.starts_with("Not probed"),
+            "{}",
+            entry.profile.unified_diff.details
         );
         assert_eq!(entry.profile.code_syntax.details, "kept");
     }
