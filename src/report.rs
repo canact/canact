@@ -55,8 +55,8 @@ impl CapabilityProfile {
         let _ = writeln!(out, "{:<28}{:?}", "Overall:", self.overall_level());
         let _ = writeln!(
             out,
-            "{:<28}{}",
-            "", "Minimum of tool calling, JSON, and instruction following"
+            "{:<28}Minimum of tool calling, JSON, and instruction following",
+            ""
         );
         let _ = writeln!(
             out,
