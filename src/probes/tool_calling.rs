@@ -22,7 +22,8 @@ const FORCEFUL_EDIT_FILE: &str = "Immediately call the edit_file tool. Do not de
 /// Scoring:
 /// - `1.0` - valid tool call with the correct name and `path` as a string
 /// - `0.5` - tool call present but wrong name, missing `path`, or `path` not a string
-/// - `0.0` - text-only response (no tool call emitted)
+/// - `0.0` - text-only response, or every call name is empty, whitespace,
+///   or only zero-width marks
 pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let tool_spec = tool(
         "read_file",
@@ -634,9 +635,6 @@ pub async fn probe_tool_selection_with<C: ProbeClient>(
     })
 }
 
-/// Classify tool_selection. A generic file tool (`edit_file` / `search` /
-/// `run_command`) is a miss on bline-specific names, not Weak. Weak would
-/// persist `max_tools=10` for 30 days (#3315).
 fn usable_doc_set_value(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => false,
@@ -645,6 +643,12 @@ fn usable_doc_set_value(value: &serde_json::Value) -> bool {
     }
 }
 
+/// [`classify`] plus two host-policy adjustments.
+///
+/// A generic file tool (`edit_file`, `search`, `run_command`) that
+/// would be Weak stays Medium. Weak would persist `max_tools=10`
+/// for 30 days. A score [`classify`] would call Strong stays Medium
+/// when a task is not precise, so `max_tools` stays 20.
 fn tool_selection_level(score: f32, used_generic: bool, all_precise: bool) -> CapabilityLevel {
     let mut level = classify(score);
     if level == CapabilityLevel::Weak && used_generic {

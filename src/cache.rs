@@ -1562,7 +1562,9 @@ fn key_knobs_match_suite(
 /// When a grader changes, return a higher number for that `name` only.
 /// Do not bump [`PROBE_SUITE_VERSION`].
 ///
-/// `search_replace` 2 ignores a syntax mark that sits inside a string.
+/// `search_replace` 3 keeps a split rename only when each half is
+/// paired inside one block. Epoch 2 ignores a syntax mark that sits
+/// inside a string.
 /// `context_faithfulness` 3 counts `2840 ms` when the reply also
 /// mentions some other number of seconds. `2840 seconds` stays out.
 /// `code_syntax` 10 counts `a += b` as a statement and ignores a
@@ -1570,9 +1572,9 @@ fn key_knobs_match_suite(
 /// column-0 comment, a tight `return[`, and a backslash continuation
 /// as a real return. Epoch 8 accepts
 /// `for (x, y) in` and rejects a positional after a keyword.
-/// `unified_diff` 3 uses the
-/// same comment strip as search_replace. A cached score from an older
-/// epoch is probed again.
+/// `unified_diff` 4 scores the rename only inside the `greet.rs`
+/// file section. Epoch 3 uses the same comment strip as
+/// search_replace. A cached score from an older epoch is probed again.
 pub fn current_grader_version(name: &str) -> u32 {
     match name {
         "max_tokens_compliance" => 2,
@@ -1581,7 +1583,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         // `2840 seconds` does not.
         "context_faithfulness" => 3,
         // 3: probe image is 32x32 (1024 pixels). Epoch 2 scored the 16x16 image.
-        "vision" => 3,
+        // 4: `can't really see` and `cannot quite see` are see-denials.
+        // `I don't see BL` stays Weak. A font hedge stays Strong.
+        "vision" => 4,
         // 2: an ellipsis inside a string or comment is not an incomplete body.
         // 3: a value ellipsis is a stub (`return (...)`, `f"{...}"`,
         // `helper(...)`). A slice, type subscript, or parameter default is not.
@@ -1603,10 +1607,19 @@ pub fn current_grader_version(name: &str) -> u32 {
         // `class` keeps that `return` from finishing `merge_sorted`.
         "code_syntax" => 10,
         // 2: `#`, `//`, and `/*` inside a string do not hide the edit.
-        "search_replace" => 2,
+        // 3: `fn greet` must be paired with `fn welcome` in one block,
+        // and `Hello` with `Welcome` in one block. A copied old
+        // function plus a welcome replacement in another file stays
+        // below Strong. Two paired one-edit blocks stay Strong.
+        "search_replace" => 3,
         // 3: same string-aware comment strip as search_replace. Epoch 2
         // scored a mark inside a string as a comment.
-        "unified_diff" => 3,
+        // 4: the rename has to be in the greet.rs section. A rename
+        // under another file stays below Strong.
+        "unified_diff" => 4,
+        // 2: edge punctuation still leaves Paris. Letters glued on,
+        // including non-ASCII letters, stay below Strong.
+        "instruction_following" => 2,
         _ => DEFAULT_GRADER_VERSION,
     }
 }
@@ -1685,7 +1698,7 @@ mod tests {
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
         entry.grader_versions.insert("code_syntax".to_owned(), 9);
-        entry.grader_versions.insert("search_replace".to_owned(), 2);
+        entry.grader_versions.insert("search_replace".to_owned(), 3);
         entry.profile.code_syntax.details = "nested return scored Strong".to_owned();
         entry.profile.code_syntax.level = CapabilityLevel::Strong;
         entry.profile.code_syntax.score = 1.0;
@@ -1694,7 +1707,7 @@ mod tests {
         assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
         assert_eq!(
             entry.grader_versions.get("search_replace").copied(),
-            Some(2)
+            Some(3)
         );
         assert!(
             entry.profile.code_syntax.details.starts_with("Not probed"),
@@ -1702,6 +1715,103 @@ mod tests {
             entry.profile.code_syntax.details
         );
         assert_eq!(entry.profile.search_replace.details, "kept");
+    }
+
+    #[test]
+    fn search_replace_grader_epoch_3_resets_an_epoch_2_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.search_replace.details = "unpaired blocks scored Strong".to_owned();
+        profile.search_replace.level = CapabilityLevel::Strong;
+        profile.search_replace.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry.grader_versions.insert("search_replace".to_owned(), 2);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.profile.search_replace.details = "unpaired blocks scored Strong".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(
+            entry.grader_versions.get("search_replace").copied(),
+            Some(3)
+        );
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert!(
+            entry
+                .profile
+                .search_replace
+                .details
+                .starts_with("Not probed"),
+            "{}",
+            entry.profile.search_replace.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
+    }
+
+    #[test]
+    fn unified_diff_grader_epoch_4_resets_an_epoch_3_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.unified_diff.details = "rename on another file scored Strong".to_owned();
+        profile.unified_diff.level = CapabilityLevel::Strong;
+        profile.unified_diff.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry.grader_versions.insert("unified_diff".to_owned(), 3);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.profile.unified_diff.details = "rename on another file scored Strong".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(entry.grader_versions.get("unified_diff").copied(), Some(4));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert!(
+            entry.profile.unified_diff.details.starts_with("Not probed"),
+            "{}",
+            entry.profile.unified_diff.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
+    }
+
+    #[test]
+    fn instruction_following_grader_epoch_2_resets_an_epoch_1_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.instruction_following.details = "不是Paris scored Strong".to_owned();
+        profile.instruction_following.level = CapabilityLevel::Strong;
+        profile.instruction_following.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry
+            .grader_versions
+            .insert("instruction_following".to_owned(), 1);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.profile.instruction_following.details = "不是Paris scored Strong".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(
+            entry.grader_versions.get("instruction_following").copied(),
+            Some(2)
+        );
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert!(
+            entry
+                .profile
+                .instruction_following
+                .details
+                .starts_with("Not probed"),
+            "{}",
+            entry.profile.instruction_following.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
     }
 
     #[test]
@@ -1744,7 +1854,7 @@ mod tests {
     }
 
     #[test]
-    fn vision_grader_epoch_3_resets_an_epoch_2_row() {
+    fn vision_grader_epoch_4_resets_an_epoch_2_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
         profile.vision.details = "NONE from 16x16".to_owned();
@@ -1758,7 +1868,7 @@ mod tests {
         entry.profile.vision.score = 0.0;
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
-        assert_eq!(entry.grader_versions.get("vision").copied(), Some(3));
+        assert_eq!(entry.grader_versions.get("vision").copied(), Some(4));
         assert!(
             entry.profile.vision.details.starts_with("Not probed"),
             "{}",

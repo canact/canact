@@ -28,6 +28,8 @@ pub struct ProbeResult {
     /// Maximum achievable score (always `1.0` for the built-in probes).
     pub max_score: f32,
     /// Classified capability level derived from the score.
+    /// `tool_selection` may store Medium when [`classify`] would not,
+    /// so `max_tools` is neither 10 nor unlimited.
     pub level: CapabilityLevel,
     /// Human-readable explanation of how the score was determined.
     pub details: String,

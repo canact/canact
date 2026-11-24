@@ -109,7 +109,7 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     let echoed_question = lower.contains("what text or letters appear");
 
     // Strong is a read, not any "don't"/"cannot" hedge (font, typeface).
-    // See-denial still blocks Strong via negated_glyphs ("I don't see BL").
+    // See-denial still blocks Strong ("I don't see BL", "I can't really see BL").
     // Infix leftover read verbs ("cannot quite read BL") are not Strong.
     let constrained_none = trimmed_lower == "none";
     let echoed_constrained =
@@ -345,7 +345,7 @@ fn leftover_read_blocks_strong(lower: &str) -> bool {
 
 fn cannot_plus_read_verb(lower: &str) -> bool {
     const NEGS: &[&str] = &["cannot", "can't", "can not"];
-    const VERBS: &[&str] = &["read", "identify", "discern"];
+    const VERBS: &[&str] = &["read", "identify", "discern", "see"];
     const ADVERBS: &[&str] = &["quite", "clearly", "really", "fully", "easily"];
     for neg in NEGS {
         let mut search = 0;
@@ -775,15 +775,23 @@ mod tests {
 
     #[tokio::test]
     async fn vision_dont_see_bl_is_not_strong() {
-        let llm = MockLlm {
-            response: text_response("I don't see BL"),
-        };
-        let result = probe_vision(&llm).await.unwrap();
-        assert_eq!(
-            result.score, 0.0,
-            "refusal that names BL must not be Strong"
-        );
-        assert_eq!(result.level, CapabilityLevel::Weak);
+        for text in [
+            "I don't see BL",
+            "I can't really see BL",
+            "I can’t really see BL",
+            "I cannot quite see BL",
+        ] {
+            let result = probe_vision(&MockLlm {
+                response: text_response(text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "see-denial that names BL must not be Strong: {text:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{text:?}");
+        }
     }
 
     #[tokio::test]
