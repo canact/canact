@@ -98,12 +98,32 @@ fn parse_named_maximum(err: &str) -> Option<u32> {
 fn take_u32(s: &str) -> Option<(u32, usize)> {
     let trimmed = s.trim_start();
     let skip = s.len() - trimmed.len();
-    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    let mut digits = String::new();
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        digits.push(bytes[i] as char);
+        i += 1;
+    }
     if digits.is_empty() {
         return None;
     }
+    // `8,192` is one cap. A comma that is not a group of three digits
+    // stays a separator, so `8,19` does not become 819.
+    while i + 4 <= bytes.len()
+        && bytes[i] == b','
+        && bytes[i + 1].is_ascii_digit()
+        && bytes[i + 2].is_ascii_digit()
+        && bytes[i + 3].is_ascii_digit()
+        && (i + 4 == bytes.len() || !bytes[i + 4].is_ascii_digit())
+    {
+        digits.push(bytes[i + 1] as char);
+        digits.push(bytes[i + 2] as char);
+        digits.push(bytes[i + 3] as char);
+        i += 4;
+    }
     let n = digits.parse().ok()?;
-    Some((n, skip + digits.len()))
+    Some((n, skip + i))
 }
 
 #[cfg(test)]
@@ -196,6 +216,23 @@ mod tests {
                 r#"{"error":{"message":"max_tokens is too large: 32768. This model's maximum is 4096","code":"invalid_request_error"}}"#
             ),
             Some(4096)
+        );
+    }
+
+    #[test]
+    fn parse_thousands_separator_is_one_number() {
+        assert_eq!(
+            parse_max_output_cap("max_tokens: 32768 > 8,192"),
+            Some(8192),
+            "a comma must not turn 8192 into 8"
+        );
+        assert_eq!(
+            parse_max_output_cap("max_tokens is too large. This model's maximum is 4,096"),
+            Some(4096)
+        );
+        assert_eq!(
+            parse_max_output_cap("output token limit is 16,384"),
+            Some(16384)
         );
     }
 

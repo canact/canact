@@ -15,10 +15,11 @@ use super::{refuse_truncated_incomplete_text, user_text};
 /// following probe already tests constraint adherence). This measures
 /// the model's *natural* verbosity.
 ///
-/// Scoring uses provider completion tokens when the host reported them.
-/// Fall back to a character estimate (`len.div_ceil(4)`) when usage is
-/// missing. Empty or whitespace-only text is Weak before usage is
-/// trusted. Reasoning tokens are reported separately, else 0.
+/// Scoring uses a positive provider completion count when the host
+/// reported one. A count of 0 on non-empty text is not a measurement, so
+/// it uses the same character estimate as missing usage
+/// (`len.div_ceil(4)`). Empty or whitespace-only text is Weak before
+/// usage is trusted. Reasoning tokens are reported separately, else 0.
 ///
 /// - `1.0` - completion <= 10 (concise)
 /// - `0.5` - 11-50 (moderate)
@@ -54,8 +55,8 @@ pub async fn probe_token_efficiency<C: ProbeClient>(llm: &C) -> Result<ProbeResu
         match response.usage.as_ref() {
             Some(usage) => {
                 let completion = match usage.completion_tokens {
-                    Some(n) => n,
-                    None => (response.text.len() as u32).div_ceil(4),
+                    Some(n) if n > 0 => n,
+                    _ => (response.text.len() as u32).div_ceil(4),
                 };
                 (completion, usage.reasoning_tokens.unwrap_or(0))
             }
@@ -264,6 +265,46 @@ mod tests {
         };
         let result = probe_token_efficiency(&llm).await.unwrap();
         assert_eq!(result.level, CapabilityLevel::Weak);
+    }
+
+    #[tokio::test]
+    async fn zero_completion_tokens_on_long_text_is_not_strong() {
+        let llm = MockLlm {
+            response: ProbeResponse {
+                text: "The sum of two and two is four. ".repeat(20),
+                tool_calls: Vec::new(),
+                finish: ProbeFinish::Stop,
+                usage: Some(ProbeUsage {
+                    prompt_tokens: Some(8),
+                    completion_tokens: Some(0),
+                    reasoning_tokens: Some(0),
+                }),
+            },
+        };
+        let result = probe_token_efficiency(&llm).await.unwrap();
+        assert_ne!(
+            result.level,
+            CapabilityLevel::Strong,
+            "a zero count on a long answer is not concise: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_completion_tokens_on_short_text_stays_strong() {
+        let llm = MockLlm {
+            response: ProbeResponse {
+                text: "4".into(),
+                tool_calls: Vec::new(),
+                finish: ProbeFinish::Stop,
+                usage: Some(ProbeUsage {
+                    prompt_tokens: Some(8),
+                    completion_tokens: Some(0),
+                    reasoning_tokens: Some(0),
+                }),
+            },
+        };
+        let result = probe_token_efficiency(&llm).await.unwrap();
+        assert_eq!(result.level, CapabilityLevel::Strong, "{result:?}");
     }
 
     #[tokio::test]
