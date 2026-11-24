@@ -1565,8 +1565,9 @@ fn key_knobs_match_suite(
 /// `search_replace` 3 keeps a split rename only when each half is
 /// paired inside one block. Epoch 2 ignores a syntax mark that sits
 /// inside a string.
-/// `context_faithfulness` 3 counts `2840 ms` when the reply also
-/// mentions some other number of seconds. `2840 seconds` stays out.
+/// `context_faithfulness` 4 rejects compact `2840h` / `1750h`.
+/// Epoch 3 counts `2840 ms` when the reply also mentions some other
+/// number of seconds. `2840 seconds` stays out.
 /// `code_syntax` 10 counts `a += b` as a statement and ignores a
 /// `return` inside a nested `def`, `async def`, or `class`. Epoch 9 keeps a
 /// column-0 comment, a tight `return[`, and a backslash continuation
@@ -1581,7 +1582,8 @@ pub fn current_grader_version(name: &str) -> u32 {
         // 2: derived from ladder recall. 3: the unit has to follow the
         // planted integer. `2840 ms` plus "3 seconds" stays a hit.
         // `2840 seconds` does not.
-        "context_faithfulness" => 3,
+        // 4: compact `2840h` and `1750h` are hours, same as `2840 hours`.
+        "context_faithfulness" => 4,
         // 3: probe image is 32x32 (1024 pixels). Epoch 2 scored the 16x16 image.
         // 4: `can't really see` and `cannot quite see` are see-denials.
         // `I don't see BL` stays Weak. A font hedge stays Strong.
@@ -1815,12 +1817,12 @@ mod tests {
     }
 
     #[test]
-    fn context_faithfulness_grader_epoch_3_resets_an_epoch_2_row() {
+    fn context_faithfulness_grader_epoch_4_resets_an_epoch_3_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
-        profile.context_faithfulness.details = "2840 ms erased by 3 seconds".to_owned();
-        profile.context_faithfulness.level = CapabilityLevel::Medium;
-        profile.context_faithfulness.score = 2.0 / 3.0;
+        profile.context_faithfulness.details = "2840h counted as milliseconds".to_owned();
+        profile.context_faithfulness.level = CapabilityLevel::Strong;
+        profile.context_faithfulness.score = 1.0;
         profile.code_syntax.details = "kept".to_owned();
         profile.code_syntax.level = CapabilityLevel::Strong;
         profile.code_syntax.score = 1.0;
@@ -1828,17 +1830,17 @@ mod tests {
         let entry = cache.profiles.values_mut().next().expect("row");
         entry
             .grader_versions
-            .insert("context_faithfulness".to_owned(), 2);
+            .insert("context_faithfulness".to_owned(), 3);
         entry.grader_versions.insert("code_syntax".to_owned(), 10);
-        entry.profile.context_faithfulness.details = "2840 ms erased by 3 seconds".to_owned();
-        entry.profile.context_faithfulness.level = CapabilityLevel::Medium;
-        entry.profile.context_faithfulness.score = 2.0 / 3.0;
+        entry.profile.context_faithfulness.details = "2840h counted as milliseconds".to_owned();
+        entry.profile.context_faithfulness.level = CapabilityLevel::Strong;
+        entry.profile.context_faithfulness.score = 1.0;
         entry.profile.code_syntax.details = "kept".to_owned();
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
         assert_eq!(
             entry.grader_versions.get("context_faithfulness").copied(),
-            Some(3)
+            Some(4)
         );
         assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
         assert!(

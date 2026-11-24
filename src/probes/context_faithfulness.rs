@@ -116,8 +116,8 @@ fn recalls_timeout(lower: &str) -> bool {
 }
 
 fn integer_is_planted_ms(lower: &str) -> bool {
-    // `1750 seconds` is 1000x the planted fact, even if the reply also
-    // says milliseconds. `1750 ms` next to some other "3 seconds" still counts.
+    // `1750 seconds` and compact `1750h` are not the planted fact.
+    // `1750 ms` next to some other "3 seconds" still counts.
     planted_ms_integer_ok(lower, "1750")
 }
 
@@ -151,6 +151,7 @@ fn is_larger_time_unit(word: &str) -> bool {
         "s" | "sec"
             | "second"
             | "seconds"
+            | "h"
             | "min"
             | "mins"
             | "minute"
@@ -406,6 +407,14 @@ mod tests {
         assert!(
             !recalls_timeout("1750s"),
             "1750s is compact seconds, not planted ms"
+        );
+        assert!(
+            !recalls_timeout("1750h"),
+            "1750h is compact hours, not planted ms"
+        );
+        assert!(
+            !recalls_timeout("1750 h"),
+            "1750 h is compact hours, not planted ms"
         );
         assert!(
             recalls_timeout("1750"),
