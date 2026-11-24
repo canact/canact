@@ -1562,7 +1562,9 @@ fn key_knobs_match_suite(
 /// When a grader changes, return a higher number for that `name` only.
 /// Do not bump [`PROBE_SUITE_VERSION`].
 ///
-/// `search_replace` 3 keeps a split rename only when each half is
+/// `search_replace` 4 counts `Hello` and `Welcome` only inside a
+/// string on the `greet.rs` block, and pairs those halves only on
+/// that block. Epoch 3 keeps a split rename only when each half is
 /// paired inside one block. Epoch 2 ignores a syntax mark that sits
 /// inside a string.
 /// `context_faithfulness` 4 rejects compact `2840h` / `1750h`.
@@ -1576,8 +1578,9 @@ fn key_knobs_match_suite(
 /// column-0 comment, a tight `return[`, and a backslash continuation
 /// as a real return. Epoch 8 accepts
 /// `for (x, y) in` and rejects a positional after a keyword.
-/// `unified_diff` 4 scores the rename only inside the `greet.rs`
-/// file section. Epoch 3 uses the same comment strip as
+/// `unified_diff` 5 counts `Hello` and `Welcome` only inside a string
+/// on a `greet.rs` line. Epoch 4 scores the rename only inside the
+/// `greet.rs` file section. Epoch 3 uses the same comment strip as
 /// search_replace. A cached score from an older epoch is probed again.
 pub fn current_grader_version(name: &str) -> u32 {
     match name {
@@ -1620,12 +1623,17 @@ pub fn current_grader_version(name: &str) -> u32 {
         // and `Hello` with `Welcome` in one block. A copied old
         // function plus a welcome replacement in another file stays
         // below Strong. Two paired one-edit blocks stay Strong.
-        "search_replace" => 3,
+        // 4: `Hello` / `Welcome` count only inside a string literal.
+        // Pair flags count only on a block whose path contains
+        // `greet.rs`. A rename on another path stays below Strong.
+        "search_replace" => 4,
         // 3: same string-aware comment strip as search_replace. Epoch 2
         // scored a mark inside a string as a comment.
         // 4: the rename has to be in the greet.rs section. A rename
         // under another file stays below Strong.
-        "unified_diff" => 4,
+        // 5: `Hello` / `Welcome` on a greet.rs diff line count only
+        // inside a string literal. Prose on that line stays below Strong.
+        "unified_diff" => 5,
         // 2: edge punctuation still leaves Paris. Letters glued on,
         // including non-ASCII letters, stay below Strong.
         // 3: U+200B, U+200C, U+200D, U+2060, U+FEFF, and U+00AD are
@@ -1712,7 +1720,7 @@ mod tests {
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
         entry.grader_versions.insert("code_syntax".to_owned(), 10);
-        entry.grader_versions.insert("search_replace".to_owned(), 3);
+        entry.grader_versions.insert("search_replace".to_owned(), 4);
         entry.profile.code_syntax.details = "raise scored Weak".to_owned();
         entry.profile.code_syntax.level = CapabilityLevel::Weak;
         entry.profile.code_syntax.score = 0.0;
@@ -1721,7 +1729,7 @@ mod tests {
         assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert_eq!(
             entry.grader_versions.get("search_replace").copied(),
-            Some(3)
+            Some(4)
         );
         assert!(
             entry.profile.code_syntax.details.starts_with("Not probed"),
@@ -1732,10 +1740,10 @@ mod tests {
     }
 
     #[test]
-    fn search_replace_grader_epoch_3_resets_an_epoch_2_row() {
+    fn search_replace_grader_epoch_4_resets_an_epoch_3_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
-        profile.search_replace.details = "unpaired blocks scored Strong".to_owned();
+        profile.search_replace.details = "prose Hello scored Strong".to_owned();
         profile.search_replace.level = CapabilityLevel::Strong;
         profile.search_replace.score = 1.0;
         profile.code_syntax.details = "kept".to_owned();
@@ -1743,14 +1751,14 @@ mod tests {
         profile.code_syntax.score = 1.0;
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
-        entry.grader_versions.insert("search_replace".to_owned(), 2);
+        entry.grader_versions.insert("search_replace".to_owned(), 3);
         entry.grader_versions.insert("code_syntax".to_owned(), 11);
-        entry.profile.search_replace.details = "unpaired blocks scored Strong".to_owned();
+        entry.profile.search_replace.details = "prose Hello scored Strong".to_owned();
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
         assert_eq!(
             entry.grader_versions.get("search_replace").copied(),
-            Some(3)
+            Some(4)
         );
         assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert!(
@@ -1766,10 +1774,10 @@ mod tests {
     }
 
     #[test]
-    fn unified_diff_grader_epoch_4_resets_an_epoch_3_row() {
+    fn unified_diff_grader_epoch_5_resets_an_epoch_4_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
-        profile.unified_diff.details = "rename on another file scored Strong".to_owned();
+        profile.unified_diff.details = "prose Hello scored Strong".to_owned();
         profile.unified_diff.level = CapabilityLevel::Strong;
         profile.unified_diff.score = 1.0;
         profile.code_syntax.details = "kept".to_owned();
@@ -1777,12 +1785,12 @@ mod tests {
         profile.code_syntax.score = 1.0;
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
-        entry.grader_versions.insert("unified_diff".to_owned(), 3);
+        entry.grader_versions.insert("unified_diff".to_owned(), 4);
         entry.grader_versions.insert("code_syntax".to_owned(), 11);
-        entry.profile.unified_diff.details = "rename on another file scored Strong".to_owned();
+        entry.profile.unified_diff.details = "prose Hello scored Strong".to_owned();
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
-        assert_eq!(entry.grader_versions.get("unified_diff").copied(), Some(4));
+        assert_eq!(entry.grader_versions.get("unified_diff").copied(), Some(5));
         assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert!(
             entry.profile.unified_diff.details.starts_with("Not probed"),
