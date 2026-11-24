@@ -635,9 +635,6 @@ pub async fn probe_tool_selection_with<C: ProbeClient>(
     })
 }
 
-/// Classify tool_selection. A generic file tool (`edit_file` / `search` /
-/// `run_command`) is a miss on bline-specific names, not Weak. Weak would
-/// persist `max_tools=10` for 30 days (#3315).
 fn usable_doc_set_value(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => false,
@@ -646,6 +643,12 @@ fn usable_doc_set_value(value: &serde_json::Value) -> bool {
     }
 }
 
+/// [`classify`] plus two host-policy adjustments.
+///
+/// A generic file tool (`edit_file`, `search`, `run_command`) that
+/// would be Weak stays Medium. Weak would persist `max_tools=10`
+/// for 30 days. A score [`classify`] would call Strong stays Medium
+/// when a task is not precise, so `max_tools` stays 20.
 fn tool_selection_level(score: f32, used_generic: bool, all_precise: bool) -> CapabilityLevel {
     let mut level = classify(score);
     if level == CapabilityLevel::Weak && used_generic {
