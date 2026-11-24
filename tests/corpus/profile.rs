@@ -166,6 +166,28 @@ fn overall_level_all_strong() {
 }
 
 #[test]
+fn overall_stays_strong_when_nested_arguments_are_weak() {
+    let mut profile = make_profile(
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+        CapabilityLevel::Strong,
+    );
+    profile.nested_arguments = make_probe("nested_arguments", CapabilityLevel::Weak);
+    assert_eq!(profile.overall_level(), CapabilityLevel::Strong);
+    let table = profile.format_human_table(false);
+    assert!(
+        table
+            .lines()
+            .any(|line| line.starts_with("Nested Arguments:") && line.contains("Weak")),
+        "{table}"
+    );
+    assert!(
+        table.contains("Minimum of tool calling, JSON, and instruction following"),
+        "{table}"
+    );
+}
+
+#[test]
 fn needs_xml_fallback_true_for_weak_tool_calling() {
     let profile = make_profile(
         CapabilityLevel::Weak,
