@@ -525,11 +525,12 @@ pub const CORE_DIMENSION_NAMES: &[&str] = &[
 ];
 
 impl CapabilityProfile {
-    /// Overall capability level (minimum of completed core dimensions).
+    /// Minimum of completed tool calling, JSON output, and instruction following.
     ///
-    /// Transient, skipped, and unprobed cores are omitted. A 5xx/overload
-    /// on JSON must not collapse a Strong tools+instruction card to Weak.
-    /// If no core finished, Weak.
+    /// Nested arguments, vision, and the edit-format rows are not part of
+    /// this minimum. Transient, skipped, and unprobed rows are omitted. A
+    /// 5xx/overload on JSON must not collapse a Strong tools+instruction
+    /// card to Weak. If none of the three finished, Weak.
     pub fn overall_level(&self) -> CapabilityLevel {
         [
             self.tool_calling.measured_level(),
