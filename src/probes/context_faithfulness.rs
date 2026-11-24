@@ -27,8 +27,9 @@ timeout of 3 seconds.";
 /// Probe whether the model faithfully recalls details from context.
 ///
 /// Embeds 3 specific facts (a port number, a version string, and a
-/// timeout value) inside ~2K tokens of filler, then asks the model
-/// to recall all three.
+/// timeout value) inside four ~200-token filler blocks, then asks
+/// the model to recall all three. The live score comes from the
+/// context ladder. This function is not called.
 ///
 /// Scoring:
 /// - `1.0` - all 3 facts recalled correctly

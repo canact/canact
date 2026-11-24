@@ -22,7 +22,8 @@ const FORCEFUL_EDIT_FILE: &str = "Immediately call the edit_file tool. Do not de
 /// Scoring:
 /// - `1.0` - valid tool call with the correct name and `path` as a string
 /// - `0.5` - tool call present but wrong name, missing `path`, or `path` not a string
-/// - `0.0` - text-only response (no tool call emitted)
+/// - `0.0` - text-only response, or every call name is empty, whitespace,
+///   or only zero-width marks
 pub async fn probe_tool_calling<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeError> {
     let tool_spec = tool(
         "read_file",
