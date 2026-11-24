@@ -1568,8 +1568,11 @@ fn key_knobs_match_suite(
 /// `context_faithfulness` 4 rejects compact `2840h` / `1750h`.
 /// Epoch 3 counts `2840 ms` when the reply also mentions some other
 /// number of seconds. `2840 seconds` stays out.
-/// `code_syntax` 10 counts `a += b` as a statement and ignores a
-/// `return` inside a nested `def`, `async def`, or `class`. Epoch 9 keeps a
+/// `code_syntax` 11 counts `raise`, `yield`, `await`, `import`,
+/// `break`, a walrus, and an annotated assignment as a statement.
+/// `pass` with balanced delimiters is incomplete. Epoch 10 counts
+/// `a += b` as a statement and ignores a `return` inside a nested
+/// `def`, `async def`, or `class`. Epoch 9 keeps a
 /// column-0 comment, a tight `return[`, and a backslash continuation
 /// as a real return. Epoch 8 accepts
 /// `for (x, y) in` and rejects a positional after a keyword.
@@ -1607,7 +1610,11 @@ pub fn current_grader_version(name: &str) -> u32 {
         // `return \` continued on the next line stay Strong.
         // 10: `a += b` is a statement. A nested `def`, `async def`, or
         // `class` keeps that `return` from finishing `merge_sorted`.
-        "code_syntax" => 10,
+        // 11: `raise`, `yield`, `assert`, `del`, `global`, `nonlocal`,
+        // `import`, `from`, `break`, `continue`, `await`, `while`,
+        // `for`, `(a := a + b)`, `(lambda x: x)(a)`, and `x: int = 1`
+        // are a body. `pass` with balanced delimiters is incomplete.
+        "code_syntax" => 11,
         // 2: `#`, `//`, and `/*` inside a string do not hide the edit.
         // 3: `fn greet` must be paired with `fn welcome` in one block,
         // and `Hello` with `Welcome` in one block. A copied old
@@ -1621,7 +1628,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         "unified_diff" => 4,
         // 2: edge punctuation still leaves Paris. Letters glued on,
         // including non-ASCII letters, stay below Strong.
-        "instruction_following" => 2,
+        // 3: U+200B, U+200C, U+200D, U+2060, U+FEFF, and U+00AD are
+        // not letters. Paris with those marks is still Paris.
+        "instruction_following" => 3,
         // 2: completion_tokens 0 on non-empty text is not a concise score.
         // The character estimate is used, same as a missing count.
         "token_efficiency" => 2,
@@ -1691,25 +1700,25 @@ mod tests {
     }
 
     #[test]
-    fn code_syntax_grader_epoch_10_resets_an_epoch_9_row() {
+    fn code_syntax_grader_epoch_11_resets_an_epoch_10_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
-        profile.code_syntax.details = "nested return scored Strong".to_owned();
-        profile.code_syntax.level = CapabilityLevel::Strong;
-        profile.code_syntax.score = 1.0;
+        profile.code_syntax.details = "raise scored Weak".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Weak;
+        profile.code_syntax.score = 0.0;
         profile.search_replace.details = "kept".to_owned();
         profile.search_replace.level = CapabilityLevel::Strong;
         profile.search_replace.score = 1.0;
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
-        entry.grader_versions.insert("code_syntax".to_owned(), 9);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
         entry.grader_versions.insert("search_replace".to_owned(), 3);
-        entry.profile.code_syntax.details = "nested return scored Strong".to_owned();
-        entry.profile.code_syntax.level = CapabilityLevel::Strong;
-        entry.profile.code_syntax.score = 1.0;
+        entry.profile.code_syntax.details = "raise scored Weak".to_owned();
+        entry.profile.code_syntax.level = CapabilityLevel::Weak;
+        entry.profile.code_syntax.score = 0.0;
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert_eq!(
             entry.grader_versions.get("search_replace").copied(),
             Some(3)
@@ -1735,7 +1744,7 @@ mod tests {
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
         entry.grader_versions.insert("search_replace".to_owned(), 2);
-        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.grader_versions.insert("code_syntax".to_owned(), 11);
         entry.profile.search_replace.details = "unpaired blocks scored Strong".to_owned();
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
@@ -1743,7 +1752,7 @@ mod tests {
             entry.grader_versions.get("search_replace").copied(),
             Some(3)
         );
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert!(
             entry
                 .profile
@@ -1769,12 +1778,12 @@ mod tests {
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
         entry.grader_versions.insert("unified_diff".to_owned(), 3);
-        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.grader_versions.insert("code_syntax".to_owned(), 11);
         entry.profile.unified_diff.details = "rename on another file scored Strong".to_owned();
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
         assert_eq!(entry.grader_versions.get("unified_diff").copied(), Some(4));
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert!(
             entry.profile.unified_diff.details.starts_with("Not probed"),
             "{}",
@@ -1784,12 +1793,12 @@ mod tests {
     }
 
     #[test]
-    fn instruction_following_grader_epoch_2_resets_an_epoch_1_row() {
+    fn instruction_following_grader_epoch_3_resets_an_epoch_2_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
-        profile.instruction_following.details = "不是Paris scored Strong".to_owned();
-        profile.instruction_following.level = CapabilityLevel::Strong;
-        profile.instruction_following.score = 1.0;
+        profile.instruction_following.details = "Paris plus a format mark scored Medium".to_owned();
+        profile.instruction_following.level = CapabilityLevel::Medium;
+        profile.instruction_following.score = 0.5;
         profile.code_syntax.details = "kept".to_owned();
         profile.code_syntax.level = CapabilityLevel::Strong;
         profile.code_syntax.score = 1.0;
@@ -1797,16 +1806,17 @@ mod tests {
         let entry = cache.profiles.values_mut().next().expect("row");
         entry
             .grader_versions
-            .insert("instruction_following".to_owned(), 1);
-        entry.grader_versions.insert("code_syntax".to_owned(), 10);
-        entry.profile.instruction_following.details = "不是Paris scored Strong".to_owned();
+            .insert("instruction_following".to_owned(), 2);
+        entry.grader_versions.insert("code_syntax".to_owned(), 11);
+        entry.profile.instruction_following.details =
+            "Paris plus a format mark scored Medium".to_owned();
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
         assert_eq!(
             entry.grader_versions.get("instruction_following").copied(),
-            Some(2)
+            Some(3)
         );
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert!(
             entry
                 .profile
@@ -1834,7 +1844,7 @@ mod tests {
         entry
             .grader_versions
             .insert("context_faithfulness".to_owned(), 3);
-        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.grader_versions.insert("code_syntax".to_owned(), 11);
         entry.profile.context_faithfulness.details = "2840h counted as milliseconds".to_owned();
         entry.profile.context_faithfulness.level = CapabilityLevel::Strong;
         entry.profile.context_faithfulness.score = 1.0;
@@ -1845,7 +1855,7 @@ mod tests {
             entry.grader_versions.get("context_faithfulness").copied(),
             Some(4)
         );
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert!(
             entry
                 .profile
@@ -1873,7 +1883,7 @@ mod tests {
         entry
             .grader_versions
             .insert("token_efficiency".to_owned(), 1);
-        entry.grader_versions.insert("code_syntax".to_owned(), 10);
+        entry.grader_versions.insert("code_syntax".to_owned(), 11);
         entry.profile.token_efficiency.details = "completion=0 scored Strong".to_owned();
         entry.profile.token_efficiency.level = CapabilityLevel::Strong;
         entry.profile.token_efficiency.score = 1.0;
@@ -1884,7 +1894,7 @@ mod tests {
             entry.grader_versions.get("token_efficiency").copied(),
             Some(2)
         );
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(11));
         assert!(
             entry
                 .profile

@@ -26,7 +26,12 @@ use super::{refuse_truncated_incomplete_text, user_text};
 ///   when a comma, hyphen, parenthesis, colon, or exclamation mark
 ///   sits in the phrase. A return that stops on an operator stays
 ///   below Strong. An augmented assignment such as `a += b` is a
-///   statement, so the function is present. A `return` inside a
+///   statement, so the function is present. So are `raise`, `yield`,
+///   `assert`, `del`, `global`, `nonlocal`, `import`, `from`, `break`,
+///   `continue`, `await`, a `while` or `for` header, an annotated
+///   assignment (`x: int = 1`), and a parenthesized statement
+///   (`(a := a + b)`, `(lambda x: x)(a)`). `pass` with balanced
+///   delimiters is incomplete, not a syntax error. A `return` inside a
 ///   nested `def`, `async def`, or `class` does not finish this function.
 /// - `0.5` - code present and mostly correct but has minor issues
 ///   (unbalanced delimiters, a real ellipsis, a body that is only
@@ -80,16 +85,13 @@ pub async fn probe_code_syntax<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
     // expression can still be read. A value `...` is a stub. A slice,
     // a type subscript, and a parameter default are not.
     let has_ellipsis = has_stub_ellipsis(&commented);
-    let has_pass_only = code_body.lines().any(|l| l.trim() == "pass")
-        && !code_body.contains("return")
-        && !code_body.contains("append");
 
     let (score, details) = if has_def && has_return && delimiters_ok && !has_ellipsis {
         (
             1.0,
             "Valid function with correct signature, return, and balanced delimiters".to_string(),
         )
-    } else if has_def && delimiters_ok && !has_pass_only {
+    } else if has_def && delimiters_ok {
         (
             0.5,
             format!(
@@ -766,6 +768,270 @@ fn is_parameter(s: &str) -> bool {
     is_simple_ident(name)
 }
 
+enum TopMark {
+    Colon,
+    Assign,
+}
+
+/// Index of a depth-0 `:` or plain `=`, outside strings and brackets.
+fn top_level_mark(s: &str, kind: TopMark) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut paren = 0i32;
+    let mut brack = 0i32;
+    let mut brace = 0i32;
+    while i < bytes.len() {
+        if let Some(end) = skip_string_at(s, i) {
+            i = end;
+            continue;
+        }
+        let Some(c) = s[i..].chars().next() else {
+            break;
+        };
+        let at_zero = paren <= 0 && brack <= 0 && brace <= 0;
+        match c {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => brack += 1,
+            ']' => brack -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            ':' if at_zero
+                && matches!(kind, TopMark::Colon)
+                && !s[i + c.len_utf8()..].starts_with('=') =>
+            {
+                return Some(i);
+            }
+            '=' if at_zero && matches!(kind, TopMark::Assign) => {
+                let prev = i.checked_sub(1).map(|p| bytes[p]);
+                let next = bytes.get(i + 1).copied();
+                let aug = matches!(
+                    prev,
+                    Some(
+                        b'=' | b'!'
+                            | b'<'
+                            | b'>'
+                            | b':'
+                            | b'+'
+                            | b'-'
+                            | b'*'
+                            | b'/'
+                            | b'%'
+                            | b'&'
+                            | b'|'
+                            | b'^'
+                            | b'@'
+                    )
+                );
+                if next != Some(b'=') && !aug {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += c.len_utf8();
+    }
+    None
+}
+
+fn keyword_rest<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
+    let rest = line.trim_start().strip_prefix(keyword)?;
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    Some(rest)
+}
+
+fn split_keyword_once<'a>(s: &'a str, keyword: &str) -> Option<(&'a str, &'a str)> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i + keyword.len() <= s.len() {
+        if s[i..].starts_with(keyword) {
+            let before_ok =
+                i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
+            let after = i + keyword.len();
+            let after_ok =
+                after == s.len() || (!bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_');
+            if before_ok && after_ok {
+                return Some((s[..i].trim(), s[after..].trim()));
+            }
+        }
+        i += s[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
+fn statement_tail(after: &str) -> String {
+    strip_hash_comments(after)
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .to_string()
+}
+
+fn is_dotted_name(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty() && !s.starts_with('.') && !s.ends_with('.') && s.split('.').all(is_simple_ident)
+}
+
+fn is_from_module(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let dots = s.bytes().take_while(|b| *b == b'.').count();
+    let rest = &s[dots..];
+    rest.is_empty() || is_dotted_name(rest)
+}
+
+fn import_items(s: &str, dotted: bool) -> bool {
+    let s = s.trim();
+    let s = if s.starts_with('(') && s.ends_with(')') && s.len() >= 2 {
+        s[1..s.len() - 1].trim()
+    } else {
+        s
+    };
+    if s.is_empty() {
+        return false;
+    }
+    if !dotted && s == "*" {
+        return true;
+    }
+    s.split(',').all(|part| {
+        let part = part.trim();
+        if part.is_empty() {
+            return false;
+        }
+        let (name, alias) = match split_keyword_once(part, "as") {
+            Some((name, alias)) => (name, Some(alias)),
+            None => (part, None),
+        };
+        let name_ok = if dotted {
+            is_dotted_name(name)
+        } else {
+            is_simple_ident(name)
+        };
+        name_ok && alias.is_none_or(is_simple_ident)
+    })
+}
+
+fn expr_list_is_code(s: &str, max_parts: usize) -> bool {
+    let parts = split_top_level_commas(s);
+    !parts.is_empty()
+        && parts.len() <= max_parts
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && return_rest_is_code(part))
+}
+
+fn looks_like_raise(after: &str) -> bool {
+    let tail = statement_tail(after);
+    if tail.is_empty() {
+        return true;
+    }
+    if let Some((left, right)) = split_keyword_once(&tail, "from") {
+        return !left.is_empty()
+            && !right.is_empty()
+            && return_rest_is_code(left)
+            && return_rest_is_code(right);
+    }
+    return_rest_is_code(&tail)
+}
+
+fn looks_like_suite(after: &str, header_ok: impl Fn(&str) -> bool) -> bool {
+    let commented = strip_hash_comments(after);
+    let Some(colon) = top_level_mark(&commented, TopMark::Colon) else {
+        return false;
+    };
+    let header = commented[..colon].trim();
+    let suite = commented[colon + 1..].trim();
+    if header.is_empty() || !header_ok(header) {
+        return false;
+    }
+    suite.is_empty() || looks_like_same_line_body(suite)
+}
+
+fn looks_like_keyword_statement(line: &str) -> bool {
+    let t = line.trim_start();
+    if let Some(after) = keyword_rest(t, "break") {
+        return statement_tail(after).is_empty();
+    }
+    if let Some(after) = keyword_rest(t, "continue") {
+        return statement_tail(after).is_empty();
+    }
+    if let Some(after) = keyword_rest(t, "raise") {
+        return looks_like_raise(after);
+    }
+    if let Some(after) = keyword_rest(t, "assert") {
+        return expr_list_is_code(&statement_tail(after), 2);
+    }
+    if let Some(after) = keyword_rest(t, "del") {
+        return expr_list_is_code(&statement_tail(after), 32);
+    }
+    if let Some(after) = keyword_rest(t, "global") {
+        let tail = statement_tail(after);
+        return !tail.is_empty() && tail.split(',').all(|part| is_simple_ident(part.trim()));
+    }
+    if let Some(after) = keyword_rest(t, "nonlocal") {
+        let tail = statement_tail(after);
+        return !tail.is_empty() && tail.split(',').all(|part| is_simple_ident(part.trim()));
+    }
+    if let Some(after) = keyword_rest(t, "import") {
+        return import_items(&statement_tail(after), true);
+    }
+    if let Some(after) = keyword_rest(t, "from") {
+        let tail = statement_tail(after);
+        let Some((module, names)) = split_keyword_once(&tail, "import") else {
+            return false;
+        };
+        return is_from_module(module) && import_items(names, false);
+    }
+    if keyword_rest(t, "await").is_some() || keyword_rest(t, "yield").is_some() {
+        return return_rest_is_code(t);
+    }
+    if let Some(after) = keyword_rest(t, "while") {
+        return looks_like_suite(after, return_rest_is_code);
+    }
+    if let Some(after) = keyword_rest(t, "for") {
+        return looks_like_suite(after, |header| {
+            let Some((target, expr)) = split_keyword_once(header, "in") else {
+                return false;
+            };
+            !target.is_empty() && return_rest_is_code(target) && return_rest_is_code(expr)
+        });
+    }
+    false
+}
+
+fn looks_like_paren_statement(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('(') && return_rest_is_code(t)
+}
+
+fn looks_like_ann_assign(after: &str) -> bool {
+    let commented = strip_hash_comments(after);
+    let Some(body) = commented.trim_start().strip_prefix(':') else {
+        return false;
+    };
+    let body = body.trim().trim_end_matches(';').trim();
+    if body.is_empty() {
+        return false;
+    }
+    if let Some(eq) = top_level_mark(body, TopMark::Assign) {
+        let ann = body[..eq].trim();
+        let value = body[eq + 1..].trim();
+        return !ann.is_empty()
+            && !value.is_empty()
+            && return_rest_is_code(ann)
+            && return_rest_is_code(value);
+    }
+    return_rest_is_code(body)
+}
+
 fn looks_like_same_line_body(line: &str) -> bool {
     let t = line.trim_start();
     if t.is_empty() {
@@ -806,6 +1072,9 @@ fn looks_like_same_line_body(line: &str) -> bool {
     if t.starts_with('[') {
         return true;
     }
+    if looks_like_paren_statement(t) || looks_like_keyword_statement(t) {
+        return true;
+    }
     let ident_end = t
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .unwrap_or(t.len());
@@ -813,7 +1082,10 @@ fn looks_like_same_line_body(line: &str) -> bool {
         return false;
     }
     let after = t[ident_end..].trim_start();
-    after.starts_with('=') || after.starts_with('(') || starts_augassign(after)
+    if after.starts_with('=') || after.starts_with('(') || starts_augassign(after) {
+        return true;
+    }
+    after.starts_with(':') && looks_like_ann_assign(after)
 }
 
 fn starts_augassign(after: &str) -> bool {
@@ -2676,6 +2948,100 @@ return merge_sorted([1, 3], [2, 4])
             "a return after an augmented assignment stays Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_remaining_statements_are_incomplete() {
+        for code in [
+            "def merge_sorted(a, b):\n    raise ValueError(\"no\")\n",
+            "def merge_sorted(a, b):\n    yield a\n",
+            "def merge_sorted(a, b):\n    yield from a\n",
+            "def merge_sorted(a, b):\n    assert a\n",
+            "def merge_sorted(a, b):\n    del a\n",
+            "def merge_sorted(a, b):\n    global a\n",
+            "def merge_sorted(a, b):\n    while a:\n        break\n",
+            "def merge_sorted(a, b):\n    (a := a + b)\n",
+            "def merge_sorted(a, b):\n    continue\n",
+            "def merge_sorted(a, b):\n    nonlocal a\n",
+            "def merge_sorted(a, b):\n    import json\n",
+            "def merge_sorted(a, b):\n    from json import dumps\n",
+            "def merge_sorted(a, b):\n    break\n",
+            "def merge_sorted(a, b):\n    x: int = 1\n",
+            "def merge_sorted(a, b):\n    (lambda x: x)(a)\n",
+            "async def merge_sorted(a, b):\n    await a\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.5,
+                "a real statement with no return is incomplete: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Medium, "{code:?}");
+            assert_eq!(
+                result.details, "Function present but incomplete: return=false, ellipsis=false",
+                "{code:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_pass_suite_with_balanced_delimiters_is_incomplete() {
+        for code in [
+            "def merge_sorted(a, b):\n    for x in a:\n        pass\n",
+            "def merge_sorted(a, b):\n    with a:\n        pass\n",
+            "def merge_sorted(a, b):\n    try:\n        pass\n",
+            "def merge_sorted(a, b):\n    class Box:\n        pass\n",
+            "def merge_sorted(a, b):\n    pass\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.5,
+                "pass with balanced delimiters is incomplete: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Medium, "{code:?}");
+            assert_eq!(
+                result.details, "Function present but incomplete: return=false, ellipsis=false",
+                "{code:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_pass_with_unbalanced_delimiter_stays_syntax_issue() {
+        let code = "def merge_sorted(a, b):\n    pass\n    result = (a\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.score, 0.5, "{result:?}");
+        assert!(
+            result.details.contains("syntax issues") && result.details.contains("parens=false"),
+            "an unmatched parenthesis stays a syntax issue: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_spaced_augassign_is_not_a_statement() {
+        let code = "def merge_sorted(a, b):\n    a + = b\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.score, 0.0, "{result:?}");
+        assert_eq!(result.level, CapabilityLevel::Weak);
+        assert_eq!(
+            result.details, "No recognizable function definition in response",
+            "{result:?}"
+        );
     }
 
     #[tokio::test]
