@@ -25,7 +25,9 @@ use super::{refuse_truncated_incomplete_text, user_text};
 ///   expression, and a call argument. An English return stays Weak
 ///   when a comma, hyphen, parenthesis, colon, or exclamation mark
 ///   sits in the phrase. A return that stops on an operator stays
-///   below Strong.
+///   below Strong. An augmented assignment such as `a += b` is a
+///   statement, so the function is present. A `return` inside a
+///   nested `def`, `async def`, or `class` does not finish this function.
 /// - `0.5` - code present and mostly correct but has minor issues
 ///   (unbalanced delimiters, a real ellipsis, a body that is only
 ///   `...`, or missing return)
@@ -811,7 +813,14 @@ fn looks_like_same_line_body(line: &str) -> bool {
         return false;
     }
     let after = t[ident_end..].trim_start();
-    after.starts_with('=') || after.starts_with('(')
+    after.starts_with('=') || after.starts_with('(') || starts_augassign(after)
+}
+
+fn starts_augassign(after: &str) -> bool {
+    const OPS: &[&str] = &[
+        "+=", "-=", "*=", "@=", "/=", "%=", "&=", "|=", "^=", ">>=", "<<=", "**=", "//=",
+    ];
+    OPS.iter().any(|op| after.starts_with(op))
 }
 
 fn return_rest_is_code(rest: &str) -> bool {
@@ -998,11 +1007,121 @@ fn rest_has_return_line(text: &str, rest: &str, rest_at: usize) -> bool {
         if i > 0 && !(line.starts_with(' ') || line.starts_with('\t')) {
             return false;
         }
+        // A nested def or class has its own return. That return does not
+        // finish merge_sorted. An if or while suite still does.
+        if line_outside_string(text, starts[i]) && is_suite_header(line) {
+            i = skip_nested_suite(&lines, i);
+            continue;
+        }
         let (joined, used) = join_open_return(&lines[i..]);
         if line_outside_string(text, starts[i]) && line_has_return_token(&joined) {
             return true;
         }
         i += used.max(1);
+    }
+    false
+}
+
+fn leading_indent(line: &str) -> usize {
+    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+}
+
+fn is_suite_header(line: &str) -> bool {
+    let mut t = line.trim_start();
+    if let Some(rest) = t.strip_prefix("async")
+        && rest.starts_with(|c: char| c.is_whitespace())
+    {
+        t = rest.trim_start();
+    }
+    for kw in ["def", "class"] {
+        if let Some(rest) = t.strip_prefix(kw)
+            && (rest.is_empty()
+                || rest.starts_with(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Index of the first line after a nested `def` or `class` suite.
+///
+/// The header may wrap while parentheses are open. Lines indented
+/// past the header belong to that suite, including a further nested
+/// function. The same indent is `merge_sorted` again.
+fn skip_nested_suite(lines: &[&str], header_at: usize) -> usize {
+    let header_indent = leading_indent(lines[header_at]);
+    let mut paren = 0i32;
+    let mut brack = 0i32;
+    let mut brace = 0i32;
+    let mut header_end = header_at;
+    let mut i = header_at;
+    let mut closed = false;
+    while i < lines.len() {
+        let line = lines[i];
+        if i > header_at && line.trim().is_empty() {
+            i += 1;
+            continue;
+        }
+        if i > header_at
+            && paren <= 0
+            && brack <= 0
+            && brace <= 0
+            && leading_indent(line) <= header_indent
+        {
+            break;
+        }
+        header_end = i;
+        if header_colon_on_line(line, &mut paren, &mut brack, &mut brace) {
+            closed = true;
+            break;
+        }
+        i += 1;
+    }
+    let mut j = header_end + 1;
+    if !closed {
+        return j;
+    }
+    while j < lines.len() {
+        let line = lines[j];
+        if line.trim().is_empty() {
+            j += 1;
+            continue;
+        }
+        if leading_indent(line) > header_indent {
+            j += 1;
+            continue;
+        }
+        break;
+    }
+    j
+}
+
+fn header_colon_on_line(line: &str, paren: &mut i32, brack: &mut i32, brace: &mut i32) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = skip_string_at(line, i) {
+            i = end;
+            continue;
+        }
+        let Some(ch) = line[i..].chars().next() else {
+            break;
+        };
+        if ch == '#' {
+            return false;
+        }
+        match ch {
+            '(' => *paren += 1,
+            ')' => *paren -= 1,
+            '[' => *brack += 1,
+            ']' => *brack -= 1,
+            '{' => *brace += 1,
+            '}' => *brace -= 1,
+            ':' if *paren <= 0 && *brack <= 0 && *brace <= 0 => return true,
+            _ => {}
+        }
+        i += ch.len_utf8();
     }
     false
 }
@@ -2521,6 +2640,103 @@ return merge_sorted([1, 3], [2, 4])
             "return outside merge_sorted body must not be Strong: {result:?}"
         );
         assert_ne!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_augmented_assignment_is_incomplete() {
+        for body in ["a += b", "out *= 2", "a //= b"] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.5,
+                "an augmented assignment is a statement with no return: {body:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Medium, "{body:?}");
+            assert_eq!(
+                result.details, "Function present but incomplete: return=false, ellipsis=false",
+                "{body:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_augmented_assignment_then_return_is_strong() {
+        let code = "def merge_sorted(a, b):\n    a += b\n    return a\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a return after an augmented assignment stays Strong: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_nested_return_is_not_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    def helper(x):\n        return x\n",
+            "def merge_sorted(a, b):\n    class Box:\n        def get(self):\n            return a\n",
+            "def merge_sorted(a, b):\n    def helper(\n        x,\n    ):\n        return x\n",
+            "def merge_sorted(a, b):\n    if a:\n        def helper(x):\n            return x\n",
+            "def merge_sorted(a, b):\n    async def helper(x):\n        return x\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.5,
+                "a return inside a nested def or class is not merge_sorted's return: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Medium, "{code:?}");
+            assert!(
+                result.details.contains("return=false"),
+                "{code:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_nested_helper_with_outer_return_is_strong() {
+        let code = "\
+def merge_sorted(a, b):
+    def helper(x):
+        return x
+    return a + b
+";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a return on merge_sorted stays Strong when a helper also returns: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_if_return_stays_strong() {
+        let code = "def merge_sorted(a, b):\n    if a:\n        return a\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 1.0,
+            "a return inside if still belongs to merge_sorted: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]

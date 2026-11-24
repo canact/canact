@@ -1565,8 +1565,10 @@ fn key_knobs_match_suite(
 /// `search_replace` 2 ignores a syntax mark that sits inside a string.
 /// `context_faithfulness` 3 counts `2840 ms` when the reply also
 /// mentions some other number of seconds. `2840 seconds` stays out.
-/// `code_syntax` 9 keeps a column-0 comment, a tight `return[`,
-/// and a backslash continuation as a real return. Epoch 8 accepts
+/// `code_syntax` 10 counts `a += b` as a statement and ignores a
+/// `return` inside a nested `def`, `async def`, or `class`. Epoch 9 keeps a
+/// column-0 comment, a tight `return[`, and a backslash continuation
+/// as a real return. Epoch 8 accepts
 /// `for (x, y) in` and rejects a positional after a keyword.
 /// `unified_diff` 3 uses the
 /// same comment strip as search_replace. A cached score from an older
@@ -1597,7 +1599,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         // `return sorted(reverse=True, a + b)` stays below Strong.
         // 9: a column-0 `#` comment, `return[a, b]`, and
         // `return \` continued on the next line stay Strong.
-        "code_syntax" => 9,
+        // 10: `a += b` is a statement. A nested `def`, `async def`, or
+        // `class` keeps that `return` from finishing `merge_sorted`.
+        "code_syntax" => 10,
         // 2: `#`, `//`, and `/*` inside a string do not hide the edit.
         "search_replace" => 2,
         // 3: same string-aware comment strip as search_replace. Epoch 2
@@ -1669,10 +1673,10 @@ mod tests {
     }
 
     #[test]
-    fn code_syntax_grader_epoch_9_resets_an_epoch_8_row() {
+    fn code_syntax_grader_epoch_10_resets_an_epoch_9_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
-        profile.code_syntax.details = "English return with a comma scored Strong".to_owned();
+        profile.code_syntax.details = "nested return scored Strong".to_owned();
         profile.code_syntax.level = CapabilityLevel::Strong;
         profile.code_syntax.score = 1.0;
         profile.search_replace.details = "kept".to_owned();
@@ -1680,14 +1684,14 @@ mod tests {
         profile.search_replace.score = 1.0;
         cache.put(profile).expect("put");
         let entry = cache.profiles.values_mut().next().expect("row");
-        entry.grader_versions.insert("code_syntax".to_owned(), 8);
+        entry.grader_versions.insert("code_syntax".to_owned(), 9);
         entry.grader_versions.insert("search_replace".to_owned(), 2);
-        entry.profile.code_syntax.details = "ellipsis stub scored Weak".to_owned();
+        entry.profile.code_syntax.details = "nested return scored Strong".to_owned();
         entry.profile.code_syntax.level = CapabilityLevel::Strong;
         entry.profile.code_syntax.score = 1.0;
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(9));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
         assert_eq!(
             entry.grader_versions.get("search_replace").copied(),
             Some(2)
@@ -1715,7 +1719,7 @@ mod tests {
         entry
             .grader_versions
             .insert("context_faithfulness".to_owned(), 2);
-        entry.grader_versions.insert("code_syntax".to_owned(), 9);
+        entry.grader_versions.insert("code_syntax".to_owned(), 10);
         entry.profile.context_faithfulness.details = "2840 ms erased by 3 seconds".to_owned();
         entry.profile.context_faithfulness.level = CapabilityLevel::Medium;
         entry.profile.context_faithfulness.score = 2.0 / 3.0;
@@ -1726,7 +1730,7 @@ mod tests {
             entry.grader_versions.get("context_faithfulness").copied(),
             Some(3)
         );
-        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(9));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(10));
         assert!(
             entry
                 .profile
