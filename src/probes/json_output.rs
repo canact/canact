@@ -49,8 +49,9 @@ pub async fn probe_json_output<C: ProbeClient>(llm: &C) -> Result<ProbeResult, P
 ///
 /// Scoring:
 /// - `1.0` - exactly one word, the asked capital (Paris).
-///   Edge punctuation is ignored. Letters stuck to the word,
-///   including non-ASCII letters, are not Paris.
+///   Edge punctuation is ignored. So are U+200B, U+200C, U+200D,
+///   U+2060, U+FEFF, and U+00AD, before or after the word.
+///   Letters stuck to the word, including non-ASCII letters, are not Paris.
 /// - `0.5` - one wrong word, or short but multi-word (2-4 words)
 /// - `0.0` - empty or verbose (5+ words)
 pub async fn probe_instruction_following<C: ProbeClient>(
@@ -107,8 +108,17 @@ fn is_edge_punct(c: char) -> bool {
         )
 }
 
+fn is_format_mark(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}' | '\u{00AD}'
+    )
+}
+
 fn asked_capital(word: &str) -> bool {
-    word.trim()
+    let stripped: String = word.chars().filter(|c| !is_format_mark(*c)).collect();
+    stripped
+        .trim()
         .trim_matches(is_edge_punct)
         .eq_ignore_ascii_case("paris")
 }
@@ -741,6 +751,9 @@ mod tests {
             "Yes",
             "不是Paris",
             "éParis",
+            "Parisian",
+            "xParis",
+            "Parisx",
             "Paris。不是",
         ] {
             let llm = MockLlm {
@@ -767,6 +780,35 @@ mod tests {
             assert_eq!(result.score, 1.0, "{word}");
             assert_eq!(result.level, CapabilityLevel::Strong, "{word}");
         }
+    }
+
+    #[tokio::test]
+    async fn instruction_following_format_marks_are_still_paris() {
+        let marks = [
+            '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{00AD}',
+        ];
+        for mark in marks {
+            for word in [format!("Paris{mark}"), format!("{mark}Paris")] {
+                let result = probe_instruction_following(&MockLlm {
+                    response: text_response(&word),
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    result.score, 1.0,
+                    "a format mark is not part of the word: {word:?} {result:?}"
+                );
+                assert_eq!(result.level, CapabilityLevel::Strong, "{word:?}");
+            }
+        }
+        let marked = format!("Par{}is", '\u{200B}');
+        let result = probe_instruction_following(&MockLlm {
+            response: text_response(&marked),
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.score, 1.0, "{marked:?} {result:?}");
+        assert_eq!(result.level, CapabilityLevel::Strong);
     }
 
     #[tokio::test]
