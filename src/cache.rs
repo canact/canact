@@ -1570,6 +1570,8 @@ fn key_knobs_match_suite(
 /// `context_faithfulness` 4 rejects compact `2840h` / `1750h`.
 /// Epoch 3 counts `2840 ms` when the reply also mentions some other
 /// number of seconds. `2840 seconds` stays out.
+/// `vision` 5 treats `I can make out BL` as a read. A process-images
+/// refusal that names BL is not Strong. `not BL` is not a read.
 /// `code_syntax` 12 counts a method call and an attribute or
 /// subscript assignment as a statement. `a.extend(b)` and
 /// `a.items = b` are incomplete, not a missing function.
@@ -1596,7 +1598,9 @@ pub fn current_grader_version(name: &str) -> u32 {
         // 3: probe image is 32x32 (1024 pixels). Epoch 2 scored the 16x16 image.
         // 4: `can't really see` and `cannot quite see` are see-denials.
         // `I don't see BL` stays Weak. A font hedge stays Strong.
-        "vision" => 4,
+        // 5: `I can make out BL` is a read. A process-images refusal
+        // that names BL is not Strong. `not BL` is not a read.
+        "vision" => 5,
         // 2: an ellipsis inside a string or comment is not an incomplete body.
         // 3: a value ellipsis is a stub (`return (...)`, `f"{...}"`,
         // `helper(...)`). A slice, type subscript, or parameter default is not.
@@ -1921,7 +1925,7 @@ mod tests {
     }
 
     #[test]
-    fn vision_grader_epoch_4_resets_an_epoch_2_row() {
+    fn vision_grader_epoch_5_resets_an_epoch_2_row() {
         let mut cache = ProbeCache::default();
         let mut profile = CapabilityProfile::unprobed("m", "local");
         profile.vision.details = "NONE from 16x16".to_owned();
@@ -1935,12 +1939,42 @@ mod tests {
         entry.profile.vision.score = 0.0;
         assert!(cache.migrate_stale_grader_versions());
         let entry = cache.profiles.values().next().expect("row");
-        assert_eq!(entry.grader_versions.get("vision").copied(), Some(4));
+        assert_eq!(entry.grader_versions.get("vision").copied(), Some(5));
         assert!(
             entry.profile.vision.details.starts_with("Not probed"),
             "{}",
             entry.profile.vision.details
         );
+    }
+
+    #[test]
+    fn vision_grader_epoch_5_resets_an_epoch_4_row() {
+        let mut cache = ProbeCache::default();
+        let mut profile = CapabilityProfile::unprobed("m", "local");
+        profile.vision.details = "not BL scored Strong".to_owned();
+        profile.vision.level = CapabilityLevel::Strong;
+        profile.vision.score = 1.0;
+        profile.code_syntax.details = "kept".to_owned();
+        profile.code_syntax.level = CapabilityLevel::Strong;
+        profile.code_syntax.score = 1.0;
+        cache.put(profile).expect("put");
+        let entry = cache.profiles.values_mut().next().expect("row");
+        entry.grader_versions.insert("vision".to_owned(), 4);
+        entry.grader_versions.insert("code_syntax".to_owned(), 12);
+        entry.profile.vision.details = "not BL scored Strong".to_owned();
+        entry.profile.vision.level = CapabilityLevel::Strong;
+        entry.profile.vision.score = 1.0;
+        entry.profile.code_syntax.details = "kept".to_owned();
+        assert!(cache.migrate_stale_grader_versions());
+        let entry = cache.profiles.values().next().expect("row");
+        assert_eq!(entry.grader_versions.get("vision").copied(), Some(5));
+        assert_eq!(entry.grader_versions.get("code_syntax").copied(), Some(12));
+        assert!(
+            entry.profile.vision.details.starts_with("Not probed"),
+            "{}",
+            entry.profile.vision.details
+        );
+        assert_eq!(entry.profile.code_syntax.details, "kept");
     }
 
     #[test]
