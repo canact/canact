@@ -30,7 +30,11 @@ use super::{refuse_truncated_incomplete_text, user_text};
 ///   `assert`, `del`, `global`, `nonlocal`, `import`, `from`, `break`,
 ///   `continue`, `await`, a `while` or `for` header, an annotated
 ///   assignment (`x: int = 1`), and a parenthesized statement
-///   (`(a := a + b)`, `(lambda x: x)(a)`). `pass` with balanced
+///   (`(a := a + b)`, `(lambda x: x)(a)`). A method call
+///   (`a.extend(b)`), an attribute or subscript assignment
+///   (`a.items = b`, `a[0] = b`), and an augmented assignment on
+///   those targets (`a.items += b`) are statements too. A call that
+///   wraps onto the next line still counts. `pass` with balanced
 ///   delimiters is incomplete, not a syntax error. A `return` inside a
 ///   nested `def`, `async def`, or `class` does not finish this function.
 /// - `0.5` - code present and mostly correct but has minor issues
@@ -1009,7 +1013,137 @@ fn looks_like_keyword_statement(line: &str) -> bool {
 
 fn looks_like_paren_statement(line: &str) -> bool {
     let t = line.trim_start();
-    t.starts_with('(') && return_rest_is_code(t)
+    t.starts_with('(') && (return_rest_is_code(t) || looks_like_trailer_statement(t))
+}
+
+/// Text before a depth-0 `;`. A semicolon inside a string or brackets
+/// stays in the statement.
+fn first_statement(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut paren = 0i32;
+    let mut brack = 0i32;
+    let mut brace = 0i32;
+    while i < bytes.len() {
+        if let Some(end) = skip_string_at(s, i) {
+            i = end;
+            continue;
+        }
+        let Some(c) = s[i..].chars().next() else {
+            break;
+        };
+        match c {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => brack += 1,
+            ']' => brack -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            ';' if paren <= 0 && brack <= 0 && brace <= 0 => return s[..i].trim(),
+            _ => {}
+        }
+        i += c.len_utf8();
+    }
+    s.trim()
+}
+
+fn top_level_augassign(s: &str) -> Option<(usize, usize)> {
+    const OPS: &[&str] = &[
+        "**=", "//=", ">>=", "<<=", "+=", "-=", "*=", "@=", "/=", "%=", "&=", "|=", "^=",
+    ];
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut paren = 0i32;
+    let mut brack = 0i32;
+    let mut brace = 0i32;
+    while i < bytes.len() {
+        if let Some(end) = skip_string_at(s, i) {
+            i = end;
+            continue;
+        }
+        let Some(c) = s[i..].chars().next() else {
+            break;
+        };
+        if paren <= 0
+            && brack <= 0
+            && brace <= 0
+            && let Some(op) = OPS.iter().find(|op| s[i..].starts_with(*op))
+        {
+            return Some((i, op.len()));
+        }
+        match c {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => brack += 1,
+            ']' => brack -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            _ => {}
+        }
+        i += c.len_utf8();
+    }
+    None
+}
+
+fn looks_like_chained_assign(stmt: &str) -> bool {
+    let Some(eq) = top_level_mark(stmt, TopMark::Assign) else {
+        return false;
+    };
+    let left = stmt[..eq].trim();
+    let right = stmt[eq + 1..].trim();
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    assignment_targets(left) && (return_rest_is_code(right) || looks_like_chained_assign(right))
+}
+
+/// `a.extend(b)`, `a.items = b`, `a[0] += 1`. The name is already
+/// known. A dot or subscript is what the bare-name check misses.
+fn looks_like_trailer_statement(line: &str) -> bool {
+    let tail = statement_tail(line);
+    if tail.is_empty() {
+        return false;
+    }
+    let stmt = first_statement(&tail);
+    if stmt.is_empty() {
+        return false;
+    }
+    if return_rest_is_code(stmt) {
+        return true;
+    }
+    if let Some((at, len)) = top_level_augassign(stmt) {
+        let left = stmt[..at].trim();
+        let right = stmt[at + len..].trim();
+        return assignment_targets(left)
+            && !right.is_empty()
+            && (return_rest_is_code(right) || unclosed_delimiters(right));
+    }
+    if looks_like_chained_assign(stmt) {
+        return true;
+    }
+    // `a.extend(` continues on the next line. An open bracket is enough
+    // to say the function is there; the delimiter check scores the close.
+    unclosed_delimiters(stmt)
+}
+
+fn assignment_targets(s: &str) -> bool {
+    let parts: Vec<&str> = split_top_level_commas(s)
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect();
+    !parts.is_empty() && parts.iter().copied().all(one_assign_target)
+}
+
+fn one_assign_target(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let mut parser = ExprParser { s, i: 0, group: 0 };
+    parser.parse_assign_target() && {
+        parser.skip_ws();
+        parser.i >= parser.s.len()
+    }
 }
 
 fn looks_like_ann_assign(after: &str) -> bool {
@@ -1085,7 +1219,12 @@ fn looks_like_same_line_body(line: &str) -> bool {
     if after.starts_with('=') || after.starts_with('(') || starts_augassign(after) {
         return true;
     }
-    after.starts_with(':') && looks_like_ann_assign(after)
+    if after.starts_with(':') && looks_like_ann_assign(after) {
+        return true;
+    }
+    // `sorted(a + b)` is the `(` arm. `a.extend(b)` and `a[0] = b`
+    // continue the same name through `.` or `[`.
+    (after.starts_with('.') || after.starts_with('[')) && looks_like_trailer_statement(t)
 }
 
 fn starts_augassign(after: &str) -> bool {
@@ -1805,6 +1944,91 @@ impl<'a> ExprParser<'a> {
                 continue;
             }
             return true;
+        }
+    }
+
+    fn parse_assign_target(&mut self) -> bool {
+        self.skip_ws();
+        if self.rest().starts_with("**") {
+            return false;
+        }
+        let starred = if self.rest().starts_with('*') {
+            self.i += 1;
+            self.skip_ws();
+            true
+        } else {
+            false
+        };
+        if self.rest().starts_with('(') || self.rest().starts_with('[') {
+            if starred {
+                return false;
+            }
+            return self.parse_target_group();
+        }
+        if !self.consume_name() {
+            return false;
+        }
+        if starred {
+            return true;
+        }
+        self.parse_target_trailers()
+    }
+
+    fn parse_target_trailers(&mut self) -> bool {
+        loop {
+            self.skip_ws();
+            if self.rest().starts_with('.') {
+                let next = self.rest().as_bytes().get(1).copied();
+                if next == Some(b'.') || next.is_some_and(|b| b.is_ascii_digit()) {
+                    return false;
+                }
+                self.i += 1;
+                self.skip_ws();
+                if !self.consume_name() {
+                    return false;
+                }
+                continue;
+            }
+            if self.rest().starts_with('[') {
+                if !self.parse_subscript() {
+                    return false;
+                }
+                continue;
+            }
+            return true;
+        }
+    }
+
+    fn parse_target_group(&mut self) -> bool {
+        let close = if self.rest().starts_with('(') {
+            ')'
+        } else {
+            ']'
+        };
+        self.i += 1;
+        self.skip_ws();
+        if self.rest().starts_with(close) {
+            return false;
+        }
+        loop {
+            if !self.parse_assign_target() {
+                return false;
+            }
+            self.skip_ws();
+            if self.rest().starts_with(',') {
+                self.i += 1;
+                self.skip_ws();
+                if self.rest().starts_with(close) {
+                    self.i += 1;
+                    return true;
+                }
+                continue;
+            }
+            if self.rest().starts_with(close) {
+                self.i += 1;
+                return true;
+            }
+            return false;
         }
     }
 
@@ -2948,6 +3172,113 @@ return merge_sorted([1, 3], [2, 4])
             "a return after an augmented assignment stays Strong: {result:?}"
         );
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn code_syntax_method_call_and_attribute_assign_are_incomplete() {
+        for body in [
+            "a.extend(b)",
+            "a.b.extend(c)",
+            "a .extend(b)",
+            "a.items + b",
+            "a[0] + b",
+            "a.extend(b) # in place",
+            "a.items = b",
+            "a.items = \"b # c\"",
+            "a[\"items\"] = b",
+            "a[0] = b",
+            "a[0:1] = b",
+            "a.items += b",
+            "a[0] += 1",
+            "a[i].append(b)",
+            "(a.items) = b",
+            "a.x, b[0] = b, a",
+            "a.items = b.items = []",
+        ] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.5,
+                "a method call or attribute assignment is a body: {body:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Medium, "{body:?}");
+            assert_eq!(
+                result.details, "Function present but incomplete: return=false, ellipsis=false",
+                "{body:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_wrapped_method_call_is_incomplete() {
+        let code = "def merge_sorted(a, b):\n    a.extend(\n        b\n    )\n";
+        let result = probe_code_syntax(&MockLlm {
+            response: text_response(code),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.score, 0.5,
+            "a wrapped method call is still a function: {result:?}"
+        );
+        assert_eq!(result.level, CapabilityLevel::Medium);
+        assert_eq!(
+            result.details, "Function present but incomplete: return=false, ellipsis=false",
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_syntax_method_call_then_return_is_strong() {
+        for code in [
+            "def merge_sorted(a, b):\n    a.extend(b)\n    return a\n",
+            "def merge_sorted(a, b):\n    a.items = b\n    return a\n",
+        ] {
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 1.0,
+                "a return after a method call or attribute assignment is Strong: {code:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Strong, "{code:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn code_syntax_dotted_prose_is_not_a_statement() {
+        for body in [
+            "a.extend the lists",
+            "a.extend(the lists)",
+            "a.items = the two lists",
+            "a.items + = b",
+            "a.",
+            "a.items = b +",
+            "\"a.extend(b)\"",
+            "# a.extend(b)",
+        ] {
+            let code = format!("def merge_sorted(a, b):\n    {body}\n");
+            let result = probe_code_syntax(&MockLlm {
+                response: text_response(&code),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.score, 0.0,
+                "dotted prose is not a function body: {body:?} {result:?}"
+            );
+            assert_eq!(result.level, CapabilityLevel::Weak, "{body:?}");
+            assert_eq!(
+                result.details, "No recognizable function definition in response",
+                "{body:?} {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
