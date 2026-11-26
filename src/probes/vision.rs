@@ -34,7 +34,9 @@ them, or the single word NONE if you cannot. No other words.";
 /// - `0.5` - describes letters, text, or the image without that identification
 /// - `0.0` - the reply is NONE, a refusal, or a generic answer that ignores the image
 ///
-/// A reply that mentions BL inside a refusal, such as "I cannot read BL", is not 1.0.
+/// A reply that mentions BL inside a refusal, such as "I cannot read BL"
+/// or "I cannot process images. BL", is not 1.0. "I can make out BL" is
+/// a read. "not BL" is not a read.
 ///
 /// Note: vision probes are more expensive than text probes due to image
 /// token costs. The cache prevents repeated probing.
@@ -70,15 +72,13 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // Check if the model identified the text. Be careful not to match "black",
     // "blue", "blank", etc. - only match "BL" as a standalone word or "BLINE".
     let trimmed_lower = lower.trim().trim_matches(|c: char| c == '"' || c == '\'');
-    let letter_tokens: Vec<&str> = lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .collect();
+    let letter_tokens = split_words(lower);
+    // A BL token after "not" / "n't" is a denial, not a read.
+    // "The letters are BL, not XY" still counts. A distant "not" does not.
     let identified_text = trimmed_lower == "bl"
-        || lower.contains("bline")
-        || lower.contains("\"bl\"")
-        || lower.contains("'bl'")
-        || letter_tokens.contains(&"bl")
+        || affirmative_bline(lower)
+        || affirmative_quoted_bl(lower)
+        || bl_token_is_read(&letter_tokens)
         || letter_tokens.as_slice() == ["b", "l"];
 
     // User-facing details only. Ground-truth text in the probe image stays
@@ -93,6 +93,11 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     let make_out_negated = cannot_make_token_out(&folded) || cannot_make_token_out(&stripped);
     let leftover_unread =
         leftover_read_blocks_strong(&folded) || leftover_read_blocks_strong(&stripped);
+    // Blocks Strong only. A font hedge that also names BL stays a read.
+    // Blanket `refused` stays below this branch so a partial glyph read
+    // ("I see letters but cannot make them out") remains Medium.
+    let process_refusal =
+        !font_hedge && (refuses_image_process(&folded) || refuses_image_process(&stripped));
     let saw_glyphs = !negated_glyphs
         && (has_surface_word(lower, "letter")
             || has_surface_word(lower, "letters")
@@ -111,13 +116,19 @@ pub async fn probe_vision<C: ProbeClient>(llm: &C) -> Result<ProbeResult, ProbeE
     // Strong is a read, not any "don't"/"cannot" hedge (font, typeface).
     // See-denial still blocks Strong ("I don't see BL", "I can't really see BL").
     // Infix leftover read verbs ("cannot quite read BL") are not Strong.
+    // "I can make out BL" is a read. "not BL" and a process-images refusal are not.
     let constrained_none = trimmed_lower == "none";
     let echoed_constrained =
         lower.contains("exactly two letters") || lower.contains("single word none");
 
     let (score, details) = if constrained_none {
         (0.0, "Constrained NONE (cannot read letters)".to_string())
-    } else if identified_text && !negated_glyphs && !make_out_negated && !leftover_unread {
+    } else if identified_text
+        && !negated_glyphs
+        && !make_out_negated
+        && !leftover_unread
+        && !process_refusal
+    {
         (1.0, "Can read text from images".to_string())
     } else if echoed_question || echoed_constrained {
         (0.0, "Did not use the image (generic reply)".to_string())
@@ -405,12 +416,124 @@ fn vision_font_hedge(lower: &str) -> bool {
 }
 
 fn cannot_make_token_out(lower: &str) -> bool {
-    let tokens: Vec<&str> = lower
+    let tokens = split_words(lower);
+    let pair = tokens.windows(2).enumerate().any(|(index, window)| {
+        window[0] == "make" && window[1] == "out" && verb_is_negated(&tokens, index)
+    });
+    let triple = tokens.windows(3).enumerate().any(|(index, window)| {
+        window[0] == "make" && window[2] == "out" && verb_is_negated(&tokens, index)
+    });
+    pair || triple
+}
+
+/// `cannot` / `can't` / `can not` / `unable to` / `not able to` before `process`.
+/// A font hedge is applied by the caller so "cannot identify the font" stays a read.
+fn refuses_image_process(lower: &str) -> bool {
+    let tokens = split_words(lower);
+    tokens.iter().enumerate().any(|(index, token)| {
+        (*token == "process" || *token == "processing") && verb_is_negated(&tokens, index)
+    })
+}
+
+fn verb_is_negated(tokens: &[&str], verb_at: usize) -> bool {
+    // Same one-adverb skip as `cannot quite read`. "cannot quite make out"
+    // is still a negation. "I can make out" is not.
+    let verb_at = if verb_at > 0 && is_hedge_adverb(tokens[verb_at - 1]) {
+        verb_at - 1
+    } else {
+        verb_at
+    };
+    if verb_at == 0 {
+        return false;
+    }
+    let prev = tokens[verb_at - 1];
+    if matches!(prev, "cannot" | "cant" | "unable" | "not") {
+        return true;
+    }
+    if verb_at >= 2 {
+        let earlier = tokens[verb_at - 2];
+        // "can't" / "don't" / "couldn't" / "didn't" split on the apostrophe.
+        if prev == "t" && matches!(earlier, "can" | "don" | "couldn" | "didn") {
+            return true;
+        }
+        if prev == "to" && matches!(earlier, "unable" | "cannot" | "cant") {
+            return true;
+        }
+    }
+    verb_at >= 3 && prev == "to" && tokens[verb_at - 2] == "able" && tokens[verb_at - 3] == "not"
+}
+
+fn is_hedge_adverb(token: &str) -> bool {
+    matches!(token, "quite" | "clearly" | "really" | "fully" | "easily")
+}
+
+fn split_words(lower: &str) -> Vec<&str> {
+    lower
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .collect();
-    tokens.windows(2).any(|w| w[0] == "make" && w[1] == "out")
-        || tokens.windows(3).any(|w| w[0] == "make" && w[2] == "out")
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn affirmative_bline(lower: &str) -> bool {
+    let mut search = 0;
+    while let Some(rel) = lower[search..].find("bline") {
+        let at = search + rel;
+        if !bl_mention_negated(lower, at) {
+            return true;
+        }
+        search = at + "bline".len();
+    }
+    false
+}
+
+fn affirmative_quoted_bl(lower: &str) -> bool {
+    for needle in ["\"bl\"", "'bl'"] {
+        let mut search = 0;
+        while let Some(rel) = lower[search..].find(needle) {
+            let at = search + rel;
+            if !bl_mention_negated(lower, at) {
+                return true;
+            }
+            search = at + needle.len();
+        }
+    }
+    false
+}
+
+/// True when the text immediately before `at` is a negation of the glyph.
+/// `cannot` ends in "not" but is not the word "not".
+fn bl_mention_negated(lower: &str, at: usize) -> bool {
+    let before = lower[..at].trim_end();
+    ends_with_word(before, "not")
+        || before.ends_with("n't")
+        || ends_with_word(before, "isnt")
+        || ends_with_word(before, "arent")
+}
+
+fn ends_with_word(text: &str, word: &str) -> bool {
+    let Some(start) = text.len().checked_sub(word.len()) else {
+        return false;
+    };
+    &text[start..] == word && (start == 0 || !text.as_bytes()[start - 1].is_ascii_alphanumeric())
+}
+
+fn bl_token_is_read(tokens: &[&str]) -> bool {
+    tokens
+        .iter()
+        .enumerate()
+        .any(|(index, token)| *token == "bl" && !bl_token_negated(tokens, index))
+}
+
+fn bl_token_negated(tokens: &[&str], index: usize) -> bool {
+    if index == 0 {
+        return false;
+    }
+    let prev = tokens[index - 1];
+    if matches!(prev, "not" | "isnt" | "arent" | "isn" | "aren") {
+        return true;
+    }
+    // "isn't" / "aren't" split into `isn` + `t` before `bl`.
+    prev == "t" && index >= 2 && matches!(tokens[index - 2], "isn" | "aren" | "wasn" | "weren")
 }
 
 fn has_surface_word(lower: &str, word: &str) -> bool {
@@ -1326,5 +1449,112 @@ mod tests {
         let result = probe_vision(&llm).await.unwrap();
         assert_eq!(result.score, 1.0);
         assert_eq!(result.level, CapabilityLevel::Strong);
+    }
+
+    #[tokio::test]
+    async fn vision_can_make_out_bl_is_strong() {
+        for text in [
+            "I can make out BL",
+            "I can really make out BL",
+            "I can make BL out",
+            "The letters are BL, not XY",
+            "I can make out BL, not a font",
+            "not huge. I can make out BL",
+        ] {
+            let result = probe_vision(&MockLlm {
+                response: text_response(text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Strong,
+                "an affirmative BL read must stay Strong: {text:?} {result:?}"
+            );
+            assert_eq!(result.score, 1.0, "{text:?}");
+            assert_eq!(result.details, "Can read text from images", "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_negated_make_out_stays_below_strong() {
+        for text in [
+            "I cannot make out BL",
+            "I can't make out BL",
+            "I cannot quite make out BL",
+            "I can't really make out BL",
+            "I can not quite make BL out",
+        ] {
+            let result = probe_vision(&MockLlm {
+                response: text_response(text),
+            })
+            .await
+            .unwrap();
+            assert_ne!(
+                result.level,
+                CapabilityLevel::Strong,
+                "a negated make-out that names BL must not be Strong: {text:?} {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_process_refusal_naming_bl_is_weak() {
+        for text in [
+            "I cannot process images. BL",
+            "I am unable to process images. BL",
+            "I can not process images. BL",
+            "I am not able to process images. BL",
+            "I can't process images. BL",
+            "I don't process images. BL",
+        ] {
+            let result = probe_vision(&MockLlm {
+                response: text_response(text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Weak,
+                "a process refusal that names BL must stay Weak: {text:?} {result:?}"
+            );
+            assert_eq!(result.score, 0.0, "{text:?}");
+            assert_eq!(result.details, "Cannot process images", "{text:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn vision_negated_bl_is_not_a_read() {
+        for text in [
+            "The letters are XY, not BL",
+            "The letters are XY, not \"BL\"",
+            "The letters aren't BL",
+        ] {
+            let result = probe_vision(&MockLlm {
+                response: text_response(text),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.level,
+                CapabilityLevel::Medium,
+                "glyphs that are not BL must stay Medium: {text:?} {result:?}"
+            );
+            assert_eq!(result.score, 0.5, "{text:?}");
+        }
+
+        let none = probe_vision(&MockLlm {
+            response: text_response("NONE, not BL"),
+        })
+        .await
+        .unwrap();
+        assert_ne!(
+            none.level,
+            CapabilityLevel::Strong,
+            "NONE, not BL must not be a read: {none:?}"
+        );
+        assert_eq!(none.score, 0.0);
+        assert_eq!(none.level, CapabilityLevel::Weak);
+        assert_eq!(none.details, "Did not use the image (generic reply)");
     }
 }
