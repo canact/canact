@@ -698,7 +698,11 @@ fn map_client_error(err: ClientError) -> ProbeError {
             }
         }
         ClientError::Vendor { message, .. } => llm_or_not_found(message),
-        ClientError::Map(err) => llm_or_not_found(err.to_string()),
+        // A map failure is local encode or decode. It never reached the model.
+        ClientError::Map(err) => {
+            let message = redact_secrets(&err.to_string());
+            ProbeError::not_found_from_message(&message).unwrap_or(ProbeError::Internal(message))
+        }
         ClientError::Transport(message) => ProbeError::Transient(redact_secrets(&message)),
         other => ProbeError::Transient(redact_secrets(&other.to_string())),
     }
@@ -1096,6 +1100,24 @@ mod tests {
                 );
             }
             other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_encode_failure_is_not_an_llm_error() {
+        let err = map_client_error(ClientError::Map(wiremux::MapError::HardError {
+            path: "tools[0]".into(),
+            detail: "function tool name is empty".into(),
+        }));
+        let text = err.to_string();
+        assert!(text.starts_with("internal error:"), "{text}");
+        assert!(text.contains("function tool name is empty"), "{text}");
+        assert!(!text.contains("LLM error"), "{text}");
+        match err {
+            ProbeError::Internal(msg) => {
+                assert!(!msg.to_ascii_lowercase().contains("llm"), "{msg}");
+            }
+            other => panic!("expected Internal, got {other}"),
         }
     }
 
