@@ -3,6 +3,17 @@
 release-please writes version headings from conventional commit
 titles on `main`. Do not keep an Unreleased section.
 
+## [0.12.9](https://github.com/canact/canact/compare/v0.12.8...v0.12.9) (2026-11-27)
+
+
+### Bug Fixes
+
+* consume wiremux 0.11.15 ([#433](https://github.com/canact/canact/issues/433)) ([3165648](https://github.com/canact/canact/commit/316564821cf3a09d679b227e6bd67e4ac28e5969))
+* keep local probe failures from looking like the model ([#435](https://github.com/canact/canact/issues/435)) ([09d2369](https://github.com/canact/canact/commit/09d2369fb29f090fcab8c27263ac974761367875))
+* reject a blank name in a caller tools file ([#434](https://github.com/canact/canact/issues/434)) ([8f6e5ba](https://github.com/canact/canact/commit/8f6e5bafa54e765369f5e8359e0aa6e3f14b8e88))
+* score a method call or attribute assignment as a body ([#430](https://github.com/canact/canact/issues/430)) ([c743f53](https://github.com/canact/canact/commit/c743f5376b50394dee085ffa9896d71687ba0ad0)), closes [#429](https://github.com/canact/canact/issues/429)
+* score an affirmative vision read separately from a refusal ([#432](https://github.com/canact/canact/issues/432)) ([dfd2b7c](https://github.com/canact/canact/commit/dfd2b7cc7e40dd832cdb2ac462f3e6fb2ba22d3d))
+
 ## [0.12.8](https://github.com/canact/canact/compare/v0.12.7...v0.12.8) (2026-11-24)
 
 
