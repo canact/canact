@@ -1105,6 +1105,14 @@ fn load_caller_tools(path: Option<&std::path::Path>) -> Result<Option<Vec<ProbeT
     }
     let rows: Vec<CallerToolFile> = serde_json::from_value(value)
         .map_err(|err| format!("failed to parse tools file {}: {err}", path.display()))?;
+    for (index, row) in rows.iter().enumerate() {
+        if row.name.trim().is_empty() {
+            return Err(format!(
+                "tools file {} item {index} name is empty",
+                path.display()
+            ));
+        }
+    }
     Ok(Some(
         rows.into_iter()
             .map(|row| ProbeTool {
@@ -1240,6 +1248,20 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains("CallerToolFile"), "{err}");
+    }
+
+    #[test]
+    fn tools_file_blank_name_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(
+            &path,
+            r#"[{"name":"  ","description":"read","parameters":{"type":"object"}}]"#,
+        )
+        .expect("write");
+        let err = super::load_caller_tools(Some(&path)).expect_err("blank name");
+        assert!(err.contains("item 0 name is empty"), "{err}");
+        assert!(!err.contains("LLM error"), "{err}");
     }
 
     #[test]

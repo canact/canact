@@ -446,6 +446,11 @@ fn parse_mcp_tools(raw: Option<&Value>) -> Result<Option<Vec<ProbeTool>>, String
     }
     let rows: Vec<McpCallerTool> = serde_json::from_value(raw.clone())
         .map_err(|err| format!("failed to parse tools: {err}"))?;
+    for (index, row) in rows.iter().enumerate() {
+        if row.name.trim().is_empty() {
+            return Err(format!("failed to parse tools: item {index} name is empty"));
+        }
+    }
     Ok(Some(
         rows.into_iter()
             .map(|row| ProbeTool {
@@ -2017,6 +2022,13 @@ mod tests {
             .expect("empty")
             .expect("some");
         assert!(empty.is_empty());
+        let blank = parse_mcp_tools(Some(&json!([{
+            "name": "  ",
+            "description": "read",
+            "parameters": {"type": "object"}
+        }])))
+        .expect_err("blank name");
+        assert!(blank.contains("item 0 name is empty"), "{blank}");
         let missing =
             parse_mcp_tools(Some(&json!([{"name": "lookup_issue"}]))).expect_err("fields");
         assert!(missing.contains("parse"), "{missing}");
