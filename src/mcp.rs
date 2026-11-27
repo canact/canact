@@ -450,6 +450,11 @@ fn parse_mcp_tools(raw: Option<&Value>) -> Result<Option<Vec<ProbeTool>>, String
         if row.name.trim().is_empty() {
             return Err(format!("failed to parse tools: item {index} name is empty"));
         }
+        if let Some(msg) =
+            crate::control_character_message(&format!("tools item {index} name"), &row.name)
+        {
+            return Err(format!("failed to parse tools: {msg}"));
+        }
     }
     Ok(Some(
         rows.into_iter()
@@ -2029,6 +2034,13 @@ mod tests {
         }])))
         .expect_err("blank name");
         assert!(blank.contains("item 0 name is empty"), "{blank}");
+        let newline = parse_mcp_tools(Some(&json!([{
+            "name": "read\nfile",
+            "description": "read",
+            "parameters": {"type": "object"}
+        }])))
+        .expect_err("newline");
+        assert!(newline.contains("control character"), "{newline}");
         let missing =
             parse_mcp_tools(Some(&json!([{"name": "lookup_issue"}]))).expect_err("fields");
         assert!(missing.contains("parse"), "{missing}");

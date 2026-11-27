@@ -1112,6 +1112,12 @@ fn load_caller_tools(path: Option<&std::path::Path>) -> Result<Option<Vec<ProbeT
                 path.display()
             ));
         }
+        if let Some(msg) = crate::control_character_message(
+            &format!("tools file {} item {index} name", path.display()),
+            &row.name,
+        ) {
+            return Err(msg);
+        }
     }
     Ok(Some(
         rows.into_iter()
@@ -1262,6 +1268,20 @@ mod tests {
         let err = super::load_caller_tools(Some(&path)).expect_err("blank name");
         assert!(err.contains("item 0 name is empty"), "{err}");
         assert!(!err.contains("LLM error"), "{err}");
+    }
+
+    #[test]
+    fn tools_file_name_rejects_a_newline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tools.json");
+        std::fs::write(
+            &path,
+            "[{\"name\":\"read\\nfile\",\"description\":\"read\",\"parameters\":{\"type\":\"object\"}}]",
+        )
+        .expect("write");
+        let err = super::load_caller_tools(Some(&path)).expect_err("newline");
+        assert!(err.contains("control character"), "{err}");
+        assert!(err.contains("item 0 name"), "{err}");
     }
 
     #[test]
