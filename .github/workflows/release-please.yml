@@ -5,8 +5,9 @@
 # here: that would build archives twice.
 #
 # Merge of a PR labeled autorelease: pending is a human step. It
-# publishes GitHub Release assets. crates.io stays a manual
-# cargo publish.
+# publishes GitHub Release assets. The tag push starts
+# publish-crates.yml (OIDC). Do not cargo publish from a laptop
+# except to recover.
 name: Release Please
 
 on:
