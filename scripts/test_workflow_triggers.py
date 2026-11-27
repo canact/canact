@@ -47,6 +47,12 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertNotIn("pull_request:", on_block)
         self.assertNotRegex(text, r"cargo (test|nextest|clippy|fuzz)")
 
+    def test_release_please_comment_names_the_tag_publish(self) -> None:
+        text = (WORKFLOWS / "release-please.yml").read_text(encoding="utf-8")
+        self.assertNotIn("stays a manual", text)
+        self.assertIn("publish-crates.yml", text)
+        self.assertIn("Do not cargo publish from a laptop", text)
+
     def test_auto_merge_skips_release_please_head(self) -> None:
         text = (WORKFLOWS / "auto-approve.yml").read_text(encoding="utf-8")
         self.assertIn("!startsWith(github.head_ref, 'release-please')", text)
